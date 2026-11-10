@@ -21,6 +21,7 @@ from .claude_session import ClaudeSession
 from .config import DATA_DIR, Config, load_memory
 from .hud_feed import parse_kill_index
 from .local_ai import LocalAI
+from . import routines
 from .local_router import _COMPOUND, LocalRouter, dedupe, normalize
 
 NO_WINDOW = 0x08000000
@@ -286,6 +287,10 @@ class Brain:
         hud = self._hud_command(text)
         if hud:
             return "local", hud
+        if not self.chat_mode:
+            done = self._routine(text)
+            if done:
+                return "local", done
         self.local.chat = self.chat_mode
         if (mode == "local" or self.cfg["local_first"]) and (self.chat_mode or not self._awaiting_answer()):
             reply = self.local.try_handle(text, fallback=(mode != "local"))
@@ -352,6 +357,47 @@ class Brain:
             return f"액티브 모드 가동한다, {self.cfg['user_title'] or '창조자'}."
         return None
 
+    # ------------------------------------------------------------------ 루틴 (명령 묶음)
+    def _routine(self, text: str) -> str | None:
+        """루틴 만들기 · 지우기 · 목록 · 실행. 루틴과 상관없는 말이면 None."""
+        saved = dict(self.cfg["routines"] or {})
+        add = routines.parse_add(text)
+        if add:
+            name, steps = add
+            bad = [s for s in steps if not self.recognizes(s)]
+            if bad:
+                return f"{bad[0]}, 이건 내가 바로 할 수 있는 명령이 아니라서 루틴에 넣을 수 없다."
+            if name not in saved and len(saved) >= routines.MAX_ROUTINES:
+                return "루틴이 너무 많다. 안 쓰는 것을 먼저 지워라."
+            saved[name] = steps
+            self.cfg.update({"routines": saved})
+            return f"{name} 루틴을 저장했다. 명령 {len(steps)}개다."
+        if routines.is_list(normalize(text) or text):
+            return ("저장된 루틴: " + ", ".join(saved) + ".") if saved else "저장된 루틴이 없다. 루틴 추가, 이름, 명령들 순서로 입력해라."
+        gone = routines.parse_delete(text)
+        if gone:
+            name = routines.match(gone, saved)
+            if not name:
+                return f"{gone} 루틴은 없다."
+            saved.pop(name)
+            self.cfg.update({"routines": saved})
+            return f"{name} 루틴을 지웠다."
+        name = routines.match(normalize(text) or text, saved)
+        if not name:
+            return None
+        said, failed = [], 0
+        for step in saved[name][:routines.MAX_STEPS]:
+            if self._cancel.is_set():
+                break
+            reply = self.local.try_handle(step, fallback=False)
+            if reply is None:
+                failed += 1
+            else:
+                said.append(reply)
+        log.info("루틴 %s: %d단계 중 %d단계 실패", name, len(saved[name]), failed)
+        tail = f" {failed}가지는 하지 못했다." if failed else ""
+        return f"{name} 루틴이다. " + " ".join(said) + tail
+
     def _kill_listed(self, n: int) -> str:
         """액티브 모드 화면의 무거운 프로그램 목록에서 n번을 강제 종료 (앱이 승인을 받음)."""
         procs = list(self.hud_procs)
@@ -384,6 +430,8 @@ class Brain:
                 HUD_SMALL.fullmatch(c) or HUD_BIG.fullmatch(c) or HUD_HIDE.fullmatch(c)
                 or ACTIVE_ON.fullmatch(c) or ACTIVE_OFF.fullmatch(c)
                 or (self.active_hud and parse_kill_index(c) is not None))):
+            return True
+        if routines.match(c, self.cfg["routines"] or {}):
             return True
         try:
             return self._dry.try_handle(text, fallback=True) is not None

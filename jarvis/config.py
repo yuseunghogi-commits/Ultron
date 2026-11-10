@@ -53,6 +53,7 @@ DEFAULTS: dict = {
     "owner_only": False,              # 등록된 주인 목소리에만 반응 (목소리 등록 후 켜짐)
     "speaker_threshold": 0.40,        # 목소리 판별 기준 0.25~0.60 (높을수록 엄격)
     # --- 동작 ---
+    "routines": {},                   # 루틴: {"아침 준비": ["크롬 열어", "볼륨 30", "오늘 날씨"]} — '루틴 추가 이름: 명령, 명령' 으로 만든다
     "user_title": "창조자",
     "home_city": "Seoul",
     "auto_approve": False,            # True면 위험 명령(PowerShell, 종료 등)을 확인 없이 실행
