@@ -234,8 +234,32 @@ class LocalAI:
         return cmd
 
 
+# 모델이 고른 동작마다, 사용자의 말 안에 그 동작을 가리키는 단서가 있어야 한다.
+# 음성 인식이 낱말을 빠뜨리거나 뭉갠 말('내려줘', '70으로 맞춰줘', '컴퓨터 장가줘')을 작은 모델이 그럴듯한 동작으로
+# 채워 넣는 일이 잦다 (시험: 단서 확인 전에는 엉뚱한 동작이 소음 속에서 5%p 넘게 늘었다). 단서가 없으면 Claude 에게 넘긴다.
+_LOUD = r"소리|볼륨|음량|시끄|들려|들리|음악|노래|스피커|조용|귀\s*아|음소거|뮤트"
+_MEDIA = r"곡|노래|음악|영상|트랙|넘겨|스킵|멈춰|멈추|정지|재생|틀어|일시"
+_EVIDENCE = {
+    "volume_set": _LOUD, "volume_up": _LOUD, "volume_down": _LOUD, "mute": _LOUD, "unmute": _LOUD, "volume_get": _LOUD,
+    "next_track": _MEDIA, "prev_track": _MEDIA, "pause": _MEDIA, "resume": _MEDIA,
+    "time": r"몇\s*시|시간|시각", "date": r"며칠|날짜|요일|몇\s*월|몇\s*일",
+    "system_status": r"상태|성능|사용량|cpu|씨피유|메모리|램|느려|느린|버벅|렉|배터리|디스크|용량",
+    "show_desktop": r"바탕|창|최소화|열린|내려",
+    "lock_screen": r"잠가|잠궈|잠금|잠그|잠글|lock|락",
+    "screenshot": r"스크린|캡처|캡쳐|찍|스샷",
+    "brightness_up": r"화면|밝기|밝아|밝다|밝네|밝게|모니터|눈\s*부|눈부|어두|어둡",
+    "brightness_down": r"화면|밝기|밝아|밝다|밝네|밝게|모니터|눈\s*부|눈부|어두|어둡",
+    "brightness_set": r"화면|밝기|모니터",
+}
+
+
 def to_command(out: dict, text: str) -> str | None:
     intent = out.get("intent")
+    if intent in _EVIDENCE and not re.search(_EVIDENCE[intent], text, re.I) \
+            and not (intent.startswith(("volume", "mute", "unmute")) and _SCREEN.search(text)):
+        return None
+    if intent == "mute" and re.search(r"풀어|풀려|해제", text):
+        intent = "unmute"
     target = str(out.get("target") or "").strip()
     try:
         number = int(out.get("number") or 0)
@@ -286,8 +310,8 @@ def to_command(out: dict, text: str) -> str | None:
     if intent == "youtube":
         return f"유튜브에서 {target} 틀어" if target and _said(target, text) else None
     if intent in ("search_google", "search_naver"):
-        if not target or not _said(target, text):
-            return None
+        if not target or not _said(target, text) or _squash(target) in ("네이버", "구글", "naver", "google"):
+            return None                      # '네이버 여러줘' 를 '네이버에서 네이버 검색' 으로 바꾸지 않는다
         site = "네이버" if "네이버" in text else "구글" if "구글" in text else \
             ("구글" if intent == "search_google" else "네이버")   # 말한 사이트가 모델 판단보다 우선
         return f"{site}에서 {target} 검색"

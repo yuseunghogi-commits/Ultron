@@ -40,3 +40,23 @@ def o(intent, target="", number=0):
 ])
 def test_to_command(text, out, cmd):
     assert to_command(out, text) == cmd
+
+# 음성 인식이 낱말을 빠뜨린 말을 모델이 그럴듯한 동작으로 채워 넣지 못하게: 말 안에 단서가 있을 때만 실행한다
+@pytest.mark.parametrize("text,out,cmd", [
+    ("내려줘", o("volume_down"), None),
+    ("70으로 맞춰줘", o("volume_set", number=70), None),
+    ("컴퓨터 장가줘", o("system_status"), None),
+    ("1시에 알려줘", o("time"), None),
+    ("그림 반 켜줘", o("brightness_set", number=50), None),
+    ("노래 일시 전지", o("volume_get"), "볼륨 몇이야"),            # '노래' 는 소리 얘기 → 막지 않는다 (모델의 오판은 남는다)
+    ("네이버 여러줘", o("search_naver", "네이버"), None),
+    ("음소가 풀어줘", o("mute"), None),
+    ("음소거 풀어줘", o("mute"), "음소거 해제"),
+    ("소리 내려줘", o("volume_down"), "볼륨 내려"),
+    ("사용량 알려줘", o("system_status"), "컴퓨터 상태 어때"),
+    ("자리 비울 거니까 잠가 놔", o("lock_screen"), "화면 잠가"),
+    ("화면 좀 찍어 놔", o("screenshot"), "스크린샷 찍어"),
+    ("지금 시간이 어떻게 돼", o("time"), "몇 시야"),
+])
+def test_actions_need_evidence_in_the_words(text, out, cmd):
+    assert to_command(out, text) == cmd
