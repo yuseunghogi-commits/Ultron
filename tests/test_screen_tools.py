@@ -68,7 +68,9 @@ class Rig:
         monkeypatch.setattr(tools.winutil, "blocks_clicks", lambda h, x, y: bool(
             h == 1 and self.hud and self.hud[0] <= x < self.hud[2] and self.hud[1] <= y < self.hud[3]))
         monkeypatch.setattr(tools.winutil, "show_window", lambda h, show: self.events.append("show" if show else "hide"))
-        monkeypatch.setattr(tools.uia, "scroll", lambda hwnd, direction, amount: self.events.append("scroll"))
+        monkeypatch.setattr(tools.uia, "scroll", lambda hwnd, direction, amount, at=None: self.events.append(("scroll", at) if at else "scroll"))
+        monkeypatch.setattr(tools.uia, "move_to", lambda x, y: self.events.append(("move", x, y)))
+        monkeypatch.setattr(tools.uia, "drag", lambda x1, y1, x2, y2: self.events.append(("drag", x1, y1, x2, y2)) or self.on_click())
         monkeypatch.setattr(tools.winutil, "press_combo", lambda keys: self.keys.append(keys))
         monkeypatch.setattr(tools.winutil, "get_clipboard_text", lambda: "예전 클립보드")
         monkeypatch.setattr(tools.winutil, "set_clipboard_text", lambda t: self.keys.append(("clip", t)))
@@ -344,3 +346,47 @@ def test_layout_text_orders_pieces_like_a_reader():
     assert layout_text(pieces) == "왼쪽 오른쪽\n둘째 줄\n셋째 줄\n문단 첫 줄\n문단 둘째 줄"
     long = layout_text([((0, i * 30, 100, i * 30 + 20), f"줄 {i} " + "가" * 50) for i in range(200)], limit=500)
     assert len(long) < 600 and "이하 생략" in long
+
+
+# ---------------------------------------------------------------- 끌기 · 올려놓기 · 영역 스크롤 · 화면 밖 요소
+def test_drag_hover_and_area_scroll_use_image_coordinates(rig):
+    with pytest.raises(ToolError, match="먼저 look_at_screen"):
+        rig.me.t_drag_screen(10, 10, 20, 20)
+    rig.me.t_look_at_screen()                                    # 1920×1080 → 1456×819
+    rig.me._target_window = lambda app: 77
+    out = rig.me.t_drag_screen(100, 100, 400, 100)
+    assert rig.events[-1] == ("drag", 132, 132, 527, 132) and "끌어다 놓음" in out and "변화 없음" in out
+    rig.on_click = lambda: setattr(rig, "shade", 210)
+    out = rig.me.t_drag_screen(100, 100, 400, 100)
+    assert "바뀐 화면" in out[1]["text"] and rig.image(out).size == (1456, 819)   # 바뀌었으면 바뀐 화면을 같이 돌려준다
+    rig.me.t_hover_screen(728, 409)
+    assert rig.events[-1] == ("move", 960, 539)
+    rig.me.t_scroll("down", x=1000, y=400)
+    assert rig.events[-1] == ("scroll", (1319, 527))             # 그 자리에서 휠을 굴린다
+    with pytest.raises(ToolError, match="밖입니다"):
+        rig.me.t_scroll("down", x=5000, y=10)
+
+
+def test_click_by_name_scrolls_to_an_element_that_is_out_of_view(rig):
+    hidden = types.SimpleNamespace(n=0, name="문의하기", kind="링크", rect=(100, 3000, 200, 3020))
+    shown = types.SimpleNamespace(n=4, name="문의하기", kind="링크", rect=(100, 500, 200, 520))
+    state = {"revealed": False}
+    rig.me.screen.find = lambda number, name: shown if state["revealed"] and name == "문의하기" else None
+    rig.me.screen.read = lambda hwnd, query="": "목록"
+    rig.me.screen.find_hidden = lambda hwnd, name: [hidden] if name == "문의하기" else []
+    rig.me.screen.reveal = lambda it: state.__setitem__("revealed", True) or True
+    rig.me.screen.click = lambda it, double=False: rig.events.append(("click", it.rect)) or "'문의하기' 링크 누름"
+    assert rig.me.t_click_ui(name="문의하기").startswith("'문의하기' 링크 누름")
+    assert rig.events[-1] == ("click", (100, 500, 200, 520))     # 스크롤한 뒤의 자리를 누른다
+    with pytest.raises(ToolError, match="찾지 못했습니다"):
+        rig.me.t_click_ui(name="없는 것")
+
+
+def test_read_ui_mentions_matches_that_are_scrolled_out_of_view(rig):
+    rig.me._target_window = lambda app: 77
+    rig.me.screen.read = lambda hwnd, query="": "창: 시험\n누를 수 있는 요소:\n[1] 버튼 '홈'"
+    rig.me.screen.find_hidden = lambda hwnd, name: [types.SimpleNamespace(name="문의하기")]
+    out = rig.me.t_read_ui(query="문의")
+    assert "화면 밖" in out and "'문의하기'" in out and "click_ui" in out
+    rig.me.screen.find_hidden = lambda hwnd, name: []
+    assert "화면 밖" not in rig.me.t_read_ui(query="문의") and "화면 밖" not in rig.me.t_read_ui()

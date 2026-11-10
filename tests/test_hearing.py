@@ -297,3 +297,26 @@ def test_wake_end_time_from_token_timestamps():
     assert hearing.wake_end_time([" 크", "롬", " 열어", "줘", " 울", "트", "론"], [0.1, 0.2, 0.4, 0.6, 1.2, 1.4, 1.6], W) is None
     assert hearing.wake_end_time(tokens, stamps[:-1], W) is None                               # 시각 정보가 맞지 않음
     assert hearing.wake_end_time([], [], W) is None
+
+
+# ---------------------------------------------------------------- 호출어 연습 (내 목소리가 받아 적히는 모양 익히기)
+def test_practice_learns_only_sounds_close_to_the_wake_word():
+    assert hearing.learnable("울트론", W) == ""                   # 이미 알아듣는 모양
+    assert hearing.learnable("물트론.", W) == ""
+    assert hearing.learnable("울드롱", W) == "울드롱"             # 새로 익힐 모양
+    assert hearing.learnable("울트란", W) == "울트란"
+    assert hearing.learnable("콜록", W) is None                   # 닮지 않은 소리
+    assert hearing.learnable("오늘 날씨 어때", W) is None         # 여러 낱말
+    assert hearing.learnable("", W) is None
+    assert hearing.learnable("울드롱", W, learned=["울드롱"]) == ""
+
+
+def test_learned_forms_count_only_at_the_start_of_the_sentence():
+    L = ["울드롱", "울트란"]
+    assert hearing.strip_wake("울드롱 크롬 열어", W, learned=L) == "크롬 열어"
+    assert hearing.strip_wake("울드롱아 몇 시야", W, learned=L) == "몇 시야"
+    assert hearing.strip_wake("울트란", W, learned=L) == ""
+    assert hearing.find_wake("울드롱 크롬 열어", W) is None                      # 익히기 전에는 호출이 아니다
+    assert hearing.find_wake("그 울드롱 뭐야", W, learned=L) is None            # 문장 가운데
+    assert hearing.find_wake("울트란트 검색해 줘", W, learned=L) is None        # 다른 낱말의 앞부분
+    assert hearing.wake_at_start("울드롱 크롬 열어", W, L)

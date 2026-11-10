@@ -169,6 +169,7 @@ class Listener:
         self.last_note = ""
         self.babble = False           # 주변이 말소리로 가득한 상태인가 (교실·카페)
         self.last_babble = False      # 지금 받아 적는 발화가 그 상태에서 잘린 것인가 (앞에 주변 말이 섞여 있다)
+        self.capture_all = False      # 호출어 연습 중: 호출어가 없어도 오프라인으로 받아 적은 글을 그대로 넘긴다 (밖으로 보내지 않음)
         self._utt_info = (0.0, 0.0, False)
         self.stt_engine = "auto"      # auto | local | google
         self.local_stt: LocalSTT | None = None
@@ -477,6 +478,9 @@ class Listener:
     def _transcribe(self, rec, sr, pcm: np.ndarray, ai_heard: bool) -> str | None:
         engine = self.stt_engine
         local_ok = self.local_stt is not None and self.local_stt.ready
+        if self.capture_all and local_ok:
+            self.last_engine = "local"
+            return self._local(pcm, ai_heard)
         if engine == "local" and local_ok:
             self.last_engine = "local"
             return self._second_look(pcm, self._local(pcm, ai_heard))

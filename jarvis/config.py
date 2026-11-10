@@ -32,6 +32,7 @@ DEFAULTS: dict = {
     # --- 음성 ---
     "wake_word_enabled": True,        # '울트론' 호출어 상시 대기
     "wake_words": ["울트론", "울트롱", "얼트론", "올트론", "울트론아", "ultron"],
+    "wake_learned": [],               # '호출어 연습'에서 익힌, 내 목소리가 실제로 받아 적히는 모양 (문장 맨 앞에서만 호출로 받음)
     "stt_language": "ko-KR",
     "stt_engine": "auto",             # auto = 대기 중엔 오프라인 인식, 호출 후엔 Google | local = 항상 오프라인 | google
     "tts_voice": "ko-KR-InJoonNeural",

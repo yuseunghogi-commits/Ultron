@@ -307,6 +307,21 @@ Item {
                 Combo { id: sttBox; model: sp.sttEngines }
                 Hint { text: sp.cfg.stt_status || ""; font.pixelSize: 11 }
                 Toggle { id: wakeSw; text: "“울트론” 호출어 상시 대기" }
+                RowLayout {
+                    spacing: 8
+                    HoloButton {
+                        text: "호출어 연습"
+                        accent: sp.accent
+                        onClicked: { sp.save(); jarvis.startWakeTraining() }
+                    }
+                    Hint {
+                        Layout.fillWidth: true
+                        font.pixelSize: 11
+                        text: (sp.cfg.wake_learned && sp.cfg.wake_learned.length)
+                            ? "내 목소리로 익힌 모양 " + sp.cfg.wake_learned.length + "가지: " + sp.cfg.wake_learned.join(", ")
+                            : "잘 못 알아들으면 다섯 번 불러서 내 목소리에 맞춥니다"
+                    }
+                }
 
                 Label2 { text: "VOICE ID  ·  화자 인식"; Layout.topMargin: 10 }
                 Hint {

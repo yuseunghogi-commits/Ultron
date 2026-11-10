@@ -226,6 +226,7 @@ class PCTools:
                  {"app": {"type": "string", "description": "optional app name or window title; default = active window"},
                   "query": {"type": "string", "description": "optional text to filter elements by name"}}),
             tool("click_ui", "Click an element from the last read_ui list, by number or by (partial) name. "
+                 "By name it also finds elements scrolled out of view and scrolls to them first. "
                  "The result says whether the screen changed; if it did, it also lists the elements of the new screen "
                  "(renumbered), so you can pick the next element without calling read_ui again. "
                  "To type into an input box: click it, then use type_text.",
@@ -237,9 +238,19 @@ class PCTools:
                  {"x": {"type": "integer"}, "y": {"type": "integer"}, "double": {"type": "boolean"},
                   "right": {"type": "boolean"}}, ["x", "y"]),
             tool("scroll", "Scroll the active window (or the app given) up or down. The result says whether the screen moved; "
-                 "no change means the end was reached.",
+                 "no change means the end was reached. To scroll one area inside the window (a list, a chat pane), give x,y "
+                 "of a point inside that area in the LAST image's pixel coordinates. To reach a named element that is "
+                 "scrolled out of view, prefer click_ui(name=...): it scrolls there by itself.",
                  {"direction": {"type": "string", "enum": ["up", "down"]},
-                  "amount": {"type": "integer", "description": "wheel notches, default 5"}, "app": s}, ["direction"]),
+                  "amount": {"type": "integer", "description": "wheel notches, default 5"}, "app": s,
+                  "x": {"type": "integer"}, "y": {"type": "integer"}}, ["direction"]),
+            tool("hover_screen", "Move the mouse over a point (no click), in the LAST image's pixel coordinates. Use for menus "
+                 "or tooltips that only appear on hover. Returns the new screenshot if something appeared.",
+                 {"x": {"type": "integer"}, "y": {"type": "integer"}}, ["x", "y"]),
+            tool("drag_screen", "Press at (x, y), drag to (to_x, to_y) and release, in the LAST image's pixel coordinates. "
+                 "Use for sliders, moving or resizing things, drawing, selecting a range.",
+                 {"x": {"type": "integer"}, "y": {"type": "integer"}, "to_x": {"type": "integer"}, "to_y": {"type": "integer"}},
+                 ["x", "y", "to_x", "to_y"]),
             tool("brightness", "Get or change the display brightness (laptop screens; external monitors may not support it).",
                  {"action": {"type": "string", "enum": ["get", "set", "up", "down"]},
                   "level": {"type": "integer", "description": "0-100 for set; step for up/down (default 20)"}}, ["action"]),
@@ -318,6 +329,8 @@ class PCTools:
             "click_ui": lambda: f"클릭 · {a.get('name') or '#' + str(a.get('number'))}",
             "click_screen": lambda: f"화면 클릭 · ({a.get('x')}, {a.get('y')})",
             "scroll": lambda: f"스크롤 · {a.get('direction')}",
+            "hover_screen": lambda: f"마우스 올리기 · ({a.get('x')}, {a.get('y')})",
+            "drag_screen": lambda: f"끌어다 놓기 · ({a.get('x')}, {a.get('y')}) → ({a.get('to_x')}, {a.get('to_y')})",
             "brightness": lambda: f"밝기 · {a.get('action')} {a.get('level', '')}".strip(),
             "save_screenshot": lambda: "스크린샷 저장",
             "system_status": lambda: "시스템 진단",
@@ -753,9 +766,28 @@ class PCTools:
     def t_read_ui(self, app: str | None = None, query: str | None = None) -> str:
         hwnd = self._target_window(app)
         try:
-            return self.screen.read(hwnd, query or "")
+            out = self.screen.read(hwnd, query or "")
         except OSError as e:
             raise ToolError(f"창 내용을 읽지 못했습니다: {e}")
+        if query:      # 찾는 것이 스크롤해야 보이는 곳에 있으면 알려 준다 → 스크롤하며 찾아다닐 필요가 없다
+            names = list(dict.fromkeys(it.name for it in self.screen.find_hidden(hwnd, query)))[:5]
+            if names:
+                out += ("\n화면 밖(스크롤해야 보이는 곳)에 있는 요소: " + ", ".join(f"'{n[:40]}'" for n in names)
+                        + " — click_ui 에 name 으로 넘기면 그곳으로 스크롤해서 누릅니다.")
+        return out
+
+    def _reveal(self, name: str):
+        """이름이 맞는 요소가 화면 밖에 있으면 그곳으로 스크롤한 뒤, 보이게 된 요소를 돌려준다 (없으면 None)."""
+        hwnd = self.screen.hwnd or self._active_hwnd()
+        if not hwnd:
+            return None
+        for hidden in self.screen.find_hidden(hwnd, name)[:1]:
+            if not self.screen.reveal(hidden):
+                return None
+            time.sleep(0.4)
+            self.screen.read(hwnd)
+            return self.screen.find(None, name)
+        return None
 
     def t_click_ui(self, number: int | None = None, name: str | None = None, double: bool = False) -> str:
         if not number and not name:
@@ -765,6 +797,8 @@ class PCTools:
             # 목록이 오래됐을 수 있으니 같은 창을 다시 읽고 이름으로 한 번 더 찾는다
             self.screen.read(self.screen.hwnd)
             it = self.screen.find(None, name)
+        if it is None and name:
+            it = self._reveal(name)      # 스크롤해야 보이는 곳에 있으면 그곳으로 가서 누른다
         if it is None:
             raise ToolError("그 요소를 찾지 못했습니다. read_ui 로 목록을 다시 확인하세요.")
         if uia.is_risky(it.name):
@@ -807,14 +841,57 @@ class PCTools:
                 log.debug("누른 뒤 화면 캡처 실패: %s", e)
         return text
 
-    def t_scroll(self, direction: str, amount: int = 5, app: str | None = None) -> str:
+    def _on_view(self, x: int, y: int) -> tuple[int, int]:
+        """마지막으로 본 이미지의 좌표 → 화면 좌표 (화면을 본 적이 없거나 이미지 밖이면 오류)."""
+        view = self._view
+        if view is None:
+            raise ToolError("먼저 look_at_screen 으로 화면을 보세요 (좌표는 마지막으로 본 이미지 기준입니다).")
+        if not view.contains(x, y):
+            raise ToolError(f"좌표 ({x}, {y}) 가 마지막으로 본 이미지({view.w}x{view.h}) 밖입니다. 그 이미지 안의 좌표를 주세요.")
+        return view.to_screen(x, y)
+
+    def _shown(self, text: str):
+        """동작 결과 글 + (화면이 바뀌었으면) 바뀐 화면 캡처."""
+        if self._follow():
+            try:
+                bbox, kind = self._target_bbox(getattr(self, "_view_target", "screen"))
+                img, self._view = self._shoot(bbox, kind)
+                return self._image_blocks(img, (
+                    f"{text}\n바뀐 화면입니다 — 이미지 크기 {img.width}x{img.height} 픽셀. "
+                    "이제 좌표는 이 이미지 기준입니다."))
+            except Exception as e:
+                log.debug("바뀐 화면 캡처 실패: %s", e)
+        return text
+
+    def t_hover_screen(self, x: int, y: int):
+        sx, sy = self._on_view(x, y)
+        before = self._small()
+        with self._hud_aside(sx, sy):
+            uia.move_to(sx, sy)
+            text = f"({sx}, {sy}) 에 마우스를 올려놓음" + self._after(before, timeout=1.5, nochange_wait=0.7)
+            return self._shown(text)
+
+    def t_drag_screen(self, x: int, y: int, to_x: int, to_y: int):
+        sx, sy = self._on_view(x, y)
+        ex, ey = self._on_view(to_x, to_y)
+        before = self._small()
+        with self._hud_aside(sx, sy), self._hud_aside(ex, ey):
+            uia.drag(sx, sy, ex, ey)
+        return self._shown(f"({sx}, {sy}) 에서 ({ex}, {ey}) 까지 끌어다 놓음" + self._after(before))
+
+    def t_scroll(self, direction: str, amount: int = 5, app: str | None = None,
+                 x: int | None = None, y: int | None = None) -> str:
         if direction not in ("up", "down"):
             raise ToolError("direction 은 up 또는 down")
         hwnd = self._target_window(app)
         before = self._small()
-        wr = winutil.window_rect(hwnd)           # 휠은 창 한가운데에서 굴린다 — 그 자리를 HUD 가 덮고 있으면 비켜 준다
-        with self._hud_aside(*(((wr[0] + wr[2]) // 2, (wr[1] + wr[3]) // 2) if wr else (-1, -1))):
-            uia.scroll(hwnd, direction, amount or 5)
+        if x is not None and y is not None:      # 화면 안의 특정 영역(목록 · 채팅창)만 굴릴 때: 그 자리에서 휠
+            at = self._on_view(x, y)
+        else:
+            wr = winutil.window_rect(hwnd)       # 휠은 창 한가운데에서 굴린다 — 그 자리를 HUD 가 덮고 있으면 비켜 준다
+            at = ((wr[0] + wr[2]) // 2, (wr[1] + wr[3]) // 2) if wr else (-1, -1)
+        with self._hud_aside(*at):
+            uia.scroll(hwnd, direction, amount or 5, at=at if x is not None and y is not None else None)
         change = self._after(before, timeout=1.5, nochange_wait=0.6)   # 변화가 없으면 끝까지 간 것일 수 있다
         return f"{'위' if direction == 'up' else '아래'}로 스크롤함" + change
 

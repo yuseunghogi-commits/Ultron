@@ -170,6 +170,10 @@ class Bridge(QObject):
         self.core.save_settings(json.loads(payload))
 
     @Slot()
+    def startWakeTraining(self) -> None:
+        self.core.start_wake_training()
+
+    @Slot()
     def startEnroll(self) -> None:
         self.core.start_enroll()
 
@@ -245,6 +249,7 @@ class Jarvis(QObject):
         self._enroll_when_ready = False
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="brain")
         self._hwnd = 0
+        self._wake_train: dict | None = None     # 호출어 연습 중이면 {heard, tries}
         self.overlay = None            # 액티브 모드 전체 화면 HUD (처음 켤 때 불러옴)
         self._overlay_hwnd = 0
         self._timers: dict[str, dict] = {}     # 돌고 있는 타이머 (id → label, end, total, qt)
@@ -465,6 +470,9 @@ class Jarvis(QObject):
     @Slot()
     def activate(self) -> None:
         """코어 클릭 / 단축키."""
+        if self._wake_train is not None:         # 호출어 연습 중에 누르면 연습을 그만둔다
+            self._wake_train_end(cancelled=True)
+            return
         if not self.win.isVisible():
             self.toggle_visible(True)
         if self._enroll:
@@ -505,6 +513,9 @@ class Jarvis(QObject):
 
     @Slot(object, object)
     def _on_utterance(self, text, voice=None) -> None:
+        if self._wake_train is not None:
+            self._wake_train_feed(text)
+            return
         if self._enroll:
             self._enroll_feed(text, voice)
             return
@@ -570,7 +581,8 @@ class Jarvis(QObject):
 
     def _has_wake(self, text: str) -> bool:
         # 오프라인 인식은 '울트론'을 '물트론 · 울트롱 · 울트러'처럼 적기도 하므로 조금 느슨하게 본다 (hearing.py)
-        return hearing.find_wake(text or "", self.cfg["wake_words"], self.listener.last_babble) is not None
+        return hearing.find_wake(text or "", self.cfg["wake_words"], self.listener.last_babble,
+                                 self.cfg["wake_learned"]) is not None
 
     def _apply_stt_engine(self, start: bool = True) -> None:
         engine = self.cfg["stt_engine"] or "auto"
@@ -592,7 +604,7 @@ class Jarvis(QObject):
         return ""
 
     def _wake_at_start(self, text: str) -> bool:
-        return hearing.wake_at_start(text or "", self.cfg["wake_words"])
+        return hearing.wake_at_start(text or "", self.cfg["wake_words"], self.cfg["wake_learned"])
 
     def _pick_alt(self, alts: list[str]) -> str:
         """(인식 스레드) Google 이 준 후보 중 울트론이 알아들을 수 있는 명령을 고른다.
@@ -612,7 +624,68 @@ class Jarvis(QObject):
 
     def _strip_wake(self, text: str) -> str | None:
         """호출어를 뗀 명령 (호출어만 말했으면 ''), 호출어가 없으면 None. 뭉개져 적힌 호출어도 받는다."""
-        return hearing.strip_wake(text or "", self.cfg["wake_words"], self.listener.last_babble)
+        return hearing.strip_wake(text or "", self.cfg["wake_words"], self.listener.last_babble, self.cfg["wake_learned"])
+
+    # ---- 호출어 연습: 내 목소리로 '울트론'이 실제로 어떻게 받아 적히는지 익힌다 ----
+    WAKE_TRAIN_N = 5
+
+    def start_wake_training(self) -> None:
+        if self._wake_train is not None or self._enroll:
+            return
+        if not self.mic_ok or not self.local_stt.ready:
+            self.bridge.toast.emit("warn", "마이크와 오프라인 인식 모델이 준비된 뒤에 할 수 있습니다")
+            return
+        if self.busy or self._pending_confirm:
+            self.bridge.toast.emit("info", "지금 하는 작업이 끝난 뒤 다시 시도해 주세요")
+            return
+        self._wake_train = {"heard": [], "tries": 0}
+        self.listener.capture_all = True
+        self.active_until = time.monotonic() + 40
+        self.toggle_visible(True, force=True)
+        word = (self.cfg["wake_words"] or ["울트론"])[0]
+        msg = f"호출어 연습이다. 신호가 나면 {word}, 하고 한 번씩 끊어서 다섯 번 불러라."
+        self.bridge.set("userText", "")
+        self.bridge.set("replyText", msg)
+        self.say(msg, follow_up=True)
+
+    def _wake_train_feed(self, text) -> None:
+        if self.speaker.playing:
+            return
+        t = self._wake_train
+        t["tries"] += 1
+        v = hearing.learnable(text or "", self.cfg["wake_words"], self.cfg["wake_learned"]) if text else None
+        if v is not None:
+            t["heard"].append(v)
+        n = len(t["heard"])
+        if n >= self.WAKE_TRAIN_N or t["tries"] >= self.WAKE_TRAIN_N * 2:
+            self._wake_train_end()
+            return
+        self.active_until = time.monotonic() + 30
+        self.listener.force_capture = True
+        note = "" if v is not None else " · 방금 것은 호출어로 들리지 않았습니다"
+        self._set_state("listening", f"호출어 연습 {n}/{self.WAKE_TRAIN_N} · 한 번 더 불러 주세요{note}")
+
+    def _wake_train_end(self, cancelled: bool = False) -> None:
+        t, self._wake_train = self._wake_train, None
+        self.listener.capture_all = False
+        self.listener.force_capture = False
+        self.active_until = 0
+        if cancelled or not t:
+            self._to_idle()
+            return
+        new = [v for v in dict.fromkeys(t["heard"]) if v]
+        known = sum(1 for v in t["heard"] if v == "")
+        if new:
+            self.cfg.update({"wake_learned": (list(self.cfg["wake_learned"] or []) + new)[-12:]})
+        log.info("호출어 연습: %d번 중 %d번은 이미 알아들음, 새로 익힌 모양 %d가지", len(t["heard"]), known, len(new))
+        if not t["heard"]:
+            msg = "호출어를 한 번도 알아듣지 못했다. 조용한 곳에서 마이크 가까이 다시 해 봐라."
+        elif new:
+            msg = f"{len(t['heard'])}번 중 {known}번은 이미 알아들었고, 새로 {len(new)}가지 모양을 익혔다. 이제 더 잘 알아듣겠다."
+        else:
+            msg = f"{len(t['heard'])}번 모두 이미 잘 알아듣고 있다. 더 익힐 것이 없다."
+        self.bridge.set("replyText", msg)
+        self.say(msg, follow_up=False)
 
     def _retry_cut(self, text: str, tokens: list, stamps: list) -> float | None:
         """(인식 스레드) 오프라인 인식이 호출어는 들었는데 명령은 못 알아들은 경우, 호출어가 끝나는 시각.

@@ -57,9 +57,10 @@ def _tail(text: str, end: int, chars: str) -> int:
     return end
 
 
-def find_wake(text: str, words: Iterable[str], crowded: bool = False) -> Wake | None:
+def find_wake(text: str, words: Iterable[str], crowded: bool = False, learned: Iterable[str] = ()) -> Wake | None:
     """글 안의 호출어 위치. 설정된 호출어(글자 사이 띄어쓰기 허용)를 먼저 찾고, 없으면 뭉개진 모양을 찾는다.
-    crowded=True (주변 대화 상태에서 잘라 낸 발화) 면 문장 가운데에 있는 뭉개진 모양도 받는다."""
+    crowded=True (주변 대화 상태에서 잘라 낸 발화) 면 문장 가운데에 있는 뭉개진 모양도 받는다.
+    learned 는 '호출어 연습'에서 이 사용자의 목소리가 실제로 받아 적힌 모양들 — 문장 맨 앞에 그대로 적혔을 때만 받는다."""
     text = text or ""
     words = [w for w in (words or []) if w]
     for w in sorted(words, key=len, reverse=True):
@@ -67,6 +68,11 @@ def find_wake(text: str, words: Iterable[str], crowded: bool = False) -> Wake | 
         m = re.search(pat, text, re.I)
         if m:
             return Wake(m.start(), _tail(text, m.end(), "아야"), True)
+    lead = len(text) - len(text.lstrip(_EDGE))
+    for w in sorted((w for w in (learned or []) if w), key=len, reverse=True):
+        end = lead + len(w)
+        if text.startswith(w, lead) and (end == len(text) or not "가" <= text[end] <= "힣" or text[end] in "아야"):
+            return Wake(lead, _tail(text, end, "아야"), False)
     if _DEFAULT_WAKE not in words:
         return None
     m = _ANYWHERE.search(text)
@@ -80,7 +86,7 @@ def find_wake(text: str, words: Iterable[str], crowded: bool = False) -> Wake | 
     return Wake(m.start(), _tail(text, m.end(), "아야은는이을"), False)
 
 
-def strip_wake(text: str, words: Iterable[str], crowded: bool = False) -> str | None:
+def strip_wake(text: str, words: Iterable[str], crowded: bool = False, learned: Iterable[str] = ()) -> str | None:
     """호출어를 떼어 낸 명령 (호출어만 말했으면 ''). 호출어가 없으면 None.
 
     호출어 뒤에 말이 있으면 그 말이 명령이다 — 호출어 앞에 적힌 것('어 울트론 크롬 열어', 주변 사람 말이 섞인
@@ -88,7 +94,7 @@ def strip_wake(text: str, words: Iterable[str], crowded: bool = False) -> str | 
     나머지에서는 문장 부호만 다듬는다 — 예전에는 양 끝의 '야 · 아' 글자까지 지워서
     '아이유 노래 틀어 줘' 가 '이유 노래 틀어 줘' 로, '볼륨 몇이야' 가 '볼륨 몇이' 로 바뀌었다."""
     text = text or ""
-    w = find_wake(text, words, crowded)
+    w = find_wake(text, words, crowded, learned)
     if w is None:
         return None
     before = text[:w.start].strip(_EDGE)
@@ -99,10 +105,25 @@ def strip_wake(text: str, words: Iterable[str], crowded: bool = False) -> str | 
     return "" if rest.lower() in _CALL else rest
 
 
-def wake_at_start(text: str, words: Iterable[str]) -> bool:
+def wake_at_start(text: str, words: Iterable[str], learned: Iterable[str] = ()) -> bool:
     """호출어가 문장 맨 앞(부름말 한두 글자 뒤까지)에 있는가."""
-    w = find_wake(text, words)
+    w = find_wake(text, words, learned=learned)
     return w is not None and w.start <= 3
+
+
+def learnable(text: str, words: Iterable[str], learned: Iterable[str] = ()) -> str | None:
+    """'호출어 연습'에서 사용자가 호출어만 말했을 때 받아 적힌 글을 본다.
+    이미 호출로 알아듣는 모양이면 '' · 새로 익힐 만한 모양이면 그 글 · 호출어로 볼 수 없는 소리면 None.
+    (2~5글자 한 낱말이고 '울트론'과 소리가 어느 정도 닮았을 때만 익힌다 — 기침 · 다른 말을 호출어로 배우지 않게)"""
+    t = (text or "").strip(_EDGE)
+    if not t:
+        return None
+    if find_wake(t, words, learned=learned) is not None:
+        return ""
+    base = next((w for w in (words or []) if re.fullmatch(r"[가-힣]{2,}", w or "")), _DEFAULT_WAKE)
+    if not re.fullmatch(r"[가-힣]{2,5}", t):
+        return None
+    return t if difflib.SequenceMatcher(None, jamo(t), jamo(base)).ratio() >= 0.5 else None
 
 
 def wake_end_time(tokens: list[str], stamps: list[float], words: Iterable[str]) -> float | None:

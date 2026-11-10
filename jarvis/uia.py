@@ -36,6 +36,7 @@ UIA_TogglePatternId = 10015
 UIA_ExpandCollapsePatternId = 10005
 UIA_LegacyIAccessiblePatternId = 10018
 UIA_TextPatternId = 10014
+UIA_ScrollItemPatternId = 10017
 TreeScope_Descendants = 4
 
 CONTROL_TYPES = {
@@ -103,6 +104,37 @@ class Screen:
         self._woken: set[int] = set()     # 접근성을 깨운 Chromium 창
         self.url = ""                     # read_text 가 마지막으로 읽은 웹 문서의 주소 (브라우저가 아니면 빈 값)
         self._lock = threading.Lock()
+        self._hidden = False              # True 인 동안 _collect 가 화면 밖(스크롤해야 보이는) 요소만 모은다
+
+    # ------------------------------------------------------------------ 화면 밖 요소
+    def find_hidden(self, hwnd: int, name: str) -> list[Item]:
+        """스크롤해야 보이는 요소 중 이름이 맞는 것들 (가장 비슷한 것부터). 못 읽으면 빈 목록."""
+        q = _norm(name)
+        if not q:
+            return []
+        with self._lock:
+            self._hidden = True
+            try:
+                items = self._collect(_uia(), _U(), _uia().ElementFromHandle(hwnd))
+            except Exception as e:
+                log.debug("화면 밖 요소 읽기 실패: %s", e)
+                return []
+            finally:
+                self._hidden = False
+        hits = [it for it in items if q in _norm(it.name)]
+        return sorted(hits, key=lambda it: (_norm(it.name) != q, len(it.name)))
+
+    def reveal(self, it: Item) -> bool:
+        """화면 밖 요소가 보이도록 스크롤한다 (요소가 스스로 스크롤하는 기능을 지원할 때)."""
+        try:
+            p = it.el.GetCurrentPattern(UIA_ScrollItemPatternId)
+            if not p:
+                return False
+            p.QueryInterface(_U().IUIAutomationScrollItemPattern).ScrollIntoView()
+            return True
+        except Exception as e:
+            log.debug("요소로 스크롤 실패: %s", e)
+            return False
 
     # ------------------------------------------------------------------ 읽기
     def read(self, hwnd: int, query: str = "") -> str:
@@ -156,11 +188,11 @@ class Screen:
         for i in range(found.Length if found else 0):
             el = found.GetElement(i)
             try:
-                if el.CachedIsOffscreen or not el.CachedIsEnabled:
+                if bool(el.CachedIsOffscreen) != self._hidden or not el.CachedIsEnabled:
                     continue
                 r = el.CachedBoundingRectangle
                 rect = (r.left, r.top, r.right, r.bottom)
-                if rect[2] - rect[0] < 2 or rect[3] - rect[1] < 2:
+                if not self._hidden and (rect[2] - rect[0] < 2 or rect[3] - rect[1] < 2):
                     continue
                 ct = el.CachedControlType
                 name = (el.CachedName or el.CachedHelpText or "").strip()
@@ -305,9 +337,34 @@ def click_at(x: int, y: int, double: bool = False, right: bool = False, hwnd: in
         time.sleep(0.06)
 
 
-def scroll(hwnd: int, direction: str, amount: int = 5) -> None:
+def move_to(x: int, y: int) -> None:
+    """마우스를 그 자리로 옮긴다 (누르지 않음). 조금씩 움직여서 '올려놓으면 펼쳐지는' 메뉴가 반응하게 한다."""
+    user32.SetCursorPos(int(x) - 3, int(y) - 3)
+    time.sleep(0.03)
+    user32.SetCursorPos(int(x), int(y))
+    time.sleep(0.05)
+
+
+def drag(x1: int, y1: int, x2: int, y2: int, steps: int = 14) -> None:
+    """(x1, y1) 에서 누른 채 (x2, y2) 까지 끌고 가서 놓는다 (슬라이더 · 파일 옮기기 · 범위 선택)."""
+    user32.SetCursorPos(int(x1), int(y1))
+    time.sleep(0.05)
+    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.08)
+    for i in range(1, steps + 1):                 # 한 번에 건너뛰면 끌기를 알아채지 못하는 앱이 많다
+        user32.SetCursorPos(round(x1 + (x2 - x1) * i / steps), round(y1 + (y2 - y1) * i / steps))
+        time.sleep(0.015)
+    time.sleep(0.08)
+    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+def scroll(hwnd: int, direction: str, amount: int = 5, at: tuple[int, int] | None = None) -> None:
+    """창 한가운데(또는 at 자리)에서 마우스 휠을 굴린다."""
     rect = wt.RECT()
-    if hwnd and user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+    if at is not None:
+        user32.SetCursorPos(int(at[0]), int(at[1]))
+        time.sleep(0.05)
+    elif hwnd and user32.GetWindowRect(hwnd, ctypes.byref(rect)):
         from .winutil import force_foreground
         force_foreground(hwnd)
         user32.SetCursorPos((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
