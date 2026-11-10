@@ -225,21 +225,45 @@ def annotate(img, marks: list[tuple[int, tuple[int, int, int, int]]]):
 
 
 # ---------------------------------------------------------------------------- 화면 변화
-_SMALL = (96, 54)
+_SMALL = (480, 270)       # 비교용 크기: 1080p 화면의 4×4 픽셀이 한 칸 (탭 제목 · 체크 표시처럼 작은 변화도 몇 칸은 바뀐다)
+_LEVEL = 12               # 한 칸의 밝기가 이만큼 넘게 달라지면 바뀐 칸
+_MIN_CELLS = 3            # 바뀐 칸이 이보다 적으면 변화 없음 (잡티)
+TINY_CELLS = 12           # 이보다 적으면 깜빡이는 글자 커서 정도의 변화
 
 
 def small_gray(img):
-    """비교용으로 작게 줄인 흑백 배열 (uint8)."""
+    """비교용으로 작게 줄인 흑백 배열 (int16)."""
     import numpy as np
-    return np.asarray(img.convert("L").resize(_SMALL), dtype=np.int16)
+    from PIL import Image
+    return np.asarray(img.convert("L").resize(_SMALL, Image.BOX), dtype=np.int16)
+
+
+def _changed(a, b):
+    import numpy as np
+    return np.abs(a - b) > _LEVEL
 
 
 def changed_fraction(a, b) -> float:
     """두 화면(small_gray 결과)에서 눈에 띄게 달라진 부분의 비율 0..1."""
-    import numpy as np
     if a is None or b is None or a.shape != b.shape:
         return 1.0
-    return float(np.mean(np.abs(a - b) > 14))
+    return float(_changed(a, b).mean())
+
+
+def changed_where(a, b) -> str:
+    """달라진 부분이 화면의 어디쯤인지 ('왼쪽 위', '가운데', '오른쪽 아래' …). 넓게 퍼져 있거나 알 수 없으면 빈 글."""
+    import numpy as np
+    if a is None or b is None or a.shape != b.shape:
+        return ""
+    ys, xs = np.nonzero(_changed(a, b))
+    if len(xs) == 0:
+        return ""
+    h, w = a.shape
+    if (xs.max() - xs.min()) > w * 0.6 or (ys.max() - ys.min()) > h * 0.6:
+        return ""
+    col = ("왼쪽", "", "오른쪽")[min(2, int(xs.mean() * 3 / w))]
+    row = ("위", "", "아래")[min(2, int(ys.mean() * 3 / h))]
+    return f"{col} {row}".strip() or "가운데"
 
 
 @dataclass
@@ -247,14 +271,22 @@ class Change:
     fraction: float    # 동작 전과 비교해 달라진 비율
     settled: bool      # 화면이 멈췄는가 (False 면 동영상·로딩처럼 계속 바뀌는 중)
     seconds: float
+    where: str = ""    # 달라진 곳 (좁은 범위일 때만)
+    cells: int = _SMALL[0] * _SMALL[1]     # 비교한 칸 수
 
     def text(self) -> str:
         if not self.settled:
             return f"화면이 계속 바뀌는 중 (동영상이거나 아직 불러오는 중, {self.seconds:.1f}초 기다림)"
-        if self.fraction < 0.004:
+        n = self.fraction * self.cells
+        at = f" — {self.where}" if self.where else ""
+        if n < _MIN_CELLS:
             return "화면에 변화 없음 — 동작이 먹지 않았을 수 있음"
+        if n < TINY_CELLS:
+            return f"화면이 아주 조금만 바뀜{at} (깜빡이는 글자 커서일 수도 있음)"
+        if self.fraction < 0.005:
+            return f"화면의 작은 부분이 바뀜{at}"
         if self.fraction < 0.08:
-            return f"화면 일부가 바뀜 (약 {max(1, round(self.fraction * 100))}%)"
+            return f"화면 일부가 바뀜 (약 {max(1, round(self.fraction * 100))}%{at})"
         return f"화면이 크게 바뀜 (약 {round(self.fraction * 100)}%)"
 
 
@@ -277,10 +309,10 @@ def settle(grab: Callable[[], object], before, timeout: float = 2.5, interval: f
             same += 1
             if same >= quiet:
                 frac = changed_fraction(before, cur)
-                if frac >= 0.004 or clock() - t0 >= nochange_wait:
-                    return Change(frac, True, clock() - t0)
+                if frac * cur.size >= _MIN_CELLS or clock() - t0 >= nochange_wait:
+                    return Change(frac, True, clock() - t0, changed_where(before, cur), cur.size)
         else:
             same = 0
         prev = cur
         if clock() - t0 >= timeout:
-            return Change(changed_fraction(before, cur), False, clock() - t0)
+            return Change(changed_fraction(before, cur), False, clock() - t0, "", getattr(cur, "size", 1))

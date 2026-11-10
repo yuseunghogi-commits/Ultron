@@ -15,6 +15,9 @@ from jarvis.config import DEFAULTS
 from jarvis.tools import Hooks, PCTools, ToolError
 
 
+REAL_SETTLE = vision.settle
+
+
 class Cfg(dict):
     def __getitem__(self, k):
         return self.get(k, DEFAULTS.get(k))
@@ -72,7 +75,7 @@ class Rig:
         monkeypatch.setattr(tools.uia, "element_at", lambda x, y: self.element)
         monkeypatch.setattr(tools.uia, "click_at", self._click)
         monkeypatch.setattr(tools.time, "sleep", lambda s: None)
-        real = vision.settle
+        real = REAL_SETTLE
 
         def fast_settle(grab, before, **kw):       # 실제로 기다리지 않고 가짜 시계로
             c = Clock()
@@ -186,7 +189,36 @@ def test_click_reports_whether_the_screen_changed(rig):
     assert "변화 없음" in out                                    # 눌렀는데 그대로 → 빗나갔을 수 있다고 알려 준다
     rig.on_click = lambda: setattr(rig, "shade", 200)
     out = rig.me.t_click_screen(200, 300, double=True)
-    assert rig.clicks[-1] == (264, 396, True, False) and "크게 바뀜" in out
+    # 화면이 바뀌었으면 바뀐 화면을 결과에 같이 돌려준다 → AI 가 다시 보러 오는 왕복이 줄어든다
+    assert rig.clicks[-1] == (264, 396, True, False)
+    assert rig.image(out).size == (1456, 819) and rig.image(out).getpixel((10, 10))[0] > 150
+    assert "크게 바뀜" in out[1]["text"] and "누른 뒤의 화면" in out[1]["text"]
+
+
+def test_follow_up_can_be_turned_off_and_keeps_the_window_scope(monkeypatch):
+    rig = Rig(monkeypatch, screen_follow=False)
+    rig.me.t_look_at_screen()
+    rig.on_click = lambda: setattr(rig, "shade", 200)
+    assert isinstance(rig.me.t_click_screen(100, 100), str)
+    rig = Rig(monkeypatch, window=(100, 100, 1100, 900))
+    rig.me.t_look_at_screen(target="window")
+    rig.on_click = lambda: setattr(rig, "shade", 200)
+    out = rig.me.t_click_screen(50, 50)
+    assert rig.clicks[-1][:2] == (150, 150) and rig.image(out).size == (1000, 800)      # 창만 보고 있었으면 창만 다시 보여 준다
+    assert rig.me._view.kind == "window" and rig.me._view.to_screen(0, 0) == (100, 100)
+
+
+def test_click_ui_lists_the_new_screen_when_it_changed(rig):
+    items = [types.SimpleNamespace(n=1, name="다음", kind="버튼", rect=(100, 100, 200, 140))]
+    rig.me.screen.find = lambda number, name: items[0]
+    rig.me.screen.click = lambda it, double=False: rig.events.append("click") or "'다음' 버튼 누름"
+    reads = []
+    rig.me.screen.read = lambda hwnd, query="": reads.append(hwnd) or "창: 둘째 화면\n누를 수 있는 요소:\n[1] 버튼 '완료'"
+    out = rig.me.t_click_ui(number=1)
+    assert "변화 없음" in out and reads == [] and "누른 뒤의 화면" not in out             # 안 바뀌었으면 붙이지 않는다
+    rig.me.screen.click = lambda it, double=False: setattr(rig, "shade", 220) or "'다음' 버튼 누름"
+    out = rig.me.t_click_ui(number=1)
+    assert reads == [77] and "누른 뒤의 화면" in out and "[1] 버튼 '완료'" in out
 
 
 def test_click_names_the_element_and_asks_before_risky_buttons(rig):

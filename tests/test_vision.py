@@ -176,7 +176,30 @@ def test_changed_fraction_and_small_gray():
     assert abs(vision.changed_fraction(frame(), frame(box=(0, 0, 48, 54))) - 0.5) < 0.01
     assert vision.changed_fraction(None, frame()) == 1.0
     g = vision.small_gray(Image.new("RGB", (1920, 1080), (255, 255, 255)))
-    assert g.shape == (54, 96) and int(g.max()) == 255
+    assert g.shape == (270, 480) and int(g.max()) == 255
+
+
+def screen(*boxes):
+    """1920×1080 흰 화면에 검은 상자들을 그린 것 (실제 화면 픽셀 기준)."""
+    img = Image.new("RGB", (1920, 1080), (255, 255, 255))
+    for box in boxes:
+        img.paste((0, 0, 0), box)
+    return vision.small_gray(img)
+
+
+def change_text(before, after):
+    return run_settle([before, after, after, after, after]).text()
+
+
+def test_small_changes_are_noticed_and_located():
+    # 실제 Claude 로 돌려 본 시험에서: 탭을 눌러 제목 글자만 바뀌었는데 '변화 없음'으로 알려 줘서 같은 탭을 세 번 눌렀다
+    assert change_text(screen(), screen((60, 150, 120, 174))) == "화면의 작은 부분이 바뀜 — 왼쪽 위"      # 제목 한 낱말
+    assert change_text(screen(), screen((1700, 950, 1716, 966))).startswith("화면의 작은 부분이 바뀜 — 오른쪽 아래")   # 체크 상자
+    assert "아주 조금만" in change_text(screen(), screen((900, 500, 902, 518)))                       # 글자 커서 하나
+    assert "변화 없음" in change_text(screen(), screen((900, 500, 901, 502)))                         # 잡티
+    assert change_text(screen(), screen((760, 390, 1160, 690))) == "화면 일부가 바뀜 (약 6% — 가운데)"
+    assert change_text(screen(), screen((0, 0, 1920, 600))) == "화면이 크게 바뀜 (약 56%)"
+    assert vision.changed_where(screen(), screen((10, 10, 60, 40), (1800, 1000, 1900, 1060))) == ""   # 여러 곳에 흩어진 변화
 
 
 def test_settle_returns_as_soon_as_a_changed_screen_stops_moving():

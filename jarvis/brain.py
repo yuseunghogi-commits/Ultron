@@ -86,7 +86,8 @@ SYSTEM_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {ti
 - 번호가 붙지 않는 것(게임, 그림 위의 버튼, 캔버스)만 click_screen 으로 누르세요. 좌표는 마지막으로 본 이미지의 픽셀 좌표입니다.
   대상이 작으면 zoom_screen 으로 그 부분을 키워 본 다음, 확대된 이미지에서 좌표를 잡으세요.
 - 누르기·입력·스크롤 도구는 결과에 화면이 바뀌었는지 알려 줍니다. "변화 없음"이면 그 동작이 먹지 않은 것이니 같은 동작을
-  되풀이하지 말고 다른 요소나 방법을 쓰세요. 화면이 바뀌었으면 새 화면을 read_ui 나 look_at_screen 으로 확인하고 다음 단계로 가세요.
+  되풀이하지 말고 다른 요소나 방법을 쓰세요. 화면이 바뀌면 click_ui 는 바뀐 화면의 요소 목록을, click_screen 은 바뀐 화면의
+  캡처를 결과에 같이 돌려주니, 다시 읽거나 보지 말고 그것으로 바로 다음 단계를 정하세요. 원하는 결과가 보이면 거기서 끝내고 보고하세요.
 - 화면에 쓰인 내용을 물으면(무슨 내용이야, 요약해 줘, 오류가 뭐야, OO 이 어디 나와?) read_screen_text 로 글자를 그대로 읽으세요.
   그림·그래프·배치처럼 글자가 아닌 것은 look_at_screen 으로 보고, 글씨가 작아 읽기 어려우면 zoom_screen 으로 키워 보세요.
 - 찾는 요소가 안 보이면 scroll 후 다시 읽으세요. 스크롤 결과가 "변화 없음"이면 끝까지 간 것입니다.
@@ -195,6 +196,13 @@ class Brain:
         # 음성 인식 후보 고르기용: 실제로 실행하지 않고 '알아들을 수 있는 명령인가'만 본다
         self._dry = LocalRouter(self._dry_execute, lambda: "창조자")
         self.chat_session: ClaudeSession | None = None           # Pro 계정: 계속 켜 두는 Claude Code
+        # ---- Pro 모드의 일반 명령도 Claude Code 를 켜 둔 채로 쓴다 (pro_keep_alive) ----
+        self.cmd_session: ClaudeSession | None = None
+        self._cmd_model = ""                 # 켜 둔 프로세스가 지금 쓰는 모델
+        self._cmd_born = 0.0                 # 그 대화를 시작한 시각
+        self._cmd_lock = threading.Lock()
+        self._ai_used = 0.0                  # 마지막으로 Claude 에게 넘긴 시각 (미리 켜 둘지 정할 때 본다)
+        self._reaper: threading.Thread | None = None
         self.chat_history: list[dict] = []                       # API 키 방식 대화 기록
         self.chat_system = ""
         self.chat_last = 0.0
@@ -207,6 +215,17 @@ class Brain:
         self.system = ""
         self.session_id = None
         self.turns = 0
+        self._drop_cmd_session()
+
+    def shutdown(self) -> None:
+        """앱을 끝낼 때: 켜 둔 Claude Code 프로세스(명령용 · 대화용)를 끈다."""
+        for sess in (self.cmd_session, self.chat_session):
+            try:
+                if sess:
+                    sess.close(forget=True)
+            except Exception as e:
+                log.debug("세션 종료 실패: %s", e)
+        self.cmd_session = self.chat_session = None
 
     def _client_for(self, key: str):
         import anthropic
@@ -281,7 +300,8 @@ class Brain:
             return "chat", reply
         if mode == "local":
             return "local", self.local.unknown_reply()
-        reply = self._handle_ai(text, cancel)
+        self._ai_used = time.time()
+        reply = self._handle_ai(text, cancel, on_text)
         self._last_ai = (time.time(), reply or "")
         return "claude", reply
 
@@ -456,15 +476,7 @@ class Brain:
         self._ensure_chat_session()
         self.chat_last = time.time()
 
-        def on_event(ev: dict) -> None:
-            self._vision_model((ev.get("message") or {}).get("model"))
-            for b in (ev.get("message") or {}).get("content", []):
-                if b.get("type") == "tool_use" and b.get("name") in ("WebSearch", "WebFetch"):
-                    inp = b.get("input") or {}
-                    what = inp.get("query") or inp.get("url") or ""
-                    self.on_action(uuid.uuid4().hex[:8], f"웹 검색 · {what}"[:60], "ok", "")
-
-        result, is_error, detail = self.chat_session.ask(self._prefix() + "\n\n" + text, cancel, on_text, on_event)
+        result, is_error, detail = self.chat_session.ask(self._prefix() + "\n\n" + text, cancel, on_text, self._cc_event)
         if cancel.is_set():
             return None
         if is_error:
@@ -512,11 +524,11 @@ class Brain:
         ts, reply = self._last_ai
         return time.time() - ts < 60 and bool(re.search(r"(\?|까요|나요|할까|을까|ㄹ까)\s*$", reply.strip()))
 
-    def _handle_ai(self, text: str, cancel: threading.Event) -> str | None:
+    def _handle_ai(self, text: str, cancel: threading.Event, on_text=None) -> str | None:
         if True:
             if (self.cfg["brain"] or "pro") == "pro":
                 try:
-                    return self._claude_code(text, cancel)
+                    return self._claude_code(text, cancel, on_text)
                 except Exception as e:
                     log.exception("Claude Code 실행 실패")
                     return self._offline(text, no_key=False) if not cancel.is_set() else None
@@ -524,7 +536,7 @@ class Brain:
             if not key:
                 return self._offline(text, no_key=True)
             try:
-                return self._claude(text, key, cancel)
+                return self._claude(text, key, cancel, on_text=on_text)   # 답이 만들어지는 대로 읽는다
             except Exception as e:
                 import anthropic
                 if isinstance(e, anthropic.AuthenticationError):
@@ -728,11 +740,140 @@ class Brain:
         path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
         return str(path)
 
-    def _claude_code(self, text: str, cancel: threading.Event) -> str | None:
+    # ---- 켜 둔 Claude Code 로 명령 처리 (pro_keep_alive > 0) ----
+    def _keep_alive(self) -> float:
+        try:
+            return max(0.0, float(self.cfg["pro_keep_alive"] or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _cmd_args(self, sid: str | None) -> list[str]:
+        builtin = "WebSearch,WebFetch" if self.cfg["web_search"] else ""
+        args = [self.claude_exe(), "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                "--verbose", "--include-partial-messages",
+                "--model", self._cmd_model or self.cfg["pro_model"] or "haiku",
+                "--effort", self.cfg["effort"] or "low",
+                "--system-prompt", self.system,
+                "--tools", builtin,
+                "--mcp-config", self._mcp_config(), "--strict-mcp-config",
+                "--permission-mode", "dontAsk",
+                "--allowedTools", "mcp__ultron", "WebSearch", "WebFetch"]
+        return args + (["--resume", sid] if sid else [])
+
+    def _drop_cmd_session(self) -> None:
+        sess, self.cmd_session = self.cmd_session, None
+        if sess:
+            threading.Thread(target=sess.close, kwargs={"forget": True}, daemon=True).start()
+
+    def _cmd_session_for(self, model: str) -> ClaudeSession:
+        """명령용 세션 (없거나 대화가 오래됐으면 새 대화로). _cmd_lock 을 잡고 부른다."""
+        now = time.time()
+        sess = self.cmd_session
+        if (sess is None or not self.system or self.turns >= 30
+                or now - max(self.last_turn, self._cmd_born) > IDLE_RESET_SEC):
+            self._drop_cmd_session()
+            self.turns = 0
+            self.system = self._build_system()
+            self._cmd_model = model
+            workdir = DATA_DIR / "workspace"
+            workdir.mkdir(parents=True, exist_ok=True)
+            sess = self.cmd_session = ClaudeSession(self._cmd_args, self._child_env, str(workdir))
+            self._cmd_born = now
+            if self._reaper is None:
+                self._reaper = threading.Thread(target=self._reap, daemon=True, name="claude-idle")
+                self._reaper.start()
+        return sess
+
+    def _reap(self) -> None:
+        """안 쓰는 Claude Code 는 꺼서 메모리(수백 MB)를 돌려준다. 대화 번호는 남아 있어 10분 안이면 이어 간다."""
+        while True:
+            time.sleep(20)
+            sess, keep = self.cmd_session, self._keep_alive()
+            try:
+                if sess and sess.close_if_idle(keep if keep > 0 else 1):
+                    log.info("Claude Code 를 %d초 동안 쓰지 않아 껐습니다", keep)
+            except Exception as e:
+                log.debug("세션 정리 실패: %s", e)
+
+    def wants_prewarm(self) -> bool:
+        """곧 Claude 에게 넘길 말이 올 것 같은가 — 최근 30분 안에 Claude 를 썼고, 지금은 꺼져 있을 때."""
+        return ((self.cfg["brain"] or "pro") == "pro" and self._keep_alive() > 0 and not self.chat_mode
+                and self.tool_server is not None and time.time() - self._ai_used < 1800
+                and not (self.cmd_session and self.cmd_session.alive))
+
+    def prewarm(self) -> None:
+        """(다른 스레드에서 부른다) 사용자가 말을 시작했을 때 Claude Code 를 미리 켜 둔다.
+        켜지는 2~5초가 말하는 시간 · 받아 적는 시간과 겹쳐서 기다림이 줄어든다. 토큰은 쓰지 않는다."""
+        if not self.wants_prewarm() or not self.claude_exe():
+            return
+        if not self._cmd_lock.acquire(blocking=False):
+            return
+        try:
+            sess = self._cmd_session_for(self._cmd_model or self.cfg["pro_model"] or "haiku")
+        finally:
+            self._cmd_lock.release()
+        try:
+            sess.warm()
+        except Exception as e:
+            log.warning("Claude Code 미리 켜기 실패: %s", e)
+
+    def _cc_event(self, ev: dict) -> None:
+        """Claude Code 가 흘려 주는 사건: 실제 모델 이름(화면 캡처 크기를 맞춤) · 웹 검색 표시."""
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+        self._vision_model(ev.get("model") or msg.get("model"))
+        for b in msg.get("content", []):
+            if b.get("type") == "tool_use" and b.get("name") in ("WebSearch", "WebFetch"):
+                inp = b.get("input") or {}
+                what = inp.get("query") or inp.get("url") or ""
+                self.on_action(uuid.uuid4().hex[:8], f"웹 검색 · {what}"[:60], "ok", "")
+
+    def _claude_live(self, text: str, cancel: threading.Event, on_text=None) -> str | None:
+        model = self._pro_model(text)   # 화면을 보고 조작하는 요청이면 더 정확한 모델
+        with self._cmd_lock:
+            sess = self._cmd_session_for(model)
+            switched = model != self._cmd_model
+            if switched:
+                log.info("모델 전환: %s → %s", self._cmd_model, model)
+                self._cmd_model = model
+                if sess.alive and not sess.set_model(model):
+                    log.info("켜 둔 채로는 모델을 바꾸지 못해 다시 켭니다")   # set_model 이 껐다 → ask 가 새 모델로 다시 켠다
+        self.last_turn = time.time()
+        prompt = self._prefix() + "\n\n" + text
+        result, is_error, detail = sess.ask(prompt, cancel, on_text, self._cc_event)
+        if is_error and switched and not cancel.is_set():
+            # 모델을 바꿔 같은 대화를 이어 가다 실패한 경우: 새 대화로 한 번 더 (앞 대화 맥락은 잃지만 요청은 처리한다)
+            log.warning("모델을 바꿔 이어 가기 실패 — 새 대화로 다시 시도: %s", detail[-200:])
+            with self._cmd_lock:
+                self._drop_cmd_session()
+                sess = self._cmd_session_for(model)
+            result, is_error, detail = sess.ask(prompt, cancel, on_text, self._cc_event)
+        if cancel.is_set():
+            self._drop_cmd_session()
+            self.session_id = None
+            return None
+        self.turns += 1
+        self.session_id, self._session_model = sess.session_id, model
+        if is_error:
+            blob = f"{result or ''} {detail}".lower()
+            log.error("Claude Code 오류: %s | %s", result, detail[-500:])
+            self._drop_cmd_session()
+            self.session_id = None
+            if "login" in blob or "auth" in blob or "credential" in blob or "api key" in blob:
+                return "Claude Code 로그인이 필요하다. 터미널에서 claude 를 한 번 실행해 Pro 계정으로 로그인해라."
+            if "limit" in blob or "usage" in blob or "quota" in blob:
+                return "Pro 사용 한도에 도달했다. 한도가 초기화된 뒤 다시 말해라."
+            if result is None:
+                return self._offline(text, no_key=False)
+            return "요청을 처리하지 못했다. 잠시 후 다시 시도해라."
+        return (result or "처리했다.").strip()
+
+    def _claude_code(self, text: str, cancel: threading.Event, on_text=None) -> str | None:
         exe = self.claude_exe()
         if not exe:
             return ("Claude Code가 설치되어 있지 않다. 설정에서 API 키 방식을 쓰거나 "
                     "Claude Code를 설치해라.")
+        if self._keep_alive() > 0:
+            return self._claude_live(text, cancel, on_text)
         now = time.time()
         if not self.session_id or now - self.last_turn > IDLE_RESET_SEC or self.turns >= 30 or not self.system:
             self.session_id = None

@@ -73,7 +73,7 @@ class Runner:
 
 
 def wired(results):
-    b = brain()
+    b = brain(pro_keep_alive=0)                     # 명령마다 Claude Code 를 새로 켜는 예전 방식
     b.claude_exe = lambda: "claude"
     b._build_system = lambda: "system"
     run = Runner(b, results)
@@ -104,3 +104,154 @@ def test_same_conversation_continues_when_switching_works():
     b._claude_code("이 화면에서 확인 버튼 눌러 줘", threading.Event())
     b._claude_code("고마워 이제 됐어", threading.Event())
     assert run.calls == [("haiku", None), ("sonnet", "s1"), ("haiku", "s1")]
+
+
+# ---------------------------------------------------------------- 켜 둔 Claude Code 로 명령 처리 (pro_keep_alive)
+class FakeSession:
+    """ClaudeSession 흉내: 질문 · 모델 전환 · 종료를 기록하고 정해 둔 답을 차례로 돌려준다."""
+    made: list = []
+
+    def __init__(self, args_fn, env_fn, cwd):
+        self.args_fn, self.alive, self.session_id = args_fn, False, None
+        self.asked, self.models, self.closed, self.warmed = [], [], [], 0
+        self.answers = list(FakeSession.script)
+        self.can_switch = True
+        FakeSession.made.append(self)
+
+    def warm(self):
+        self.alive, self.warmed = True, self.warmed + 1
+
+    def set_model(self, model):
+        self.models.append(model)
+        if not self.can_switch:
+            self.alive = False
+        return self.can_switch
+
+    def ask(self, prompt, cancel, on_text=None, on_event=None, timeout=240):
+        self.alive = True
+        self.asked.append((prompt.splitlines()[-1], self.args_fn(self.session_id)))
+        text, err = self.answers.pop(0) if self.answers else ("답", False)
+        self.session_id = self.session_id or f"s{len(FakeSession.made)}"
+        if on_event:
+            on_event({"type": "system", "model": "claude-sonnet-5-5"})
+        if on_text and not err:
+            on_text(text)
+        return (None if err else text), err, ("resume failed" if err else "")
+
+    def close(self, forget=False):
+        self.alive = False
+        self.closed.append(forget)
+        if forget:
+            self.session_id = None
+
+    def close_if_idle(self, seconds):
+        return False
+
+
+def live(monkeypatch, script=(), **cfg):
+    FakeSession.made, FakeSession.script = [], list(script)
+    monkeypatch.setattr(bm, "ClaudeSession", FakeSession)
+    monkeypatch.setattr(bm.Brain, "_mcp_config", lambda self: "mcp.json")
+    monkeypatch.setattr(bm.Brain, "_reap", lambda self: None)
+
+    def drop(self):                              # 실제로는 다른 스레드에서 끈다 — 테스트에서는 바로
+        sess, self.cmd_session = self.cmd_session, None
+        if sess:
+            sess.close(forget=True)
+
+    monkeypatch.setattr(bm.Brain, "_drop_cmd_session", drop)
+    b = brain(**cfg)
+    b.claude_exe = lambda: "claude"
+    b._build_system = lambda chat=False: "system"
+    b.tool_server = object()
+    return b
+
+
+def model_of(args):
+    return args[args.index("--model") + 1]
+
+
+def test_commands_reuse_one_running_claude_code_and_stream_the_answer(monkeypatch):
+    b = live(monkeypatch)
+    heard = []
+    assert b._claude_code("오늘 일정 정리해 줘", threading.Event(), heard.append) == "답"
+    assert b._claude_code("그럼 내일은?", threading.Event(), heard.append) == "답"
+    assert len(FakeSession.made) == 1                                   # 프로세스를 새로 켜지 않았다
+    s = FakeSession.made[0]
+    assert [q for q, _ in s.asked] == ["오늘 일정 정리해 줘", "그럼 내일은?"]
+    assert heard == ["답", "답"]                                         # 답이 만들어지는 대로 넘어온다
+    assert model_of(s.asked[0][1]) == "haiku" and "--resume" not in s.asked[0][1] and "stream-json" in s.asked[0][1]
+    assert b.tools.models == ["claude-sonnet-5-5", "claude-sonnet-5-5"]   # 실제 모델 이름을 화면 도구에 알려 준다
+    assert b.session_id == "s1" and b.turns == 2
+
+
+def test_screen_request_switches_the_model_without_restarting(monkeypatch):
+    b = live(monkeypatch)
+    b._claude_code("오늘 일정 정리해 줘", threading.Event())
+    b._claude_code("이 화면에서 확인 버튼 눌러 줘", threading.Event())
+    b._claude_code("고마워 이제 됐어", threading.Event())
+    s = FakeSession.made[0]
+    assert len(FakeSession.made) == 1 and s.models == ["sonnet", "haiku"] and s.closed == []
+
+
+def test_model_switch_falls_back_to_restart_and_then_to_a_fresh_conversation(monkeypatch):
+    b = live(monkeypatch, script=[("답", False), ("", True)])
+    b._claude_code("오늘 일정 정리해 줘", threading.Event())
+    s = FakeSession.made[0]
+    s.can_switch = False                         # 예전 Claude Code: 켜 둔 채로는 모델을 못 바꾼다 → 꺼졌다가 새 모델로 다시 켜진다
+    assert b._claude_code("이 화면에서 확인 버튼 눌러 줘", threading.Event()) == "답"
+    assert model_of(s.asked[1][1]) == "sonnet" and s.asked[1][1][-2:] == ["--resume", "s1"]
+    assert len(FakeSession.made) == 2 and s.closed == [True]            # 이어 가기가 실패해 새 대화로 한 번 더
+    assert "--resume" not in FakeSession.made[1].asked[0][1]
+
+
+def test_old_conversation_starts_fresh_and_errors_drop_the_session(monkeypatch):
+    b = live(monkeypatch, script=[("답", False), ("", True)])
+    b._claude_code("오늘 일정 정리해 줘", threading.Event())
+    b.last_turn = b._cmd_born = 0                # 10분 넘게 조용했다
+    b._claude_code("오늘 일정 정리해 줘", threading.Event())
+    assert len(FakeSession.made) == 2 and FakeSession.made[0].closed == [True]
+    FakeSession.made[1].answers = [("", True)]
+    reply = b._claude_code("그럼 내일은?", threading.Event())
+    assert reply and reply != "답" and b.cmd_session is None and b.session_id is None
+
+
+def test_cancel_forgets_the_conversation(monkeypatch):
+    b = live(monkeypatch)
+    cancel = threading.Event()
+    cancel.set()
+    assert b._claude_code("오늘 일정 정리해 줘", cancel) is None
+    assert b.cmd_session is None and b.session_id is None
+
+
+def test_prewarm_only_when_claude_was_used_recently(monkeypatch):
+    import time as _t
+    b = live(monkeypatch)
+    assert not b.wants_prewarm()                 # 오늘 Claude 를 쓴 적이 없다 → 로컬 명령만 쓰는 사람에게는 켜지 않는다
+    b.prewarm()
+    assert FakeSession.made == []
+    b._ai_used = _t.time()
+    assert b.wants_prewarm()
+    b.prewarm()
+    assert len(FakeSession.made) == 1 and FakeSession.made[0].warmed == 1
+    assert not b.wants_prewarm()                 # 이미 켜져 있다
+    b._claude_code("오늘 일정 정리해 줘", threading.Event())
+    assert len(FakeSession.made) == 1            # 미리 켜 둔 것을 그대로 쓴다
+    b.chat_mode = True
+    FakeSession.made[0].alive = False
+    assert not b.wants_prewarm()                 # 대화 모드는 따로 켜 둔 세션을 쓴다
+
+
+def test_keep_alive_zero_uses_a_new_process_per_command(monkeypatch):
+    b = live(monkeypatch, pro_keep_alive=0)
+    b._run_claude_code = lambda exe, text, cancel, model: ("예전 방식", "", False, 0, "")
+    assert b._claude_code("오늘 일정 정리해 줘", threading.Event()) == "예전 방식"
+    assert FakeSession.made == [] and not b.wants_prewarm()
+
+
+def test_reset_and_shutdown_close_the_running_process(monkeypatch):
+    b = live(monkeypatch)
+    b._claude_code("오늘 일정 정리해 줘", threading.Event())
+    s = FakeSession.made[0]
+    b.shutdown()
+    assert s.closed == [True] and b.cmd_session is None

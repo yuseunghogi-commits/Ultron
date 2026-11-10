@@ -445,7 +445,16 @@ class Jarvis(QObject):
             self.listener.enabled = bool(self.bridge._wakeEnabled or self._active() or self._pending_confirm
                                          or self._enroll)
 
+    def _warm_brain(self) -> None:
+        """사용자가 말을 시작했을 때: 최근에 Claude 를 썼다면 Claude Code 를 미리 켜 둔다 (말하는 동안 준비 → 대답이 빨라짐)."""
+        try:
+            if not self.busy and self.brain.wants_prewarm():
+                threading.Thread(target=self.brain.prewarm, daemon=True, name="claude-warm").start()
+        except Exception as e:
+            log.debug("미리 켜기 건너뜀: %s", e)
+
     def _arm(self, seconds: float = 8.0, chime: bool = True) -> None:
+        self._warm_brain()
         self.active_until = time.monotonic() + seconds
         self.listener.force_capture = True
         if chime:
@@ -489,6 +498,7 @@ class Jarvis(QObject):
 
     @Slot()
     def _on_speech_start(self) -> None:
+        self._warm_brain()
         self._speech_while_active = self._active()
         if self._speech_while_active:
             self.active_until = time.monotonic() + 16   # 말하는 도중 만료되지 않도록
@@ -1427,6 +1437,7 @@ class Jarvis(QObject):
     def quit(self) -> None:
         try:
             self.listener.stop()
+            self.brain.shutdown()        # 켜 둔 Claude Code 프로세스를 끈다
             self.toolserver.stop()
             self.hotkey.stop()
             self.focus.stop()

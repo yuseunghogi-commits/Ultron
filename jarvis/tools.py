@@ -122,6 +122,8 @@ class PCTools:
         self._apps: list[tuple[str, str]] = []
         self.screen = uia.Screen()          # 화면 조작: 마지막으로 읽은 요소 목록
         self._view: vision.View | None = None    # Claude 가 마지막으로 본 이미지 ↔ 실제 화면의 대응 (좌표 변환용)
+        self._view_target = "screen"             # 마지막으로 본 범위 (screen | window) — 누른 뒤 같은 범위를 다시 보여 준다
+        self._moved = False                      # 방금 동작으로 화면이 바뀌었는가
         self.vision_model = ""              # 지금 화면을 보고 있는 모델 이름 → 보낼 이미지 크기 한도를 정한다
         self.sentinel = sentinel.Sentinel(cfg)   # Sentinel 웹 보안 분석기 연결
         self._sentinel_last = ""            # 이번 실행에서 마지막으로 요청한 검사 번호 (보고서 열기용)
@@ -224,13 +226,14 @@ class PCTools:
                  {"app": {"type": "string", "description": "optional app name or window title; default = active window"},
                   "query": {"type": "string", "description": "optional text to filter elements by name"}}),
             tool("click_ui", "Click an element from the last read_ui list, by number or by (partial) name. "
-                 "The result says whether the screen changed; if it did, call read_ui again (or look_at_screen) to see the "
-                 "new page before the next step. "
+                 "The result says whether the screen changed; if it did, it also lists the elements of the new screen "
+                 "(renumbered), so you can pick the next element without calling read_ui again. "
                  "To type into an input box: click it, then use type_text.",
                  {"number": {"type": "integer"}, "name": s, "double": {"type": "boolean"}}),
             tool("click_screen", "Click a point using pixel coordinates of the LAST image you were shown (look_at_screen or zoom_screen). "
                  "Fallback when read_ui / marks cannot find the element (games, canvas, images). Aim at the centre of the target. "
-                 "The result says whether the screen changed.",
+                 "The result says whether the screen changed and, if it did, includes a new screenshot — no need to call "
+                 "look_at_screen again; later coordinates refer to that new image.",
                  {"x": {"type": "integer"}, "y": {"type": "integer"}, "double": {"type": "boolean"},
                   "right": {"type": "boolean"}}, ["x", "y"]),
             tool("scroll", "Scroll the active window (or the app given) up or down. The result says whether the screen moved; "
@@ -630,6 +633,7 @@ class PCTools:
 
     def _after(self, before, timeout: float = 2.5, nochange_wait: float = 1.0) -> str:
         """동작 뒤 화면이 멈출 때까지 기다리고, 바뀌었는지를 결과 글 뒤에 붙일 말로 돌려준다."""
+        self._moved = False
         if before is None:
             time.sleep(0.5)
             return ""
@@ -638,23 +642,44 @@ class PCTools:
             with self._hud_hidden():
                 ch = vision.settle(lambda: vision.small_gray(self._grab_raw(bbox)), before, timeout=timeout,
                                    nochange_wait=nochange_wait)
+            self._moved = not ch.settled or ch.fraction * ch.cells >= vision.TINY_CELLS
             return " · " + ch.text()
         except Exception as e:
             log.debug("화면 변화 확인 실패: %s", e)
             time.sleep(0.5)
             return ""
 
-    def t_look_at_screen(self, target: str = "screen", marks: bool = False):
+    def _follow(self) -> bool:
+        """방금 동작으로 화면이 바뀌었고, 바뀐 화면을 결과에 같이 보내도록 설정돼 있는가."""
+        return bool(getattr(self, "_moved", False)) and self.cfg["screen_follow"] is not False
+
+    def _follow_ui(self) -> str:
+        """누른 뒤 바뀐 창의 요소 목록 — AI 가 read_ui 를 다시 부르지 않아도 다음 단계를 고를 수 있다."""
+        if not self._follow() or not self.screen.hwnd:
+            return ""
+        try:
+            lines = self.screen.read(self.screen.hwnd).splitlines()
+        except Exception as e:
+            log.debug("누른 뒤 요소 다시 읽기 실패: %s", e)
+            return ""
+        if len(lines) > 42:
+            lines = lines[:42] + ["…(이하 생략 — read_ui 에 query 를 주면 좁혀 볼 수 있음)"]
+        return "\n\n누른 뒤의 화면입니다 (번호가 새로 매겨졌으니 이 목록의 번호를 쓰세요):\n" + "\n".join(lines)
+
+    def _target_bbox(self, target: str) -> tuple[tuple[int, int, int, int] | None, str]:
         hwnd = self._active_hwnd()
-        bbox, kind = None, "screen"
         if target == "window":
             wr, mon = winutil.window_rect(hwnd), winutil.monitor_rect(hwnd)
             if wr and mon:   # 창이 화면 밖으로 걸쳐 있으면 보이는 부분만
                 wr = (max(wr[0], mon[0]), max(wr[1], mon[1]), min(wr[2], mon[2]), min(wr[3], mon[3]))
             if wr and wr[2] - wr[0] >= 40 and wr[3] - wr[1] >= 40:
-                bbox, kind = wr, "window"
-        if bbox is None:
-            bbox = winutil.monitor_rect(hwnd)      # 사용자의 작업 창이 있는 모니터 (모르면 주 모니터)
+                return wr, "window"
+        return winutil.monitor_rect(hwnd), "screen"      # 사용자의 작업 창이 있는 모니터 (모르면 주 모니터)
+
+    def t_look_at_screen(self, target: str = "screen", marks: bool = False):
+        hwnd = self._active_hwnd()
+        bbox, kind = self._target_bbox(target)
+        self._view_target = kind
         img, view = self._shoot(bbox, kind)
         self._view = view
         note = ""
@@ -752,7 +777,7 @@ class PCTools:
         except Exception as e:   # 페이지가 바뀌어 요소가 사라진 경우 등
             raise ToolError(f"누르지 못했습니다 ({e}). read_ui 로 다시 확인하세요.")
         change = self._after(before)     # 화면이 멈출 때까지 기다리고, 바뀌었는지 알려 준다
-        return out + f" · 창: {winutil.window_title(self.screen.hwnd) or self.screen.title}" + change
+        return out + f" · 창: {winutil.window_title(self.screen.hwnd) or self.screen.title}" + change + self._follow_ui()
 
     def t_click_screen(self, x: int, y: int, double: bool = False, right: bool = False) -> str:
         view = self._view
@@ -769,7 +794,18 @@ class PCTools:
         with self._hud_aside(sx, sy):
             uia.click_at(sx, sy, double=bool(double), right=bool(right))
         what = f"'{name[:40]}' {kind}".strip() if name else f"({sx}, {sy})"
-        return f"{what} 클릭함" + self._after(before)
+        text = f"{what} 클릭함" + self._after(before)
+        if self._follow():
+            # 바뀐 화면을 바로 보여 준다 — 어차피 다시 보러 올 것을 한 번의 왕복으로 줄인다
+            try:
+                bbox, kind = self._target_bbox(getattr(self, "_view_target", "screen"))
+                img, self._view = self._shoot(bbox, kind)
+                return self._image_blocks(img, (
+                    f"{text}\n누른 뒤의 화면입니다 — 이미지 크기 {img.width}x{img.height} 픽셀. "
+                    "이제 click_screen · zoom_screen · point_at 의 좌표는 이 이미지 기준입니다."))
+            except Exception as e:
+                log.debug("누른 뒤 화면 캡처 실패: %s", e)
+        return text
 
     def t_scroll(self, direction: str, amount: int = 5, app: str | None = None) -> str:
         if direction not in ("up", "down"):
