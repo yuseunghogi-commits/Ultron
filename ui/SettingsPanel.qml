@@ -62,6 +62,9 @@ Item {
         effortBox.currentIndex = Math.max(0, efforts.findIndex(m => m.v === cfg.effort))
         voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
         fxSw.checked = cfg.voice_fx !== false
+        sentinelServerField.text = cfg.sentinel_server || ""
+        sentinelKeyField.text = ""
+        sentinelReqField.text = cfg.sentinel_requester || ""
         wakeSw.checked = !!cfg.wake_word_enabled
         searchSw.checked = !!cfg.web_search
         approveSw.checked = !!cfg.auto_approve
@@ -90,6 +93,9 @@ Item {
             effort: efforts[effortBox.currentIndex].v,
             tts_voice: voices[voiceBox.currentIndex].v,
             voice_fx: fxSw.checked,
+            sentinel_server: sentinelServerField.text.trim() || "http://127.0.0.1:8000",
+            sentinel_api_key: sentinelKeyField.text.trim(),
+            sentinel_requester: sentinelReqField.text.trim(),
             wake_word_enabled: wakeSw.checked,
             web_search: searchSw.checked,
             auto_approve: approveSw.checked,
@@ -329,6 +335,19 @@ Item {
 
                 Toggle { id: searchSw; text: "Claude 웹 검색 사용 (최신 정보)" }
                 Toggle { id: approveSw; text: "위험 명령 자동 승인 (권장하지 않음)" }
+
+                Label2 { text: "SENTINEL  ·  웹 보안 분석기"; Layout.topMargin: 10 }
+                Hint {
+                    text: "이 PC 에서 실행 중인 Sentinel 서버에 연결합니다. “example.com 보안 검사해 줘”라고 하면 수동 검사를 요청합니다. "
+                        + "내 소유이거나 검사 허가를 받은 사이트인지는 검사할 때마다 승인 카드로 확인합니다 (자동 승인 불가)."
+                }
+                Field { id: sentinelServerField; placeholderText: "http://127.0.0.1:8000" }
+                Field {
+                    id: sentinelKeyField
+                    echoMode: TextInput.Password
+                    placeholderText: sp.cfg.has_sentinel_key ? "API 키 등록됨 — 바꾸려면 입력" : "Sentinel API 키"
+                }
+                Field { id: sentinelReqField; placeholderText: "요청자 이름 (Sentinel 감사 기록용 · 비우면 Windows 사용자 이름)" }
                 Text {
                     Layout.fillWidth: true
                     Layout.topMargin: 6

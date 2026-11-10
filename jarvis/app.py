@@ -26,7 +26,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import hud_feed, winutil
+from . import approval, hud_feed, winutil
 from .brain import Brain, situation_text
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
@@ -44,8 +44,6 @@ EXPANDED = (420, 724)
 COMPACT = (230, 356)     # 엠블럼 + 상태 + 채팅 입력 + 마지막 대답
 MARGIN = 14
 
-YES_RE = re.compile(r"(승인|확인|실행해|진행|응|네|예|그래|좋아|오케이|ok|yes)", re.I)
-NO_RE = re.compile(r"(취소|아니|거부|하지\s*마|안\s*돼|중지|no|노)", re.I)
 CANCEL_RE = re.compile(r"(취소|그만|멈춰|중지|스톱|stop)", re.I)
 
 
@@ -76,6 +74,7 @@ class Bridge(QObject):
     procsJsonChanged = Signal()
     weatherJsonChanged = Signal()
     targetJsonChanged = Signal()
+    sentinelJsonChanged = Signal()
 
     actionEvent = Signal(str, str, str, str)     # id, label, status(run|ok|error), detail
     confirmRequest = Signal(str, str, str)       # id, title, detail
@@ -103,6 +102,7 @@ class Bridge(QObject):
     procsJson = _ro("procsJson", str, procsJsonChanged)         # 액티브 모드: 무거운 프로그램 상위 5개
     weatherJson = _ro("weatherJson", str, weatherJsonChanged)   # 액티브 모드: 날씨
     targetJson = _ro("targetJson", str, targetJsonChanged)      # 액티브 모드: 추적 박스 (지금 창 / 짚은 위치)
+    sentinelJson = _ro("sentinelJson", str, sentinelJsonChanged)   # 액티브 모드: Sentinel 보안 검사 상태 · 결과
 
     def __init__(self, core: "Jarvis") -> None:
         super().__init__()
@@ -128,6 +128,7 @@ class Bridge(QObject):
         self._procsJson = "[]"
         self._weatherJson = "{}"
         self._targetJson = "{}"
+        self._sentinelJson = "{}"
 
     def set(self, name: str, value) -> None:
         if getattr(self, "_" + name) != value:
@@ -287,6 +288,7 @@ class Jarvis(QObject):
             notify=lambda msg: self.sig_notify.emit(str(msg)),
             cancel_timers=self._cancel_timers_hook,
             point_at=self._point_hook,
+            feed=lambda name, value: self.sig_feed.emit(str(name), str(value)),
         ))
         self.brain = Brain(self.cfg, self.tools,
                            on_action=lambda *a: self.sig_action.emit(*a),
@@ -497,13 +499,10 @@ class Jarvis(QObject):
         was_active = self._speech_while_active or self._active()
         self._speech_while_active = False
         if self._pending_confirm:
-            if text:
-                if NO_RE.search(text):
-                    if self._voice_ok(voice):
-                        self.answer_confirm(self._pending_confirm, False)
-                elif YES_RE.search(text):
-                    if self._voice_ok(voice):
-                        self.answer_confirm(self._pending_confirm, True)
+            # 문장 전체가 승인/거부 표현일 때만 대답으로 받는다 (approval.py). 그 밖의 말은 무시 — 카드는 그대로
+            verdict = approval.answer(text) if text else None
+            if verdict is not None and self._voice_ok(voice):
+                self.answer_confirm(self._pending_confirm, verdict)
             return
         if not text:
             if was_active and not self.busy and not self.speaker.playing:
@@ -665,7 +664,7 @@ class Jarvis(QObject):
         for cid in list(self._confirms):
             self.answer_confirm(cid, False)
         self.bridge.set("replyText", "작업을 취소했습니다.")
-        self.say("취소했습니다.", follow_up=False)
+        self.say("취소했다.", follow_up=False)
 
     @Slot(int, str)
     def _on_stream(self, gen: int, delta: str) -> None:
@@ -1060,7 +1059,7 @@ class Jarvis(QObject):
         self.bridge.actionEvent.emit(uuid.uuid4().hex[:8], f"타이머 완료 · {label}", "ok", "")
         if not self.win.isVisible():
             self.toggle_visible(True)
-        msg = f"{title}, {label} 시간입니다."
+        msg = f"{title}, {label} 시간이다."
         self.bridge.set("replyText", msg)
         self.say(msg, follow_up=False)
 
@@ -1156,8 +1155,8 @@ class Jarvis(QObject):
             self.set_compact(False)
         self.toggle_visible(True, force=True)
         self.bridge.set("userText", "")
-        msg = (f"목소리 등록을 시작합니다. 화면에 나오는 문장 {self._enroll.n}개를 "
-               "평소 말투로 하나씩 읽어 주세요.")
+        msg = (f"목소리 등록을 시작한다. 화면에 나오는 문장 {self._enroll.n}개를 "
+               "평소 말투로 하나씩 읽어라.")
         self.bridge.set("replyText", msg)
         self.say(msg, follow_up=False)          # 말이 끝나면 _on_speak_end → 첫 문장 표시
 
@@ -1200,13 +1199,13 @@ class Jarvis(QObject):
                 self.cfg.update({"owner_only": True})
                 self.gate.reset()
                 title = self.cfg["user_title"] or "창조자"
-                msg = f"목소리 등록을 마쳤습니다. 이제 {title}의 목소리에만 반응합니다."
+                msg = f"목소리 등록을 마쳤다. 이제 {title}의 목소리에만 반응한다."
                 log.info("목소리 등록 완료 (샘플 %d개)", len(e.samples))
             self._on_voice_status()
             self.bridge.set("replyText", msg)
             self.say(msg, follow_up=False)
 
-    def cancel_enroll(self, msg: str = "목소리 등록을 취소했습니다.") -> None:
+    def cancel_enroll(self, msg: str = "목소리 등록을 취소했다.") -> None:
         if not self._enroll:
             return
         self._enroll = None
@@ -1270,6 +1269,8 @@ class Jarvis(QObject):
             values.pop("anthropic_api_key", None)   # 빈 칸이면 기존 키 유지
         if values.pop("clear_api_key", False):
             values["anthropic_api_key"] = ""
+        if not values.get("sentinel_api_key"):
+            values.pop("sentinel_api_key", None)    # 빈 칸이면 기존 Sentinel 키 유지
         for key, lo, hi in (("mic_sensitivity", 0.3, 3.0), ("speaker_threshold", 0.2, 0.7)):
             if key in values:
                 try:

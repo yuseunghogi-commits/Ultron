@@ -74,7 +74,7 @@ def test_kill_listed_uses_exe_from_list():
 
 def test_kill_listed_out_of_range_and_refused():
     stub, calls = _brain_stub([{"exe": "chrome.exe", "name": "크롬"}])
-    assert "없어요" in Brain._kill_listed(stub, 3) and calls == []
+    assert "없다" in Brain._kill_listed(stub, 3) and calls == []
     stub, _ = _brain_stub([{"exe": "chrome.exe", "name": "크롬"}], ("사용자가 실행을 거부했습니다.", True))
     assert "그대로" in Brain._kill_listed(stub, 1)
 

@@ -21,6 +21,13 @@ _PUNCT = re.compile(r"[\s.!?~,]+$")
 _COMPOUND = re.compile(r"(하고\s|그리고|다음에|한\s*뒤|한\s*후|해서\s|면서|열고|켜고|틀고|닫고|끄고|찾아서|보고\s|뒤에\s*\S|후에\s*\S|랑\s.*(열|켜|틀))")
 _NOT_APP = re.compile(r"(컴퓨터|피씨|pc|시스템|울트론|자비스|너|화면|소리|음악|노래|영상|불|타이머|알람|파일|폴더|창|전원)$", re.I)
 _SITES = {"구글": "google", "네이버": "naver", "유튜브": "youtube", "지도": "maps"}
+# Sentinel 웹 보안 분석기: 주소를 직접 말하거나 친 경우만 받는다 (이름만 말한 사이트를 대신 골라 주지 않는다)
+_SENTINEL = r"(?:센티넬|센티널|센티늘|sentinel)"
+_SENTINEL_SCAN = re.compile(
+    r"(?P<url>(?:https?://)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?::\d{1,5})?(?:/\S*)?)\s*(?:사이트\s*)?"
+    r"(?:(?:웹\s*)?보안|취약점|" + _SENTINEL + r")\s*(?:검사|분석|점검|스캔|진단)(?:\s*(?:해|시작|시작해|돌려|실행|실행해))?", re.I)
+_SENTINEL_REPORT = re.compile(r"(?:" + _SENTINEL + r"|보안\s*(?:검사|분석)?)\s*(?:보고서|리포트|결과)(?:\s*(?:열어|보여|띄워|보기))?", re.I)
+_SENTINEL_STATUS = re.compile(_SENTINEL + r"\s*(?:상태|연결)(?:\s*(?:어때|확인|확인해|알려|체크|체크해))?", re.I)
 
 # 이름으로 바로 여는 웹사이트 (기록: '핀터레스트 들어가줘', 'ebs 들어가줘', '리로스쿨' 이 매번 Claude 로 넘어가 3~8초씩 걸림)
 # 이름(공백 없이, 소문자) → (읽을 이름, 주소). 같은 이름의 PC 앱이 있으면 '열어/켜'는 앱을 먼저 연다(APP_FIRST).
@@ -185,8 +192,8 @@ class LocalRouter:
         self.last_adjust: tuple[str, bool, int, float] | None = None
 
     def unknown_reply(self) -> str:
-        return ("그건 로컬 모드에서 처리할 수 없는 요청입니다. "
-                "설정에서 Claude 연결을 켜시면 도와드릴 수 있습니다.")
+        return ("그건 로컬 모드에서 처리할 수 없다. "
+                "설정에서 Claude 연결을 켜면 해 주겠다.")
 
     def try_handle(self, text: str, fallback: bool = True) -> str | None:
         """처리했으면 음성으로 읽을 답, 아니면 None (→ Claude).
@@ -218,7 +225,7 @@ class LocalRouter:
     def _open_site(self, site: tuple[str, str]) -> str:
         label, url = site
         out, err = self._run("open_url", {"url": url})
-        return out if err else f"{label}{'을' if has_batchim(label) else '를'} 열었습니다."
+        return out if err else f"{label}{'을' if has_batchim(label) else '를'} 열었다."
 
     def _route(self, c: str, fallback: bool) -> str | None:
         title = self.title()
@@ -227,13 +234,13 @@ class LocalRouter:
         # ---- 인사/짧은 대답 (자유 대화 모드에서는 AI 가 자연스럽게 받는다) ----
         if not self.chat:
             if re.fullmatch(r"(고마워|고맙다|고마워요|감사해|감사합니다|땡큐|thank you|thanks|수고했어|잘했어|잘했다)", lc):
-                return f"별말씀을요, {title}."
+                return f"당연한 일이다, {title}."
             if re.fullmatch(r"(안녕|안녕하세요|하이|헬로|hello|hi|좋은 아침|굿모닝)", lc):
                 h = dt.datetime.now().hour
-                part = "좋은 아침입니다" if 5 <= h < 12 else "좋은 오후입니다" if h < 18 else "좋은 저녁입니다"
-                return f"{part}, {title}. 무엇을 도와드릴까요?"
+                part = "좋은 아침이다" if 5 <= h < 12 else "좋은 오후다" if h < 18 else "좋은 밤이다"
+                return f"{part}, {title}. 무엇을 원하나?"
             if re.fullmatch(r"(됐어|됐다|아니야|아니|괜찮아|그만|취소|아무것도 아니야|없어)", c):
-                return "알겠습니다."
+                return "알겠다."
 
         # ---- 직전 조절 이어서 / 바로잡기 ----
         r = self._follow_up(c)
@@ -246,7 +253,7 @@ class LocalRouter:
         if m and parse_duration(m.group(1)) > 0:
             secs = parse_duration(m.group(1))
             out, err = self._run("set_timer", {"seconds": secs, "label": "타이머"})
-            return out if err else f"{m.group(1).strip()} 타이머를 맞췄습니다."
+            return out if err else f"{m.group(1).strip()} 타이머를 맞췄다."
 
         # ---- 집중 타이머 (뽀모도로) ----
         m = re.fullmatch(r"(?:뽀모도로|포모도로|뽀모|집중\s*타이머|집중\s*모드)\s*(?:(\d+)\s*분\s*)?"
@@ -254,11 +261,23 @@ class LocalRouter:
         if m:
             mins = int(m.group(1) or 25)
             out, err = self._run("set_timer", {"seconds": mins * 60, "label": "집중 시간 끝"})
-            return out if err else f"{mins}분 집중 타이머를 시작합니다. 끝나면 알려 드릴게요."
+            return out if err else f"{mins}분 집중 타이머를 시작한다. 끝나면 알려 주겠다."
         # ---- 타이머 취소 ----
         if re.fullmatch(r"(?:타이머|알람|뽀모도로|집중\s*타이머)\s*(?:다\s*|전부\s*|모두\s*)?(?:취소|꺼|끄기|없애|지워|종료|그만)(?:해)?", c):
             out, err = self._run("cancel_timer", {})
             return str(out)
+
+        # ---- Sentinel 웹 보안 분석기 (검사 권한은 도구가 승인 카드로 직접 확인한다) ----
+        m = _SENTINEL_SCAN.fullmatch(lc)
+        if m:
+            out, _err = self._run("sentinel_scan", {"url": m.group("url")})
+            return out.split("\n")[0]
+        if _SENTINEL_REPORT.fullmatch(lc):
+            out, _err = self._run("sentinel_report", {})
+            return out.split("\n")[0]
+        if _SENTINEL_STATUS.fullmatch(lc):
+            out, _err = self._run("sentinel_status", {})
+            return out.split("\n")[0]
 
         if _COMPOUND.search(c):
             return None
@@ -267,10 +286,10 @@ class LocalRouter:
         if len(c) <= 15 and re.search(r"몇\s*시(?!간)|지금\s*시간|시간\s*알려|현재\s*시각", c):
             n = dt.datetime.now()
             ampm = "오전" if n.hour < 12 else "오후"
-            return f"지금은 {ampm} {n.hour % 12 or 12}시 {n.minute}분입니다."
+            return f"지금은 {ampm} {n.hour % 12 or 12}시 {n.minute}분이다."
         if len(c) <= 15 and re.search(r"며칠|날짜|무슨\s*요일|몇\s*월\s*몇\s*일", c) and not re.search(r"내일|모레|어제", c):
             n = dt.datetime.now()
-            return f"오늘은 {n.month}월 {n.day}일 {WEEKDAYS[n.weekday()]}요일입니다."
+            return f"오늘은 {n.month}월 {n.day}일 {WEEKDAYS[n.weekday()]}요일이다."
 
         # ---- 날씨 (오늘만, 내일/주말은 Claude) ----
         m = re.fullmatch(r"(?:(?:오늘|지금|현재)\s*)?(?:(\S+?)\s*)?날씨\s*(?:는|가)?\s*(?:어때|어떄|알려|어떻게\s*돼|좋아|확인)?", c)
@@ -294,10 +313,10 @@ class LocalRouter:
             return self._adjust("volume", up, 20 if m.group(1) else 10)
         if re.fullmatch(r"(음소거(?:\s*해)?|소리\s*꺼|조용히\s*해|뮤트)", c):
             self._run("volume", {"action": "mute"})
-            return "음소거했습니다."
+            return "음소거했다."
         if re.fullmatch(r"(음소거\s*(?:해제|풀어|꺼)|소리\s*켜)", c):
             self._run("volume", {"action": "unmute"})
-            return "음소거를 해제했습니다."
+            return "음소거를 해제했다."
         if re.fullmatch(r"(?:볼륨|소리|음량)\s*(?:이|은|는)?\s*(?:몇|얼마)(?:야|이야|니|지|예요)?", c):
             return self._volume_speech(*self._run("volume", {"action": "get"}))
 
@@ -321,16 +340,16 @@ class LocalRouter:
         # ---- 미디어 ----
         if re.fullmatch(r"(다음\s*(?:곡|노래|트랙|영상)(?:으로)?(?:\s*(?:틀어|재생|넘겨))?|넘겨|스킵|skip)", lc):
             self._run("media_control", {"action": "next"})
-            return "다음 곡입니다."
+            return "다음 곡이다."
         if re.fullmatch(r"(이전\s*(?:곡|노래|트랙|영상)|전\s*곡|앞\s*곡)(?:으로)?", c):
             self._run("media_control", {"action": "previous"})
-            return "이전 곡입니다."
+            return "이전 곡이다."
         if re.fullmatch(r"(?:(?:노래|음악|영상|동영상)\s*(?:좀\s*)?(?:일시\s*정지|멈춰|정지|스톱|꺼)|일시\s*정지)", c):
             self._run("media_control", {"action": "play_pause"})
-            return "멈췄습니다."
+            return "멈췄다."
         if re.fullmatch(r"(?:(?:노래|음악|영상|동영상)\s*)?다시\s*(?:재생|틀어)|(?:노래|음악|영상)\s*재생", c):
             self._run("media_control", {"action": "play_pause"})
-            return "다시 재생합니다."
+            return "다시 재생한다."
 
         # ---- 유튜브 / 노래 ----
         m = re.fullmatch(r"(?:유튜브|youtube)\s*(?:에서)?\s*(.{1,30}?)\s*(?:을|를)?\s*(?:좀\s*)?(?:틀어|재생|재생해|보여|들려|켜)", c, re.I)
@@ -344,32 +363,32 @@ class LocalRouter:
             if err:
                 return None if fallback else out
             title_ = out.removeprefix("재생: ").strip()
-            return f"{title_}, 재생합니다." if out.startswith("재생:") else "유튜브에서 찾아 재생합니다."
+            return f"{title_}, 재생한다." if out.startswith("재생:") else "유튜브에서 찾아 재생한다."
 
         # ---- 검색 ----
         m = re.fullmatch(r"(?:(구글|네이버|유튜브|지도)\s*(?:에서)?\s*)?(.{1,30}?)\s*(?:을|를)?\s*(?:좀\s*)?검색(?:해)?", c)
         if m and not re.search(r"파일|폴더", m.group(2)):
             site = _SITES.get(m.group(1) or "구글", "google")
             self._run("browser_search", {"query": m.group(2), "site": site})
-            return f"{m.group(1) or '구글'}에서 {m.group(2)} 검색 결과를 열었습니다."
+            return f"{m.group(1) or '구글'}에서 {m.group(2)} 검색 결과를 열었다."
 
         # ---- 폴더 ----
         m = re.fullmatch(r"(다운로드|내\s*문서|문서|바탕\s*화면|사진|음악|동영상|비디오)\s*폴더\s*(?:좀\s*)?(?:열어|보여)", c)
         if m:
             name = m.group(1).replace(" ", "")
             out, err = self._run("open_folder", {"target": name})
-            return out if err else f"{name} 폴더를 열었습니다."
+            return out if err else f"{name} 폴더를 열었다."
 
         # ---- 창/화면/전원 ----
         if re.fullmatch(r"(바탕\s*화면\s*(?:보여|보기|으로)|창\s*(?:다|전부)\s*(?:내려|최소화))", c):
             self._run("window_action", {"action": "show_desktop"})
-            return "바탕화면입니다."
+            return "바탕화면이다."
         if re.fullmatch(r"(?:화면|컴퓨터|피씨|pc)\s*(?:잠가|잠궈|잠금|잠금해|잠가놔)", lc):
             self._run("power", {"action": "lock"})
-            return "잠갔습니다."
+            return "잠갔다."
         if re.fullmatch(r"(?:스크린\s*샷|화면\s*캡처|캡처)\s*(?:찍어|저장|해)?", c):
             out, err = self._run("save_screenshot", {})
-            return out if err else "스크린샷을 사진 폴더의 Ultron에 저장했습니다."
+            return out if err else "스크린샷을 사진 폴더의 Ultron에 저장했다."
         if re.fullmatch(r"(?:컴퓨터|시스템|피씨|pc)\s*(?:상태|성능)\s*(?:어때|알려|확인|체크)?|(?:cpu|씨피유|메모리|램)\s*(?:사용량|상태)?\s*(?:어때|알려|확인|몇)?", lc):
             out, err = self._run("system_status", {})
             return out if err else self._status_speech(out)
@@ -380,8 +399,8 @@ class LocalRouter:
             name = m.group(1).strip()
             out, err = self._run("close_app", {"name": name})
             if err:
-                return f"열려 있는 {name} 창이 없습니다." if "열린 창이 없" in out else (None if fallback else out)
-            return f"{obj(name)} 닫았습니다."
+                return f"열려 있는 {name} 창이 없다." if "열린 창이 없" in out else (None if fallback else out)
+            return f"{obj(name)} 닫았다."
         # ---- 파일 열기: '주술회전 주사위.rld 파일 열어', 'rdworks에서 주사위 파일 열어' ----
         m = re.fullmatch(r"(?:(.{1,15}?)\s*(?:에서|으로|로)\s+)?(.{1,30}?)\s*파일\s*(?:을|를)?\s*(?:좀\s*)?(?:열어|실행|실행해|켜|띄워)", c)
         if m and m.group(2).strip() not in ("이", "그", "저", "그거", "이거", "여기", "여기에서", "방금"):
@@ -397,7 +416,7 @@ class LocalRouter:
             if err:
                 return None if fallback else out
             name = paths[0].rsplit("\\", 1)[-1]
-            return f"{app}에서 {name} 파일을 열었습니다." if app else f"{name} 파일을 열었습니다."
+            return f"{app}에서 {name} 파일을 열었다." if app else f"{name} 파일을 열었다."
 
         # ---- 웹사이트: '핀터레스트 들어가', 'ebs 접속해', '유튜브 홈화면 열어' ----
         m = re.fullmatch(r"(.{1,20}?)\s*(?:에|으로|로)?\s*(?:좀\s*)?(들어가|접속|접속해|이동|이동해|가|열어|켜|띄워)", c)
@@ -415,7 +434,7 @@ class LocalRouter:
                 if site:
                     return self._open_site(site)
                 return None if fallback else out
-            return f"{obj(name)} 열었습니다."
+            return f"{obj(name)} 열었다."
 
         # ---- 이름만 말한 경우: '리로스쿨', '잉크스페이스', 'inkspace' ----
         if len(c) <= 15 and not re.search(r"[?]|뭐|왜|어떻|누구|언제|어디", c):
@@ -424,7 +443,7 @@ class LocalRouter:
             if key in BARE_APPS or re.fullmatch(r"[a-z][a-z0-9]{3,19}", key):
                 out, err = self._run("open_app", {"name": c, "min_score": 70})
                 if not err:
-                    return f"{obj(c)} 열었습니다."
+                    return f"{obj(c)} 열었다."
             if site and key not in BARE_SITE_SKIP:
                 return self._open_site(site)
         return None
@@ -442,7 +461,7 @@ class LocalRouter:
                 _, up, step, _ = la
                 self._run(src, {"action": "down" if up else "up", "level": step})   # 되돌리기
                 said = self._adjust(dst, up, 20 if dst == "brightness" else 10)
-                return f"{'볼륨' if src == 'volume' else '화면 밝기'}은 되돌렸습니다. " + said
+                return f"{'볼륨' if src == 'volume' else '화면 밝기'}은 되돌렸다. " + said
             return None
 
         # '더 줄여', '조금 더', '한 번 더', '더 어둡게'
@@ -474,8 +493,8 @@ class LocalRouter:
             return out
         loc, desc, t, feel, hi, lo, rain = m.groups()
         desc = _WEATHER_KO.get(desc.strip().lower(), desc)
-        s = f"지금 {desc}, 기온은 {t}도이고 체감 {feel}도입니다. 오늘 최고 {hi}도, 최저 {lo}도"
-        s += f", 비 올 확률은 {rain}퍼센트입니다." if int(rain) >= 30 else "입니다."
+        s = f"지금 {desc}, 기온은 {t}도이고 체감 {feel}도다. 오늘 최고 {hi}도, 최저 {lo}도"
+        s += f", 비 올 확률은 {rain}퍼센트다." if int(rain) >= 30 else "다."
         return s
 
     @staticmethod
@@ -484,10 +503,10 @@ class LocalRouter:
             return out
         m = re.search(r"→\s*(\d+)%", out)
         if m:
-            return f"볼륨을 {m.group(1)}퍼센트로 맞췄습니다."
+            return f"볼륨을 {m.group(1)}퍼센트로 맞췄다."
         m = re.search(r"현재 볼륨 (\d+)%", out)
         if m:
-            return f"현재 볼륨은 {m.group(1)}퍼센트입니다." + (" 음소거 상태입니다." if "음소거" in out else "")
+            return f"현재 볼륨은 {m.group(1)}퍼센트다." + (" 음소거 상태다." if "음소거" in out else "")
         return out.replace("%", "퍼센트")
 
     @staticmethod
@@ -496,9 +515,9 @@ class LocalRouter:
             return out
         m = re.search(r"→\s*(\d+)%", out)
         if m:
-            return f"화면 밝기를 {m.group(1)}퍼센트로 맞췄습니다."
+            return f"화면 밝기를 {m.group(1)}퍼센트로 맞췄다."
         m = re.search(r"현재 밝기 (\d+)%", out)
-        return f"현재 화면 밝기는 {m.group(1)}퍼센트입니다." if m else out.replace("%", "퍼센트")
+        return f"현재 화면 밝기는 {m.group(1)}퍼센트다." if m else out.replace("%", "퍼센트")
 
     @staticmethod
     def _status_speech(out: str) -> str:
@@ -512,9 +531,9 @@ class LocalRouter:
             parts.append(f"메모리 {mem.group(1)}퍼센트")
         if bat:
             parts.append(f"배터리 {bat.group(1)}퍼센트")
-        s = ", ".join(parts) + "입니다."
+        s = ", ".join(parts) + "다."
         if mem and int(mem.group(1)) >= 85:
-            s += " 메모리가 꽤 빠듯합니다."
+            s += " 메모리가 꽤 빠듯하다."
         return s
 
 

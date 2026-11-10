@@ -66,7 +66,7 @@ def test_sites(text, url):
 
 def test_claude_app_first_then_site():
     r, fake = router({"open_app": ("'Claude' 실행함", False)})
-    assert r.try_handle("클로드 열어") == "클로드를 열었습니다."
+    assert r.try_handle("클로드 열어") == "클로드를 열었다."
     assert fake.calls[0] == ("open_app", {"name": "클로드"})
     r, fake = router({"open_app": ("못 찾음", True)})
     assert r.try_handle("클로드 열어")

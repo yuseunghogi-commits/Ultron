@@ -52,6 +52,11 @@ DEFAULTS: dict = {
     "home_city": "Seoul",
     "auto_approve": False,            # True면 위험 명령(PowerShell, 종료 등)을 확인 없이 실행
     "hotkey": "ctrl+alt+j",
+    # --- Sentinel 웹 보안 분석기 (이 PC 에서 따로 실행하는 서버에 연결) ---
+    "sentinel_server": "http://127.0.0.1:8000",
+    "sentinel_api_key": "",           # 비워두면 SENTINEL_API_KEY 환경변수 사용
+    "sentinel_requester": "",         # Sentinel 감사 기록에 남는 요청자 이름 (비워두면 Windows 사용자 이름)
+    "sentinel_basis": "owner",        # 검사 근거 기본값: owner | written_permission | bug_bounty_scope | internal_lab
     # --- 화면 ---
     "position": "bottom-right",       # bottom-right | top-right
     "compact": False,
@@ -113,6 +118,8 @@ class Config:
         d["anthropic_api_key"] = ""
         d["has_api_key"] = bool(key)
         d["api_key_hint"] = (key[:7] + "…" + key[-4:]) if len(key) > 12 else ""
+        d["sentinel_api_key"] = ""
+        d["has_sentinel_key"] = bool((self._data.get("sentinel_api_key") or os.environ.get("SENTINEL_API_KEY") or "").strip())
         return d
 
 

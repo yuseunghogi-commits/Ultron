@@ -111,7 +111,7 @@ def test_open_app_failure_without_fallback_reports():
 
 def test_close_app_not_open():
     reply, _ = route("메모장 닫아", {"close_app": ("메모장: 열린 창이 없습니다", True)})
-    assert reply == "열려 있는 메모장 창이 없습니다."
+    assert reply == "열려 있는 메모장 창이 없다."
 
 
 def test_normalize():
@@ -126,4 +126,4 @@ def test_parse_duration():
 
 def test_volume_speech():
     reply, _ = route("볼륨 30", {"volume": ("볼륨 70% → 30%", False)})
-    assert reply == "볼륨을 30퍼센트로 맞췄습니다."
+    assert reply == "볼륨을 30퍼센트로 맞췄다."

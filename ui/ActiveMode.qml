@@ -36,6 +36,12 @@ Window {
     readonly property var procs: JSON.parse(jarvis.procsJson)       // 무거운 프로그램 상위 5개
     readonly property var weather: JSON.parse(jarvis.weatherJson)
     readonly property var target: JSON.parse(jarvis.targetJson)     // 추적 박스: 지금 창 / 짚은 위치
+    readonly property var sentinel: JSON.parse(jarvis.sentinelJson) // Sentinel 보안 검사 상태 · 결과
+    // 검사 중이거나 끝난 지 15분이 안 됐으면 왼쪽 가운데 패널에 보여 준다 (타이머가 있으면 타이머가 먼저)
+    readonly property bool sentinelOn: sentinel.state !== undefined
+                                       && (sentinel.state === "scanning" || now.getTime() - (sentinel.t || 0) < 900000)
+    readonly property var sevNames: ({ critical: "CRIT", high: "HIGH", medium: "MED", low: "LOW" })
+    function sevColor(s) { return s === "critical" ? hot : s === "high" ? red : s === "medium" ? "#ffb347" : steel }
     onStatsChanged: { const h = cpuHist.slice(-47); h.push(stats.cpu || 0); cpuHist = h }
 
     // 화면 크기에 맞춘 단위 (1600×900 기준 1)
@@ -1010,18 +1016,99 @@ Window {
             }
         }
 
-        // ---- 왼쪽 가운데: 타이머 (없으면 시스템 기록) ----
+        // ---- 왼쪽 가운데: 타이머 (없으면 Sentinel 보안 검사, 그것도 없으면 시스템 기록) ----
         Fly {
             d: 0.4; tilt: 22
             x: 62 * ov.u; y: ov.height * 0.2 + 146 * ov.u
             width: 300 * ov.u; height: 150 * ov.u
             HoloPanel {
                 anchors.fill: parent; accent: ov.accent; fillAlpha: 0.82; cut: 12
-                title: ov.timers.length ? "TIMERS" : "SYSTEM LOG"
-                tag: ov.timers.length ? ov.timers.length + " ACTIVE" : "STREAM " + ov.pad(ov.streamBase % 100)
+                title: ov.timers.length ? "TIMERS" : ov.sentinelOn ? "SENTINEL" : "SYSTEM LOG"
+                tag: ov.timers.length ? ov.timers.length + " ACTIVE"
+                     : ov.sentinelOn ? (ov.sentinel.state === "scanning" ? "SCANNING" + ".".repeat(1 + ov.tick % 3)
+                                        : ov.sentinel.state === "done" ? "PASSIVE SCAN" : "FAILED")
+                     : "STREAM " + ov.pad(ov.streamBase % 100)
+            }
+            // Sentinel 웹 보안 분석기: 검사 대상 · 심각도별 건수 · 가장 급한 항목
+            Column {
+                id: snt
+                visible: ov.timers.length === 0 && ov.sentinelOn
+                x: 14 * ov.u; y: 30 * ov.u
+                width: parent.width - 28 * ov.u
+                spacing: 5 * ov.u
+                readonly property var s: ov.sentinel
+                readonly property var counts: s.counts || ({})
+                HText {
+                    width: parent.width; elide: Text.ElideRight
+                    text: snt.s.host || ""
+                    color: ov.hot; font.pixelSize: 13 * ov.u
+                }
+                // 검사 중: 좌우로 훑는 막대
+                Item {
+                    visible: snt.s.state === "scanning"
+                    width: parent.width; height: 26 * ov.u
+                    Rectangle { width: parent.width; height: 3 * ov.u; y: 4 * ov.u; color: ov.c(0.15) }
+                    Rectangle {
+                        width: parent.width * 0.3; height: 3 * ov.u; y: 4 * ov.u
+                        x: (parent.width - width) * (0.5 - 0.5 * Math.cos(ov.sweep * Math.PI / 180 * 2))
+                        color: ov.hot
+                    }
+                    Label { y: 12 * ov.u; text: "PASSIVE SCAN IN PROGRESS"; font.pixelSize: 8 * ov.u }
+                }
+                // 끝남: 심각도별 건수
+                Row {
+                    visible: snt.s.state === "done"
+                    spacing: 5 * ov.u
+                    Repeater {
+                        model: ["critical", "high", "medium", "low"]
+                        Rectangle {
+                            readonly property int n: snt.counts[modelData] || 0
+                            readonly property color col: ov.sevColor(modelData)
+                            width: (snt.width - 15 * ov.u) / 4; height: 20 * ov.u
+                            color: n > 0 && modelData === "critical" ? ov.rc(0.55 + 0.25 * ov.pulse) : Qt.rgba(col.r, col.g, col.b, n > 0 ? 0.16 : 0.04)
+                            border.color: Qt.rgba(col.r, col.g, col.b, n > 0 ? 0.9 : 0.25); border.width: 1
+                            HText {
+                                anchors.centerIn: parent
+                                text: ov.sevNames[modelData] + "  " + parent.n
+                                color: parent.n > 0 ? (modelData === "critical" ? "#ffffff" : parent.col) : ov.c(0.4)
+                                font.family: "Bahnschrift"; font.pixelSize: 9 * ov.u; font.letterSpacing: 1 * ov.u; font.weight: Font.DemiBold
+                            }
+                        }
+                    }
+                }
+                // 가장 급한 항목 (최대 3개)
+                Column {
+                    visible: snt.s.state === "done"
+                    width: parent.width
+                    spacing: 2 * ov.u
+                    Repeater {
+                        model: (snt.s.top || []).slice(0, 3)
+                        HText {
+                            width: snt.width; elide: Text.ElideRight
+                            text: "▸ " + modelData.title
+                            color: ov.sevColor(modelData.sev); font.pixelSize: 10 * ov.u
+                        }
+                    }
+                    HText {
+                        visible: (snt.s.total || 0) === 0
+                        text: "NO ACTIONABLE FINDINGS"
+                        color: ov.c(0.8); font.family: "Bahnschrift"; font.pixelSize: 10 * ov.u; font.letterSpacing: 2 * ov.u
+                    }
+                    HText {
+                        visible: (snt.s.nt || 0) > 0 || (snt.s.kev || 0) > 0
+                        text: ((snt.s.kev || 0) > 0 ? "실제 악용 " + snt.s.kev + "건   " : "") + ((snt.s.nt || 0) > 0 ? "검사 불가 " + snt.s.nt + "개 (안전 아님)" : "")
+                        color: ov.c(0.6); font.pixelSize: 8 * ov.u
+                    }
+                }
+                HText {
+                    visible: snt.s.state === "error"
+                    width: parent.width; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
+                    text: snt.s.status || "SCAN FAILED"
+                    color: ov.red; font.pixelSize: 10 * ov.u
+                }
             }
             Column {
-                visible: ov.timers.length === 0
+                visible: ov.timers.length === 0 && !ov.sentinelOn
                 x: 14 * ov.u; y: 30 * ov.u
                 spacing: 3 * ov.u
                 Repeater {

@@ -21,8 +21,8 @@ from typing import Callable
 
 import psutil
 
-from . import uia, winutil
-from .config import Config, load_memory, save_memory
+from . import sentinel, uia, winutil
+from .config import DATA_DIR, Config, load_memory, save_memory
 
 log = logging.getLogger("jarvis.tools")
 NO_WINDOW = 0x08000000
@@ -40,6 +40,7 @@ class Hooks:
     notify: Callable[[str], None] = lambda msg: None   # 백그라운드 작업이 사용자에게 말로 알림
     cancel_timers: Callable[[], int] = lambda: 0       # 돌고 있는 타이머 모두 취소 → 취소한 개수
     point_at: Callable[[int, int, int, int, str], bool] = lambda x, y, w, h, label: False  # 액티브 모드 화면에 위치 표시
+    feed: Callable[[str, str], None] = lambda name, value: None   # 액티브 모드 화면 정보 (속성 이름, JSON)
 
 
 # 한국어 별칭 → Start 메뉴 검색어 / 실행 파일
@@ -122,6 +123,8 @@ class PCTools:
         self._apps: list[tuple[str, str]] = []
         self.screen = uia.Screen()          # 화면 조작: 마지막으로 읽은 요소 목록
         self._shot_scale = 1.0              # look_at_screen 이미지 → 실제 화면 좌표 배율
+        self.sentinel = sentinel.Sentinel(cfg)   # Sentinel 웹 보안 분석기 연결
+        self._sentinel_last = ""            # 이번 실행에서 마지막으로 요청한 검사 번호 (보고서 열기용)
         threading.Thread(target=self._index_apps, daemon=True, name="app-index").start()
 
     # ------------------------------------------------------------------ 앱 인덱스
@@ -249,6 +252,19 @@ class PCTools:
                   "label": {"type": "string", "description": "short Korean description of what is being waited for"},
                   "max_minutes": {"type": "integer", "description": "give up after this many minutes (default 60)"}},
                  ["name"]),
+            tool("sentinel_scan", "Run a PASSIVE (non-intrusive) web security scan of one site with the user's local "
+                 "Sentinel Web Security Analyzer and return a summary of the findings. Only for a site the user owns or is "
+                 "authorised to test: the app shows the user an authorisation card every time, and their confirmation is "
+                 "recorded in Sentinel's audit log. Pass only the address the user asked about (or, for 'this site', the "
+                 "address of the browser tab they are looking at); never pick or guess a target yourself. "
+                 "Active or intrusive checks are not available here.",
+                 {"url": s,
+                  "basis": {"type": "string", "enum": ["owner", "written_permission", "bug_bounty_scope", "internal_lab"],
+                            "description": "why the user may test it, only if they said so; default is the user's setting"},
+                  "purpose": {"type": "string", "description": "short Korean note for the audit log, e.g. '배포 전 점검'"}},
+                 ["url"]),
+            tool("sentinel_report", "Open the full HTML report of the most recent Sentinel scan from this session in the browser."),
+            tool("sentinel_status", "Check whether the local Sentinel Web Security Analyzer server is running and the API key works."),
             tool("remember", "Save a fact about the user to long-term memory (e.g. preferences, names). Use when the user asks you to remember something.",
                  {"fact": s}, ["fact"]),
         ]
@@ -291,6 +307,9 @@ class PCTools:
             "write_clipboard": lambda: "클립보드 쓰기",
             "remember": lambda: f"기억 저장 · {a.get('fact', '')[:30]}",
             "watch_app": lambda: f"작업 감시 · {a.get('name')}",
+            "sentinel_scan": lambda: f"Sentinel 검사 · {str(a.get('url', ''))[:40]}",
+            "sentinel_report": lambda: "Sentinel 보고서 열기",
+            "sentinel_status": lambda: "Sentinel 연결 확인",
             "web_search": lambda: f"웹 검색 · {a.get('query', '')}",
         }
         try:
@@ -305,8 +324,9 @@ class PCTools:
             raise ToolError(f"알 수 없는 도구: {name}")
         return fn(**(args or {}))
 
-    def _confirm(self, title: str, detail: str) -> None:
-        if self.cfg["auto_approve"]:
+    def _confirm(self, title: str, detail: str, always: bool = False) -> None:
+        """승인 카드. always=True 는 '위험 명령 자동 승인' 설정으로도 건너뛸 수 없는 확인 (사용자 본인만 답할 수 있는 것)."""
+        if self.cfg["auto_approve"] and not always:
             return
         if not self.hooks.confirm(title, detail):
             raise ToolError("사용자가 실행을 거부했습니다.")
@@ -916,6 +936,44 @@ class PCTools:
     def t_write_clipboard(self, text: str) -> str:
         winutil.set_clipboard_text(text)
         return "클립보드에 복사함"
+
+    # --- Sentinel 웹 보안 분석기 ---
+    def _ask_user(self, title: str, detail: str) -> bool:
+        """사용자에게 직접 묻는다 — 자동 승인 설정과 상관없이 항상 카드를 띄운다."""
+        return bool(self.hooks.confirm(title, detail))
+
+    def t_sentinel_scan(self, url: str, basis: str = "", purpose: str = "") -> str:
+        try:
+            text, scan_id = sentinel.run_scan(
+                self.sentinel, str(url), str(basis or self.cfg["sentinel_basis"] or "owner"), str(purpose or ""),
+                confirm=self._ask_user,
+                feed=lambda state: self.hooks.feed("sentinelJson", json.dumps(state, ensure_ascii=False)),
+                notify=self.hooks.notify)
+        except sentinel.SentinelError as e:
+            raise ToolError(str(e))
+        self._sentinel_last = scan_id
+        return text
+
+    def t_sentinel_report(self) -> str:
+        if not self._sentinel_last:
+            raise ToolError("이번에 요청한 Sentinel 검사가 없다. 먼저 검사를 요청해라.")
+        try:
+            html = self.sentinel.report_html(self._sentinel_last)
+        except sentinel.SentinelError as e:
+            raise ToolError(str(e))
+        folder = DATA_DIR / "sentinel"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"sentinel-{self._sentinel_last}.html"
+        path.write_bytes(sentinel.harden_html(html))   # 보고서 안의 스크립트 · 외부 요청은 막아 두고 연다
+        os.startfile(str(path))
+        return "Sentinel 보고서를 열었다."
+
+    def t_sentinel_status(self) -> str:
+        try:
+            self.sentinel.ping()
+            return f"Sentinel 연결 정상. 서버는 {self.sentinel.base()}."
+        except sentinel.SentinelError as e:
+            raise ToolError(str(e))
 
     def t_remember(self, fact: str) -> str:
         mem = load_memory()
