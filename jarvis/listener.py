@@ -168,6 +168,7 @@ class Listener:
         self.embedder_babble: Callable[[np.ndarray], Any] | None = None
         self.last_note = ""
         self.babble = False           # 주변이 말소리로 가득한 상태인가 (교실·카페)
+        self.last_babble = False      # 지금 받아 적는 발화가 그 상태에서 잘린 것인가 (앞에 주변 말이 섞여 있다)
         self._utt_info = (0.0, 0.0, False)
         self.stt_engine = "auto"      # auto | local | google
         self.local_stt: LocalSTT | None = None
@@ -177,6 +178,11 @@ class Listener:
         self.last_engine = ""         # 마지막 발화를 인식한 엔진 (HUD 표시·로그용)
         # Google 이 준 인식 후보들 중 하나를 고른다 (기본: 첫 번째). app 이 '알아들을 수 있는 명령'을 고르게 바꾼다
         self.pick: Callable[[list[str]], str] = lambda alts: alts[0]
+        # (선택) 오프라인 인식 결과를 그대로 쓰게 될 때, 호출어 뒤쪽만 다시 받아 적어 볼지 정한다 (_second_look)
+        #   retry_cut(글, 글 조각, 조각 시각) -> 호출어가 끝나는 시각(초). 다시 볼 필요가 없으면 None
+        #   understands(명령) -> 바로 처리할 수 있는 명령인가
+        self.retry_cut: Callable[[str, list, list], float | None] | None = None
+        self.understands: Callable[[str], bool] | None = None
         self._google_down_until = 0.0
 
     # ---------- lifecycle ----------
@@ -444,12 +450,36 @@ class Listener:
     def _local(self, pcm: np.ndarray, ai_heard: bool) -> str | None:
         return self._with_denoise(self.local_stt.recognize, pcm, ai_heard)
 
+    def _second_look(self, pcm: np.ndarray, text: str | None) -> str | None:
+        """오프라인 인식은 호출어 바로 뒤의 낱말을 통째로 빠뜨리곤 한다 ('울트론, 소리 좀 줄여 줘' → '울트론 줄여줘').
+        호출어는 들었는데 명령을 못 알아들었으면, 호출어 뒤쪽 소리만 잘라 한 번 더 받아 적고 알아들은 쪽을 쓴다.
+        (시험: 처음 보는 문장에서 바로 처리한 명령이 조용한 곳 75→77%, 큰 소음 61→66%, 먼 거리 22→25%.
+        오프라인 결과를 그대로 쓰게 될 때만 한다 — Google 이 받아 적은 글이 있으면 그것을 쓴다)"""
+        stt = self.local_stt
+        tokens, stamps = getattr(stt, "last", None) or ([], [])
+        if not text or self.retry_cut is None or self.understands is None or not tokens:
+            return text
+        try:
+            cut = self.retry_cut(text, tokens, stamps)
+            if cut is None:
+                return text
+            rest = prepare_for_stt(pcm)[max(0, int(cut * RATE)):]
+            if len(rest) < RATE * 0.4:
+                return text
+            again = stt.recognize(rest)
+            if again and self.understands(again):
+                log.info("호출어 뒤쪽만 다시 받아 적어 명령을 알아들음 (%.1f초부터)", cut)
+                return f"{self.wake_prefix} {again}"
+        except Exception as e:
+            log.warning("호출어 뒤쪽 다시 받아 적기 실패: %s", e)
+        return text
+
     def _transcribe(self, rec, sr, pcm: np.ndarray, ai_heard: bool) -> str | None:
         engine = self.stt_engine
         local_ok = self.local_stt is not None and self.local_stt.ready
         if engine == "local" and local_ok:
             self.last_engine = "local"
-            return self._local(pcm, ai_heard)
+            return self._second_look(pcm, self._local(pcm, ai_heard))
         if engine == "auto" and local_ok and self.wake_needed():
             # 호출어 대기: 로컬로 먼저 듣고, 호출어가 없으면 여기서 끝 (외부 전송 없음)
             lt = self._local(pcm, ai_heard)
@@ -463,13 +493,13 @@ class Listener:
                 # 로컬은 '울트론'을 들었는데 Google 이 다르게 적었으면 호출어를 붙여 준다
                 return gt if self.has_wake(gt) else f"{self.wake_prefix} {gt}"
             self.last_engine = "local"
-            return lt
+            return self._second_look(pcm, lt)          # Google 이 못 받아 적었거나 인터넷이 끊김 → 오프라인 결과를 쓴다
         gt, online = self._google(rec, sr, pcm, ai_heard)
         if online or not local_ok or engine == "google":
             self.last_engine = "google"
             return gt
         self.last_engine = "local"     # 인터넷 끊김 → 오프라인 인식으로 대체
-        return self._local(pcm, ai_heard)
+        return self._second_look(pcm, self._local(pcm, ai_heard))
 
     def _embed(self, pcm: np.ndarray, tail: int, near: np.ndarray | None):
         if near is not None and self.embedder_babble is not None:
@@ -487,6 +517,7 @@ class Listener:
             except queue.Empty:
                 continue
             self.last_note = ""
+            self.last_babble = bool(info[2])
             emb_job = None
             if self.embedder is not None:
                 emb_job = self._emb_pool.submit(self._embed, pcm, tail, near)

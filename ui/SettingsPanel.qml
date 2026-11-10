@@ -24,6 +24,12 @@ Item {
         { v: "opus", t: "Opus — 가장 똑똑함, Pro 한도 빨리 소모" }
     ]
     readonly property bool isPro: brainBox.currentIndex === 0
+    // 화면을 보고 누르는 요청에만 쓰는 모델 (Pro 모드). 평소 모델보다 낮은 것을 고르면 평소 모델을 그대로 쓴다
+    readonly property var screenModels: [
+        { v: "sonnet", t: "화면 조작은 Sonnet — 더 정확 (기본)" },
+        { v: "opus", t: "화면 조작은 Opus — 가장 정확, Pro 한도 빨리 소모" },
+        { v: "", t: "화면 조작도 위 모델 그대로" }
+    ]
     readonly property var localModels: [
         { v: "qwen2.5:1.5b", t: "Qwen 2.5 1.5B — 빠름·정확 (기본)" },
         { v: "qwen2.5:3b", t: "Qwen 2.5 3B — 느림, 일부 표현은 더 잘 이해" }
@@ -59,6 +65,8 @@ Item {
         localAiBox.currentIndex = Math.max(0, localModels.findIndex(m => m.v === cfg.local_ai_model))
         modelBox.currentIndex = Math.max(0, models.findIndex(m => m.v === cfg.model))
         proModelBox.currentIndex = Math.max(0, proModels.findIndex(m => m.v === cfg.pro_model))
+        screenModelBox.currentIndex = Math.max(0, screenModels.findIndex(m => m.v === (cfg.pro_screen_model || "")))
+        screenSmallSw.checked = cfg.screen_detail === "standard"
         effortBox.currentIndex = Math.max(0, efforts.findIndex(m => m.v === cfg.effort))
         voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
         fxSw.checked = cfg.voice_fx !== false
@@ -89,6 +97,8 @@ Item {
             local_ai: localAiSw.checked,
             local_ai_model: localModels[localAiBox.currentIndex].v,
             pro_model: proModels[proModelBox.currentIndex].v,
+            pro_screen_model: screenModels[screenModelBox.currentIndex].v,
+            screen_detail: screenSmallSw.checked ? "standard" : "auto",
             model: models[modelBox.currentIndex].v,
             effort: efforts[effortBox.currentIndex].v,
             tts_voice: voices[voiceBox.currentIndex].v,
@@ -259,6 +269,13 @@ Item {
                 Label2 { visible: !sp.isLocal; text: "AI MODEL" }
                 Combo { id: proModelBox; visible: sp.isPro; model: sp.proModels }
                 Combo { id: modelBox; visible: !sp.isPro && !sp.isLocal; model: sp.models }
+                Label2 { visible: !sp.isLocal; text: "SCREEN TASKS  ·  화면 보고 조작하기" }
+                Combo { id: screenModelBox; visible: sp.isPro; model: sp.screenModels }
+                Toggle {
+                    id: screenSmallSw
+                    visible: !sp.isLocal
+                    text: "화면 캡처를 작게 보내기 (토큰 절약 · 작은 글씨는 덜 선명)"
+                }
                 Label2 { text: "RESPONSE DEPTH" }
                 Combo { id: effortBox; model: sp.efforts }
                 Label2 { text: "VOICE" }

@@ -21,6 +21,8 @@ DEFAULTS: dict = {
     "local_ai_model": "qwen2.5:1.5b", # Ollama 모델 이름 (이 PC 테스트에서 3b 보다 빠르고 정확)
     "local_ai_timeout": 12,           # 초. 넘기면 Claude 에게 넘김
     "pro_model": "haiku",             # Pro 모드 모델: haiku | sonnet | opus
+    "pro_screen_model": "sonnet",     # Pro 모드에서 화면을 보고 조작하는 요청에 쓸 모델 (비우면 pro_model 그대로)
+    "screen_detail": "auto",          # 화면 캡처 크기: auto(모델이 볼 수 있는 최대 크기) | standard(항상 작게 — 토큰 절약)
     "anthropic_api_key": "",          # 비워두면 ANTHROPIC_API_KEY 환경변수 사용
     "model": "claude-opus-5-5",
     "effort": "low",                  # low | medium | high  (음성 비서는 low 권장: 빠른 응답)

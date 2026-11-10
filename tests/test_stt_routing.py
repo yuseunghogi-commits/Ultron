@@ -103,3 +103,78 @@ def test_model_not_ready_behaves_like_before():
 ])
 def test_clean(raw, out):
     assert clean(raw) == out
+
+
+# ---- 호출어 뒤쪽만 다시 받아 적기 (오프라인 결과를 그대로 쓰게 될 때) --------------------------------
+class ScriptedLocal:
+    """부를 때마다 정해 둔 글을 차례로 돌려주고, 받은 소리 길이를 기록한다."""
+
+    def __init__(self, *texts):
+        self.texts, self.ready, self.lengths = list(texts), True, []
+        self.last = (["울", "트", "론", " 줄", "여", "줘"], [0.6, 0.8, 1.0, 1.9, 2.0, 2.2])
+
+    def recognize(self, pcm):
+        self.lengths.append(len(pcm))
+        return self.texts.pop(0) if self.texts else None
+
+
+LONG = (np.sin(np.arange(3 * 16000) / 5) * 3000).astype(np.int16)        # 3초짜리 발화
+
+
+def second(engine="local", texts=("울트론 줄여줘", "소리 좀 줄여줘"), google=(OSError("net down"),), cut=1.2,
+           understood=("소리 좀 줄여줘",)):
+    lis, sent = make(engine=engine, google=google)
+    lis.local_stt = ScriptedLocal(*texts)
+    lis.retry_cut = lambda text, tokens, stamps: cut
+    lis.understands = lambda t: t in understood
+    return lis, sent
+
+
+def run_long(lis):
+    return lis._transcribe(sr.Recognizer(), sr, LONG, False)
+
+
+def test_local_retry_recovers_the_word_dropped_after_the_wake_word():
+    lis, _ = second()
+    assert run_long(lis) == "울트론 소리 좀 줄여줘"
+    full, rest = lis.local_stt.lengths
+    assert rest == full - int(1.2 * 16000)                 # 호출어가 끝난 뒤의 소리만 다시 받아 적었다
+
+
+def test_local_retry_keeps_the_first_transcript_when_the_second_is_not_a_command():
+    lis, _ = second(texts=("울트론 줄여줘", "어쩌고 저쩌고"))
+    assert run_long(lis) == "울트론 줄여줘"
+    lis, _ = second(texts=("울트론 줄여줘", None))
+    assert run_long(lis) == "울트론 줄여줘"
+
+
+def test_local_retry_is_skipped_when_not_needed_or_not_wired():
+    lis, _ = second(cut=None)                              # 이미 알아들었거나 호출어가 없는 경우
+    assert run_long(lis) == "울트론 줄여줘" and len(lis.local_stt.lengths) == 1
+    lis, _ = second(cut=2.8)                               # 호출어 뒤에 남은 소리가 너무 짧다 (0.2초)
+    assert run_long(lis) == "울트론 줄여줘" and len(lis.local_stt.lengths) == 1
+    lis, _ = second()
+    lis.retry_cut = None
+    assert run_long(lis) == "울트론 줄여줘" and len(lis.local_stt.lengths) == 1
+    lis, _ = make(engine="local", local_text="울트론 줄여줘")  # 시각 정보를 주지 않는 인식기
+    lis.retry_cut = lambda *a: 0.1
+    lis.understands = lambda t: True
+    assert run_long(lis) == "울트론 줄여줘"
+
+
+def test_auto_mode_retries_only_when_the_local_transcript_becomes_final():
+    lis, sent = second(engine="auto", google=("울트론 소리 좀 줄여 줘",), cut=0.3)
+    assert run_long(lis) == "울트론 소리 좀 줄여 줘"              # Google 이 받아 적었으면 그걸 쓴다 — 다시 인식하지 않음
+    assert len(lis.local_stt.lengths) == 1 and len(sent) == 1
+    lis, sent = second(engine="auto", cut=0.3)             # 인터넷이 끊겼으면 오프라인 결과를 보완한다
+    assert run_long(lis) == "울트론 소리 좀 줄여줘" and len(lis.local_stt.lengths) == 2
+
+
+def test_retry_failure_never_loses_the_first_transcript():
+    lis, _ = second()
+
+    def boom(text, tokens, stamps):
+        raise RuntimeError("x")
+
+    lis.retry_cut = boom
+    assert run_long(lis) == "울트론 줄여줘"

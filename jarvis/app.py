@@ -26,7 +26,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import approval, hud_feed, winutil
+from . import approval, hearing, hud_feed, winutil
 from .brain import Brain, situation_text
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
@@ -338,6 +338,8 @@ class Jarvis(QObject):
         self.listener.wake_needed = self._wake_needed
         self.listener.has_wake = self._has_wake
         self.listener.pick = self._pick_alt
+        self.listener.retry_cut = self._retry_cut
+        self.listener.understands = self.brain.recognizes
         self._apply_stt_engine(start=not args.no_mic)
         # ---- 화자 인식 (누가 말했는지) ----
         self.voiceid = VoiceID(on_status=self.sig_voice.emit)
@@ -556,17 +558,9 @@ class Jarvis(QObject):
         return not (self._active() or self._speech_while_active or self._pending_confirm
                     or self._enroll or self.busy)
 
-    # 오프라인 인식이 '울트론'을 뭉개 적는 모양: 울트롱 · 얼트론 · 올트론 · 울뜨론 · 울터론 · 울트런 · 울트롬
-    # 끝의 'ㄴ' 이 사라지면 '울트로 크롬 열어' 처럼 적힌다 → '울트로' 뒤에 한글이 바로 붙지 않을 때만 호출로 본다
-    # 첫 음절이 소음에 묻히면 문장 맨 앞이 '트론 …', '뜨론 …' 으로 적힌다 → 맨 앞에 있을 때만 호출로 본다
-    # ('을' 은 넣지 않는다: '…을 트로피' 같은 말이 호출로 잡힌다)
-    _WAKE_LOOSE = re.compile(r"[울얼올]\s*[트뜨터토]\s*[론롱런롬롤]|ultron"
-                             r"|[울얼]\s*[트뜨]\s*로(?![가-힣])"
-                             r"|^\s*[트뜨]\s*[론롱런]", re.I)
-
     def _has_wake(self, text: str) -> bool:
-        # 오프라인 인식은 '울트론'을 '울트롱'처럼 적기도 하므로 조금 느슨하게 본다
-        return self._strip_wake(text or "") is not None
+        # 오프라인 인식은 '울트론'을 '물트론 · 울트롱 · 울트러'처럼 적기도 하므로 조금 느슨하게 본다 (hearing.py)
+        return hearing.find_wake(text or "", self.cfg["wake_words"], self.listener.last_babble) is not None
 
     def _apply_stt_engine(self, start: bool = True) -> None:
         engine = self.cfg["stt_engine"] or "auto"
@@ -588,13 +582,7 @@ class Jarvis(QObject):
         return ""
 
     def _wake_at_start(self, text: str) -> bool:
-        for w in (w for w in (self.cfg["wake_words"] or []) if w):
-            pat = r"\s*".join(re.escape(ch) for ch in w.replace(" ", ""))
-            m = re.search(pat, text, re.I)
-            if m and m.start() <= 3:
-                return True
-        m = self._WAKE_LOOSE.search(text or "")
-        return bool(m and m.start() <= 3)
+        return hearing.wake_at_start(text or "", self.cfg["wake_words"])
 
     def _pick_alt(self, alts: list[str]) -> str:
         """(인식 스레드) Google 이 준 후보 중 울트론이 알아들을 수 있는 명령을 고른다.
@@ -613,17 +601,16 @@ class Jarvis(QObject):
         return alts[0]
 
     def _strip_wake(self, text: str) -> str | None:
-        words = sorted((w for w in (self.cfg["wake_words"] or []) if w), key=len, reverse=True)
-        for w in words:
-            pat = r"\s*".join(re.escape(ch) for ch in w.replace(" ", ""))
-            m = re.search(pat, text, re.I)
-            if m:
-                rest = (text[:m.start()] + " " + text[m.end():])
-                return rest.strip(" ,.!?~야아").strip()
-        m = self._WAKE_LOOSE.search(text or "")   # 뭉개져 적힌 호출어도 호출로 받는다 (_has_wake 와 같은 기준)
-        if m:
-            return (text[:m.start()] + " " + text[m.end():]).strip(" ,.!?~야아").strip()
-        return None
+        """호출어를 뗀 명령 (호출어만 말했으면 ''), 호출어가 없으면 None. 뭉개져 적힌 호출어도 받는다."""
+        return hearing.strip_wake(text or "", self.cfg["wake_words"], self.listener.last_babble)
+
+    def _retry_cut(self, text: str, tokens: list, stamps: list) -> float | None:
+        """(인식 스레드) 오프라인 인식이 호출어는 들었는데 명령은 못 알아들은 경우, 호출어가 끝나는 시각.
+        listener 가 그 뒤쪽 소리만 다시 받아 적는다. 다시 볼 필요가 없으면 None."""
+        cmd = self._strip_wake(text)
+        if not cmd or self.brain.recognizes(cmd):
+            return None
+        return hearing.wake_end_time(tokens, stamps, self.cfg["wake_words"])
 
     def run_command(self, text: str) -> bool:
         """명령을 실행에 넘긴다. 넘겼으면 True, 빈 글이거나 처리 중이라 못 받았으면 False."""

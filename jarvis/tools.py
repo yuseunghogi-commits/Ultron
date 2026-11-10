@@ -1,10 +1,9 @@
 """울트론의 '손': PC 제어 도구 모음과 Claude 용 도구 스키마."""
 from __future__ import annotations
 
-import base64
+import contextlib
 import datetime as dt
 import difflib
-import io
 import json
 import logging
 import os
@@ -21,7 +20,7 @@ from typing import Callable
 
 import psutil
 
-from . import sentinel, uia, winutil
+from . import sentinel, uia, vision, winutil
 from .config import DATA_DIR, Config, load_memory, save_memory
 
 log = logging.getLogger("jarvis.tools")
@@ -122,7 +121,8 @@ class PCTools:
         self.hooks = hooks
         self._apps: list[tuple[str, str]] = []
         self.screen = uia.Screen()          # 화면 조작: 마지막으로 읽은 요소 목록
-        self._shot_scale = 1.0              # look_at_screen 이미지 → 실제 화면 좌표 배율
+        self._view: vision.View | None = None    # Claude 가 마지막으로 본 이미지 ↔ 실제 화면의 대응 (좌표 변환용)
+        self.vision_model = ""              # 지금 화면을 보고 있는 모델 이름 → 보낼 이미지 크기 한도를 정한다
         self.sentinel = sentinel.Sentinel(cfg)   # Sentinel 웹 보안 분석기 연결
         self._sentinel_last = ""            # 이번 실행에서 마지막으로 요청한 검사 번호 (보고서 열기용)
         threading.Thread(target=self._index_apps, daemon=True, name="app-index").start()
@@ -194,25 +194,47 @@ class PCTools:
                  {"action": {"type": "string", "enum": ["get", "set", "up", "down", "mute", "unmute"]},
                   "level": {"type": "integer", "description": "0-100 for set; step size for up/down (default 10)"}},
                  ["action"]),
-            tool("type_text", "Type text into the user's active window (works for Korean). Optionally press Enter after.",
-                 {"text": s, "press_enter": {"type": "boolean"}}, ["text"]),
+            tool("type_text", "Type text into the user's active window (works for Korean). Optionally press Enter after. "
+                 "Set replace=true to overwrite what is already in the focused input box (select all, then type).",
+                 {"text": s, "press_enter": {"type": "boolean"}, "replace": {"type": "boolean"}}, ["text"]),
             tool("press_keys", "Press a keyboard shortcut in the user's active window, e.g. 'ctrl+s', 'alt+tab', 'win+shift+s', 'f5', 'enter'.",
                  {"keys": s, "times": {"type": "integer"}}, ["keys"]),
-            tool("look_at_screen", "Capture the user's primary screen and look at it. Use when the user asks about what is on screen or you need to see it to help."),
+            tool("look_at_screen", "Capture the user's screen (the monitor their active window is on) and look at it. Use when the user "
+                 "asks about what is on screen or you need to see it to help. target='window' captures only the active window, "
+                 "which shows it larger. marks=true draws a numbered box on every clickable element; then click one with "
+                 "click_ui(number) instead of guessing coordinates. Text too small to read? Use zoom_screen on that area.",
+                 {"target": {"type": "string", "enum": ["screen", "window"]}, "marks": {"type": "boolean"}}),
+            tool("zoom_screen", "Look closer at one area of the LAST screenshot: give the area in that image's pixel coordinates and get "
+                 "it enlarged at full detail (small text, icons, dense tables). After zooming, click_screen / point_at / zoom_screen "
+                 "coordinates refer to the zoomed image. Call look_at_screen again to go back to the whole screen.",
+                 {"x": {"type": "integer"}, "y": {"type": "integer"}, "width": {"type": "integer"}, "height": {"type": "integer"}},
+                 ["x", "y", "width", "height"]),
+            tool("read_screen_text", "Read the text shown in a window (web page text, document, labels) as plain text, in reading order. "
+                 "Exact and cheap: prefer it over a screenshot for questions about what a page says, summaries, error messages, "
+                 "or to find where something is mentioned. all=true also includes the part of a web page that is scrolled out of view. "
+                 "Defaults to the user's active window.",
+                 {"app": {"type": "string", "description": "optional app name or window title; default = active window"},
+                  "all": {"type": "boolean"}}),
+            tool("wait_screen", "Wait until the screen stops changing (page finished loading, app finished opening), up to max_seconds "
+                 "(default 5). Returns as soon as it is still, so prefer it over a fixed wait.",
+                 {"max_seconds": {"type": "integer"}}),
             tool("read_ui", "List clickable elements (buttons, links, tabs, menu items, input boxes) inside a window, numbered. "
                  "Works inside web pages in Chrome/Edge (e.g. Google Classroom tabs) and in normal apps. "
                  "Use this before click_ui to navigate inside a site or app. Defaults to the user's active window.",
                  {"app": {"type": "string", "description": "optional app name or window title; default = active window"},
                   "query": {"type": "string", "description": "optional text to filter elements by name"}}),
             tool("click_ui", "Click an element from the last read_ui list, by number or by (partial) name. "
-                 "After clicking, call read_ui again (or look_at_screen) to confirm the page changed before the next step. "
+                 "The result says whether the screen changed; if it did, call read_ui again (or look_at_screen) to see the "
+                 "new page before the next step. "
                  "To type into an input box: click it, then use type_text.",
                  {"number": {"type": "integer"}, "name": s, "double": {"type": "boolean"}}),
-            tool("click_screen", "Click a point on the screen using pixel coordinates of the LAST look_at_screen image. "
-                 "Fallback when read_ui cannot find the element (games, canvas, images).",
+            tool("click_screen", "Click a point using pixel coordinates of the LAST image you were shown (look_at_screen or zoom_screen). "
+                 "Fallback when read_ui / marks cannot find the element (games, canvas, images). Aim at the centre of the target. "
+                 "The result says whether the screen changed.",
                  {"x": {"type": "integer"}, "y": {"type": "integer"}, "double": {"type": "boolean"},
                   "right": {"type": "boolean"}}, ["x", "y"]),
-            tool("scroll", "Scroll the active window (or the app given) up or down.",
+            tool("scroll", "Scroll the active window (or the app given) up or down. The result says whether the screen moved; "
+                 "no change means the end was reached.",
                  {"direction": {"type": "string", "enum": ["up", "down"]},
                   "amount": {"type": "integer", "description": "wheel notches, default 5"}, "app": s}, ["direction"]),
             tool("brightness", "Get or change the display brightness (laptop screens; external monitors may not support it).",
@@ -285,7 +307,10 @@ class PCTools:
             "volume": lambda: f"볼륨 · {a.get('action')} {a.get('level', '')}".strip(),
             "type_text": lambda: f"입력 · {a.get('text', '')[:30]}",
             "press_keys": lambda: f"단축키 · {a.get('keys')}",
-            "look_at_screen": lambda: "화면 분석",
+            "look_at_screen": lambda: "화면 분석" + (" · 번호 표시" if a.get("marks") else "") + (" · 활성 창" if a.get("target") == "window" else ""),
+            "zoom_screen": lambda: "화면 확대",
+            "read_screen_text": lambda: f"화면 글자 읽기 · {a.get('app') or '활성 창'}",
+            "wait_screen": lambda: "화면이 멈출 때까지 대기",
             "read_ui": lambda: f"화면 읽기 · {a.get('app') or '활성 창'}" + (f" ({a['query']})" if a.get("query") else ""),
             "click_ui": lambda: f"클릭 · {a.get('name') or '#' + str(a.get('number'))}",
             "click_screen": lambda: f"화면 클릭 · ({a.get('x')}, {a.get('y')})",
@@ -483,59 +508,210 @@ class PCTools:
             return f"볼륨 {'증가' if action == 'up' else '감소'}"
 
     # --- 키보드 ---
-    def t_type_text(self, text: str, press_enter: bool = False) -> str:
+    def t_type_text(self, text: str, press_enter: bool = False, replace: bool = False) -> str:
         self.focus.restore()
         old = winutil.get_clipboard_text()
         winutil.set_clipboard_text(text)
         time.sleep(0.05)
+        if replace:                       # 칸에 있던 내용을 지우고 쓴다
+            winutil.press_combo("ctrl+a")
+            time.sleep(0.05)
         winutil.press_combo("ctrl+v")
+        change = ""
         if press_enter:
             time.sleep(0.1)
+            before = self._small()
             winutil.press_combo("enter")
-        time.sleep(0.3)
+            change = self._after(before)   # 엔터 뒤 화면이 바뀌었는지 (검색 · 전송 · 페이지 이동)
+        else:
+            time.sleep(0.3)
         try:
             winutil.set_clipboard_text(old)
         except Exception:
             pass
-        return f"{len(text)}자 입력함 (대상 창: {self.focus.last_title[:40]})"
+        return f"{len(text)}자 입력함 (대상 창: {self.focus.last_title[:40]})" + change
 
     def t_press_keys(self, keys: str, times: int = 1) -> str:
         self.focus.restore()
         times = max(1, min(int(times or 1), 50))
+        before = self._small()
         try:
             for _ in range(times):
                 winutil.press_combo(keys)
                 time.sleep(0.05)
         except ValueError as e:
             raise ToolError(str(e))
-        return f"'{keys}' x{times} 입력함"
+        return f"'{keys}' x{times} 입력함" + self._after(before, timeout=1.5, nochange_wait=0.6)
 
     # --- 화면 ---
-    def _grab(self):
-        from PIL import ImageGrab
-        hwnds = self.hooks.hud_hwnd()   # 울트론 HUD 창들 (작은 HUD + 액티브 모드 화면)
+    @contextlib.contextmanager
+    def _hud_hidden(self):
+        """캡처하는 동안 울트론 HUD 창들(작은 HUD + 액티브 모드 화면)을 캡처에서 뺀다."""
+        hwnds = self.hooks.hud_hwnd()
         hwnds = hwnds if isinstance(hwnds, (list, tuple)) else [hwnds]
         for h in hwnds:
             winutil.set_capture_excluded(h, True)
         try:
             time.sleep(0.05)
-            return ImageGrab.grab()
+            yield
         finally:
             for h in hwnds:
                 winutil.set_capture_excluded(h, False)
 
-    def t_look_at_screen(self):
-        img = self._grab().convert("RGB")
-        full_w = img.width
-        img.thumbnail((1568, 1568))
-        self._shot_scale = full_w / img.width
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=72)
-        data = base64.standard_b64encode(buf.getvalue()).decode()
-        return [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
-            {"type": "text", "text": f"사용자 화면 캡처 ({img.width}x{img.height}). 활성 창: {self.focus.last_title}"},
-        ]
+    @contextlib.contextmanager
+    def _hud_aside(self, x: int, y: int):
+        """누를 자리가 울트론 HUD 창 밑이면, 그동안만 HUD 를 숨긴다.
+        HUD 는 캡처에서 빠지므로 AI 는 HUD 밑의 화면을 보고 자리를 고른다 — 그대로 누르면 클릭이 HUD 로 들어가 버린다."""
+        hwnds = self.hooks.hud_hwnd()
+        hwnds = hwnds if isinstance(hwnds, (list, tuple)) else [hwnds]
+        hidden = [h for h in hwnds if h and winutil.blocks_clicks(h, x, y)]
+        for h in hidden:
+            winutil.show_window(h, False)
+        try:
+            if hidden:
+                time.sleep(0.12)
+            yield
+        finally:
+            if hidden:
+                time.sleep(0.15)          # 클릭이 밑의 창에 전달된 뒤에 다시 보인다
+            for h in hidden:
+                winutil.show_window(h, True)
+
+    @staticmethod
+    def _grab_raw(bbox: tuple[int, int, int, int] | None = None):
+        """bbox(화면 좌표: 왼, 위, 오, 아래)를 캡처. None 이면 주 모니터 전체. 다른 모니터에 있는 영역도 찍힌다."""
+        from PIL import ImageGrab
+        return ImageGrab.grab(bbox=bbox, all_screens=True) if bbox else ImageGrab.grab()
+
+    def _grab(self, bbox: tuple[int, int, int, int] | None = None):
+        with self._hud_hidden():
+            return self._grab_raw(bbox)
+
+    # --- 화면 보기: 보낼 크기 · 좌표 대응 (vision.py) ---
+    def set_vision_model(self, model: str | None) -> None:
+        """지금 대화하는 모델 이름을 알려 준다 (두뇌가 호출). 모델 등급에 따라 화면을 얼마나 크게 보낼지 달라진다."""
+        self.vision_model = str(model or "")
+
+    def _tier(self) -> str:
+        """화면을 보낼 크기 등급. 설정으로 '작게'를 고를 수는 있지만 모델이 받을 수 있는 크기보다 크게는 보내지 않는다
+        (더 크게 보내면 서버가 다시 줄여 좌표가 어긋난다)."""
+        if (self.cfg["screen_detail"] or "auto") == "standard":
+            return "standard"
+        return vision.tier_for_model(self.vision_model)
+
+    def _active_hwnd(self) -> int:
+        hwnd = self.focus.last_external
+        return hwnd if hwnd and winutil.user32.IsWindow(hwnd) else 0
+
+    def _shoot(self, bbox: tuple[int, int, int, int] | None, kind: str, zoom: bool = False):
+        """bbox 를 찍어 모델이 다시 줄이지 않을 크기로 맞춘다 → (이미지, 좌표 대응)."""
+        from PIL import Image
+        img = self._grab(bbox).convert("RGB")
+        if bbox is None:
+            bbox = (0, 0, img.width, img.height)
+        size = (vision.zoom_size if zoom else vision.send_size)(img.width, img.height, self._tier())
+        if size != img.size:
+            img = img.resize(size, Image.LANCZOS)
+        return img, vision.make_view(bbox, img.size, kind)
+
+    @staticmethod
+    def _image_blocks(img, text: str) -> list[dict]:
+        data, media = vision.encode(img)
+        return [{"type": "image", "source": {"type": "base64", "media_type": media, "data": data}},
+                {"type": "text", "text": text}]
+
+    def _small(self):
+        """화면 변화 비교용 축소 화면 (실패하면 None — 변화 확인을 건너뛴다)."""
+        try:
+            return vision.small_gray(self._grab(winutil.monitor_rect(self._active_hwnd())))
+        except Exception as e:
+            log.debug("화면 변화 확인용 캡처 실패: %s", e)
+            return None
+
+    def _after(self, before, timeout: float = 2.5, nochange_wait: float = 1.0) -> str:
+        """동작 뒤 화면이 멈출 때까지 기다리고, 바뀌었는지를 결과 글 뒤에 붙일 말로 돌려준다."""
+        if before is None:
+            time.sleep(0.5)
+            return ""
+        try:
+            bbox = winutil.monitor_rect(self._active_hwnd())
+            with self._hud_hidden():
+                ch = vision.settle(lambda: vision.small_gray(self._grab_raw(bbox)), before, timeout=timeout,
+                                   nochange_wait=nochange_wait)
+            return " · " + ch.text()
+        except Exception as e:
+            log.debug("화면 변화 확인 실패: %s", e)
+            time.sleep(0.5)
+            return ""
+
+    def t_look_at_screen(self, target: str = "screen", marks: bool = False):
+        hwnd = self._active_hwnd()
+        bbox, kind = None, "screen"
+        if target == "window":
+            wr, mon = winutil.window_rect(hwnd), winutil.monitor_rect(hwnd)
+            if wr and mon:   # 창이 화면 밖으로 걸쳐 있으면 보이는 부분만
+                wr = (max(wr[0], mon[0]), max(wr[1], mon[1]), min(wr[2], mon[2]), min(wr[3], mon[3]))
+            if wr and wr[2] - wr[0] >= 40 and wr[3] - wr[1] >= 40:
+                bbox, kind = wr, "window"
+        if bbox is None:
+            bbox = winutil.monitor_rect(hwnd)      # 사용자의 작업 창이 있는 모니터 (모르면 주 모니터)
+        img, view = self._shoot(bbox, kind)
+        self._view = view
+        note = ""
+        if marks:
+            try:
+                if not hwnd:
+                    raise ToolError("활성 창을 알 수 없습니다")
+                self.screen.read(hwnd)
+                picked = vision.pick_marks([(it.n, it.rect) for it in self.screen.items], view)
+                if picked:
+                    img = vision.annotate(img, picked)
+                    shown = {n for n, _ in picked}
+                    rest = len(self.screen.items) - len(shown)
+                    note = ("\n번호 상자 = 누를 수 있는 요소. click_ui 에 그 번호를 넘기세요 (좌표보다 정확함):\n"
+                            + "\n".join(it.line() for it in self.screen.items if it.n in shown)
+                            + (f"\n(화면 밖이거나 겹쳐서 표시하지 않은 요소 {rest}개 — read_ui 로 볼 수 있음)" if rest > 0 else ""))
+                else:
+                    note = "\n(이 창에서는 누를 수 있는 요소를 읽지 못했습니다. 좌표로 click_screen 을 쓰세요)"
+            except Exception as e:
+                note = f"\n(요소 번호를 표시하지 못했습니다: {e}. 좌표로 click_screen 을 쓰세요)"
+        what = "활성 창" if kind == "window" else "화면"
+        return self._image_blocks(img, (
+            f"사용자 {what} 캡처 — 이미지 크기 {img.width}x{img.height} 픽셀. click_screen · zoom_screen · point_at 의 좌표는 "
+            f"이 이미지의 픽셀 좌표입니다. 활성 창: {self.focus.last_title}{note}"))
+
+    def t_zoom_screen(self, x: int, y: int, width: int, height: int):
+        if self._view is None:
+            raise ToolError("먼저 look_at_screen 으로 화면을 보세요.")
+        left, top, right, bottom = self._view.rect_to_screen(x, y, width, height)
+        if right - left < 8 or bottom - top < 8:
+            raise ToolError("확대할 영역이 너무 작습니다. 조금 더 넓게 잡으세요.")
+        img, view = self._shoot((left, top, right, bottom), "zoom", zoom=True)
+        self._view = view
+        return self._image_blocks(img, (
+            f"확대한 영역 — 이미지 크기 {img.width}x{img.height} 픽셀. 이제 click_screen · point_at · zoom_screen 의 좌표는 "
+            "이 확대 이미지의 픽셀 좌표입니다. 전체 화면으로 돌아가려면 look_at_screen 을 다시 부르세요."))
+
+    def t_read_screen_text(self, app: str | None = None, all: bool = False) -> str:   # noqa: A002
+        hwnd = self._target_window(app)
+        try:
+            return self.screen.read_text(hwnd, include_offscreen=bool(all))
+        except OSError as e:
+            raise ToolError(f"창의 글자를 읽지 못했습니다: {e}")
+
+    def t_wait_screen(self, max_seconds: int = 5) -> str:
+        before = self._small()
+        if before is None:
+            time.sleep(1.0)
+            return "1초 기다렸습니다."
+        limit = max(1.0, min(float(max_seconds or 5), 15.0))
+        bbox = winutil.monitor_rect(self._active_hwnd())
+        with self._hud_hidden():
+            ch = vision.settle(lambda: vision.small_gray(self._grab_raw(bbox)), before, timeout=limit, interval=0.25,
+                               quiet=3, nochange_wait=1.2)
+        if ch.settled:
+            return f"화면이 멈췄습니다 ({ch.seconds:.1f}초 기다림)."
+        return f"{ch.seconds:.0f}초를 기다렸지만 화면이 계속 바뀌고 있습니다 (동영상이거나 아직 불러오는 중)."
 
     # --- 화면 조작 ---
     def _target_window(self, app: str | None) -> int:
@@ -568,26 +744,43 @@ class PCTools:
             raise ToolError("그 요소를 찾지 못했습니다. read_ui 로 목록을 다시 확인하세요.")
         if uia.is_risky(it.name):
             self._confirm("화면 클릭", f"'{it.name}' {it.kind} 을(를) 누릅니다.\n창: {self.screen.title}")
+        before = self._small()
+        left, top, right, bottom = it.rect
         try:
-            out = self.screen.click(it, double=bool(double))
+            with self._hud_aside((left + right) // 2, (top + bottom) // 2):
+                out = self.screen.click(it, double=bool(double))
         except Exception as e:   # 페이지가 바뀌어 요소가 사라진 경우 등
             raise ToolError(f"누르지 못했습니다 ({e}). read_ui 로 다시 확인하세요.")
-        time.sleep(0.6)          # 페이지·창이 반응할 시간
-        return out + f" · 창: {winutil.window_title(self.screen.hwnd) or self.screen.title}"
+        change = self._after(before)     # 화면이 멈출 때까지 기다리고, 바뀌었는지 알려 준다
+        return out + f" · 창: {winutil.window_title(self.screen.hwnd) or self.screen.title}" + change
 
     def t_click_screen(self, x: int, y: int, double: bool = False, right: bool = False) -> str:
-        sx, sy = int(x * self._shot_scale), int(y * self._shot_scale)
-        uia.click_at(sx, sy, double=bool(double), right=bool(right))
-        time.sleep(0.5)
-        return f"({sx}, {sy}) 클릭함"
+        view = self._view
+        if view is None:
+            raise ToolError("먼저 look_at_screen 으로 화면을 보세요 (좌표는 마지막으로 본 이미지 기준입니다).")
+        if not view.contains(x, y):
+            raise ToolError(f"좌표 ({x}, {y}) 가 마지막으로 본 이미지({view.w}x{view.h}) 밖입니다. 그 이미지 안의 좌표를 주세요.")
+        sx, sy = view.to_screen(x, y)
+        with self._hud_aside(sx, sy):
+            name, kind = uia.element_at(sx, sy)  # 그 자리에 무엇이 있는지 (모르면 빈 값)
+        if name and uia.is_risky(name):          # 좌표로 눌러도 결제 · 삭제 · 전송 같은 버튼은 승인을 받는다 (카드는 HUD 에 뜬다)
+            self._confirm("화면 클릭", f"'{name}' {kind or '요소'} 을(를) 누릅니다.\n위치: ({sx}, {sy})")
+        before = self._small()
+        with self._hud_aside(sx, sy):
+            uia.click_at(sx, sy, double=bool(double), right=bool(right))
+        what = f"'{name[:40]}' {kind}".strip() if name else f"({sx}, {sy})"
+        return f"{what} 클릭함" + self._after(before)
 
     def t_scroll(self, direction: str, amount: int = 5, app: str | None = None) -> str:
         if direction not in ("up", "down"):
             raise ToolError("direction 은 up 또는 down")
         hwnd = self._target_window(app)
-        uia.scroll(hwnd, direction, amount or 5)
-        time.sleep(0.3)
-        return f"{'위' if direction == 'up' else '아래'}로 스크롤함"
+        before = self._small()
+        wr = winutil.window_rect(hwnd)           # 휠은 창 한가운데에서 굴린다 — 그 자리를 HUD 가 덮고 있으면 비켜 준다
+        with self._hud_aside(*(((wr[0] + wr[2]) // 2, (wr[1] + wr[3]) // 2) if wr else (-1, -1))):
+            uia.scroll(hwnd, direction, amount or 5)
+        change = self._after(before, timeout=1.5, nochange_wait=0.6)   # 변화가 없으면 끝까지 간 것일 수 있다
+        return f"{'위' if direction == 'up' else '아래'}로 스크롤함" + change
 
     _NO_BRIGHT = "이 화면은 밝기 조절을 지원하지 않습니다. 외장 모니터는 모니터 버튼으로 조절해 주세요."
 
@@ -923,8 +1116,15 @@ class PCTools:
         return f"{hud_feed.display_name(exe)} 종료함 (프로세스 {len(targets)}개, 메모리 약 {mem / 1048576:,.0f} MB 확보)"
 
     def t_point_at(self, x: int, y: int, width: int = 0, height: int = 0, label: str = "") -> str:
-        k = self._shot_scale
-        ok = self.hooks.point_at(int(x * k), int(y * k), int((width or 0) * k), int((height or 0) * k), str(label or "")[:30])
+        view = self._view
+        if view is None:
+            raise ToolError("먼저 look_at_screen 으로 화면을 보세요.")
+        if width and height:
+            left, top, right, bottom = view.rect_to_screen(x, y, width, height)
+            px, py, pw, ph = left, top, right - left, bottom - top
+        else:
+            (px, py), pw, ph = view.to_screen(x, y), 0, 0
+        ok = self.hooks.point_at(int(px), int(py), int(pw), int(ph), str(label or "")[:30])
         if not ok:
             raise ToolError("액티브 모드가 꺼져 있어 화면에 표시하지 못했습니다. 위치를 말로 설명하세요.")
         return "화면에 표시함"
