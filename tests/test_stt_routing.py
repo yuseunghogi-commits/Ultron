@@ -20,13 +20,13 @@ class FakeLocal:
         return self.text
 
 
-def make(engine="auto", local_text="자비스 크롬 열어", google=("자비스 크롬 열어 줘",), wake_needed=True,
+def make(engine="auto", local_text="울트론 크롬 열어", google=("울트론 크롬 열어 줘",), wake_needed=True,
          local_ready=True):
     lis = Listener("ko-KR", on_level=lambda *_: None, on_speech_start=lambda: None, on_utterance=lambda *_: None)
     lis.stt_engine = engine
     lis.local_stt = FakeLocal(local_text, local_ready)
     lis.wake_needed = lambda: wake_needed
-    lis.has_wake = lambda t: "자비스" in t
+    lis.has_wake = lambda t: "울트론" in t
     sent = []
 
     def fake_google(rec, sr_, pcm):
@@ -52,18 +52,18 @@ def test_standby_background_talk_stays_local():
 
 def test_standby_wake_word_uses_google_for_accuracy():
     lis, sent = make()
-    assert run(lis) == "자비스 크롬 열어 줘"
+    assert run(lis) == "울트론 크롬 열어 줘"
     assert len(sent) == 1 and lis.last_engine == "google"
 
 
 def test_standby_wake_google_misheard_gets_prefix():
     lis, _ = make(google=("크롬 열어 줘",))
-    assert run(lis) == "자비스 크롬 열어 줘"
+    assert run(lis) == "울트론 크롬 열어 줘"
 
 
 def test_standby_wake_offline_uses_local():
     lis, _ = make(google=(sr.RequestError("getaddrinfo failed"),))
-    assert run(lis) == "자비스 크롬 열어"
+    assert run(lis) == "울트론 크롬 열어"
     assert lis.last_engine == "local"
 
 
@@ -82,12 +82,12 @@ def test_active_offline_falls_back_to_local_and_skips_google_for_a_while():
 
 def test_local_engine_never_uses_google():
     lis, sent = make(engine="local", wake_needed=False)
-    assert run(lis) == "자비스 크롬 열어" and sent == []
+    assert run(lis) == "울트론 크롬 열어" and sent == []
 
 
 def test_google_engine_never_uses_local():
     lis, _ = make(engine="google")
-    assert run(lis) == "자비스 크롬 열어 줘" and lis.local_stt.calls == 0
+    assert run(lis) == "울트론 크롬 열어 줘" and lis.local_stt.calls == 0
 
 
 def test_model_not_ready_behaves_like_before():

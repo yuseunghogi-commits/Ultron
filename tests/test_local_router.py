@@ -27,7 +27,8 @@ def route(text: str, results: dict | None = None, fallback: bool = True):
 # (말, 기대 도구, 기대 인자 일부)
 TOOL_CASES = [
     ("메모장 열어줘", "open_app", {"name": "메모장"}),
-    ("자비스 크롬 켜", "open_app", {"name": "크롬"}),
+    ("울트론 크롬 켜", "open_app", {"name": "크롬"}),
+    ("울트론아 크롬 켜", "open_app", {"name": "크롬"}),
     ("카톡 닫아줘", "close_app", {"name": "카톡"}),
     ("볼륨 30으로", "volume", {"action": "set", "level": 30}),
     ("소리 키워줘", "volume", {"action": "up", "level": 10}),
@@ -114,7 +115,7 @@ def test_close_app_not_open():
 
 
 def test_normalize():
-    assert normalize("자비스, 메모장 좀 열어 줘요.") == "메모장 좀 열어" or normalize("자비스, 메모장 좀 열어 줘요.") == "메모장 열어"
+    assert normalize("울트론, 메모장 좀 열어 줘요.") == "메모장 좀 열어" or normalize("울트론, 메모장 좀 열어 줘요.") == "메모장 열어"
     assert normalize("볼륨 30으로 해 주세요!") == "볼륨 30으로"
 
 

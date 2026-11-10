@@ -5,7 +5,7 @@
 - 주인 등록: 문장 5개를 읽어 평균 벡터(프로필)를 data/voice_profile.json 에 저장한다. 이 파일은 PC 밖으로 나가지 않는다.
 - SpeakerGate: 명령을 실행하기 전에 목소리를 확인한다.
     · 주인 전용 모드: 등록된 프로필과 비교
-    · 세션 잠금: "자비스"라고 부른 사람의 목소리를 기억해, 이어지는 명령은 같은 사람의 것만 받는다
+    · 세션 잠금: "울트론"이라고 부른 사람의 목소리를 기억해, 이어지는 명령은 같은 사람의 것만 받는다
 """
 from __future__ import annotations
 
@@ -43,16 +43,16 @@ PREFILTER_MARGIN = 0.08      # 주인 전용: 기준보다 이만큼 넘게 낮�
 SCAN_WINDOW_SECONDS = 2.0    # 주변 대화 상태: 발화를 이 길이 창으로 훑어 주인과 가장 닮은 부분으로 판별
 SCAN_HOP_SECONDS = 0.5
 OWNER_SLACK = 0.08           # 주인 전용: 같은 대화에서 확인된 목소리와 아주 비슷하면 기준보다 이만큼 낮아도 통과
-SHORT_WAKE_SECONDS = 1.2     # 이보다 짧은 "자비스" 한 마디는 주인 확인을 다음 명령으로 미룸
+SHORT_WAKE_SECONDS = 1.2     # 이보다 짧은 "울트론" 한 마디는 주인 확인을 다음 명령으로 미룸
 # 기준값 근거 (실제 녹음 3명으로 측정): 등록 프로필 vs 1.5초 발화 → 0.40에서 오거부 2%·오수락 1%,
 # 발화 1개 vs 발화 1개(세션 잠금) → 0.40에서 오거부 0~7%·오수락 1~5%. 실제 마이크·소음 환경에서는 달라질 수 있다.
 
 ENROLL_SENTENCES = [
-    "자비스, 오늘 날씨 어때?",
+    "울트론, 오늘 날씨 어때?",
     "내일 아침 일곱 시에 알람을 맞춰 줘.",
-    "자비스, 좋아하는 음악 좀 틀어 줄래?",
+    "울트론, 좋아하는 음악 좀 틀어 줄래?",
     "인터넷 브라우저를 열고 최신 뉴스를 검색해 줘.",
-    "자비스, 화면 밝기를 조금만 낮춰 줘.",
+    "울트론, 화면 밝기를 조금만 낮춰 줘.",
 ]
 
 
@@ -271,7 +271,7 @@ class SpeakerGate:
         if not self.owner_mode() or not self.vid.ready or voice is None:
             return True
         if voice.seconds < SHORT_WAKE_SECONDS:
-            return True              # 짧은 "자비스" 한 마디는 지문이 부정확하다 — check() 도 다음 명령으로 미룬다
+            return True              # 짧은 호출어 한 마디는 지문이 부정확하다 — check() 도 다음 명령으로 미룬다
         return self.profile.score(voice) >= self.threshold() - PREFILTER_MARGIN
 
     def best_voice(self, pcm: np.ndarray) -> Voice | None:
@@ -309,7 +309,7 @@ class SpeakerGate:
 
     def check(self, voice: Voice | None, wake: bool = False, wake_only: bool = False) -> Verdict:
         """wake=True 는 호출어가 들어 있는 발화 (세션 잠금에서는 새 세션을 시작한다).
-        wake_only=True 는 "자비스" 한 마디뿐인 발화 — 아무것도 실행하지 않고 듣기만 시작한다."""
+        wake_only=True 는 호출어 한 마디뿐인 발화 — 아무것도 실행하지 않고 듣기만 시작한다."""
         owner = self.owner_mode()
         lock = bool(self.cfg["speaker_lock"])
         if not (owner or lock) or not self.vid.ready:
@@ -317,7 +317,7 @@ class SpeakerGate:
         th = self.threshold()
         if owner:
             if wake_only and (voice is None or voice.seconds < SHORT_WAKE_SECONDS):
-                # 짧은 "자비스"는 판별이 부정확해 주인도 자주 거부되므로 듣기만 시작하고, 이어지는 명령에서 확인한다
+                # 짧은 호출어는 판별이 부정확해 주인도 자주 거부되므로 듣기만 시작하고, 이어지는 명령에서 확인한다
                 return Verdict(True, "owner")
             if voice is None:
                 return Verdict(False, "owner", "short")

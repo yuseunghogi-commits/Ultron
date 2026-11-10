@@ -26,12 +26,14 @@ DEFAULTS: dict = {
     "effort": "low",                  # low | medium | high  (음성 비서는 low 권장: 빠른 응답)
     "web_search": True,               # Claude 서버측 웹 검색 사용 (검색당 별도 과금)
     # --- 음성 ---
-    "wake_word_enabled": True,        # '자비스' 호출어 상시 대기
-    "wake_words": ["자비스", "쟈비스", "자비즈", "자비스야", "jarvis", "저비스"],
+    "wake_word_enabled": True,        # '울트론' 호출어 상시 대기
+    "wake_words": ["울트론", "울트롱", "얼트론", "올트론", "울트론아", "ultron"],
     "stt_language": "ko-KR",
     "stt_engine": "auto",             # auto = 대기 중엔 오프라인 인식, 호출 후엔 Google | local = 항상 오프라인 | google
     "tts_voice": "ko-KR-InJoonNeural",
-    "tts_rate": "+8%",
+    "tts_rate": "-4%",               # 울트론은 서두르지 않는다
+    "tts_pitch": "-14Hz",            # 낮은 목소리 (edge-tts 음높이)
+    "voice_fx": True,                # 울트론 기계음: 금속성 울림 + 약한 웅웅거림
     "mic_device": None,               # None = 기본 마이크
     "mic_sensitivity": 1.0,           # 높을수록 작은 소리에도 반응
     "noise_robust": True,             # 소음 환경 모드: 음성 감지 AI + 소음 제거 AI (시끄러운 곳에서 작은 목소리)
@@ -42,11 +44,11 @@ DEFAULTS: dict = {
     "chat_idle_seconds": 40,          # 대화 모드에서 이 시간 동안 아무 말이 없으면 대화 모드 종료
     "chat_model": "",                 # 대화 모드 모델 (비우면 pro_model). Pro: haiku | sonnet | opus
     # --- 화자 인식 (목소리 확인) ---
-    "speaker_lock": True,             # 세션 잠금: '자비스'라고 부른 사람의 목소리만 이어서 인식
+    "speaker_lock": True,             # 세션 잠금: '울트론'이라고 부른 사람의 목소리만 이어서 인식
     "owner_only": False,              # 등록된 주인 목소리에만 반응 (목소리 등록 후 켜짐)
     "speaker_threshold": 0.40,        # 목소리 판별 기준 0.25~0.60 (높을수록 엄격)
     # --- 동작 ---
-    "user_title": "주인님",
+    "user_title": "창조자",
     "home_city": "Seoul",
     "auto_approve": False,            # True면 위험 명령(PowerShell, 종료 등)을 확인 없이 실행
     "hotkey": "ctrl+alt+j",
@@ -56,6 +58,14 @@ DEFAULTS: dict = {
 }
 
 _lock = threading.Lock()
+
+# 자비스 → 울트론으로 이름을 바꾸면서 기본값이 바뀐 항목. 예전 기본값을 그대로 쓰던 설정만 새 기본값으로 옮긴다
+# (사용자가 직접 바꿔 둔 값은 건드리지 않는다)
+_OLD_DEFAULTS = {
+    "wake_words": ["자비스", "쟈비스", "자비즈", "자비스야", "jarvis", "저비스"],
+    "user_title": "주인님",
+    "tts_rate": "+8%",
+}
 
 
 class Config:
@@ -67,6 +77,9 @@ class Config:
                 loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     self._data.update(loaded)
+                    for k, old in _OLD_DEFAULTS.items():
+                        if loaded.get(k) == old:
+                            self._data[k] = DEFAULTS[k]
             except Exception:
                 pass
         self.save()

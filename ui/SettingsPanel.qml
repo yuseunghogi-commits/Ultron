@@ -5,7 +5,7 @@ import QtQuick.Layouts
 
 Item {
     id: sp
-    property color accent: "#3ee6ff"
+    property color accent: "#ff2d3f"
     property bool open: false
     property var cfg: ({})
     visible: opacity > 0
@@ -61,6 +61,7 @@ Item {
         proModelBox.currentIndex = Math.max(0, proModels.findIndex(m => m.v === cfg.pro_model))
         effortBox.currentIndex = Math.max(0, efforts.findIndex(m => m.v === cfg.effort))
         voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
+        fxSw.checked = cfg.voice_fx !== false
         wakeSw.checked = !!cfg.wake_word_enabled
         searchSw.checked = !!cfg.web_search
         approveSw.checked = !!cfg.auto_approve
@@ -77,7 +78,7 @@ Item {
     }
     function save() {
         const out = {
-            user_title: titleField.text.trim() || "주인님",
+            user_title: titleField.text.trim() || "창조자",
             home_city: cityField.text.trim() || "Seoul",
             hotkey: hotkeyField.text.trim().toLowerCase() || "ctrl+alt+j",
             brain: brains[brainBox.currentIndex].v,
@@ -88,6 +89,7 @@ Item {
             model: models[modelBox.currentIndex].v,
             effort: efforts[effortBox.currentIndex].v,
             tts_voice: voices[voiceBox.currentIndex].v,
+            voice_fx: fxSw.checked,
             wake_word_enabled: wakeSw.checked,
             web_search: searchSw.checked,
             auto_approve: approveSw.checked,
@@ -112,14 +114,14 @@ Item {
     }
     component Field: TextField {
         Layout.fillWidth: true
-        color: "#e6fbff"
-        placeholderTextColor: Qt.rgba(0.7, 0.9, 1, 0.35)
+        color: "#eceef1"
+        placeholderTextColor: Qt.rgba(0.9, 0.87, 0.89, 0.35)
         selectionColor: Qt.rgba(sp.accent.r, sp.accent.g, sp.accent.b, 0.5)
         font.pixelSize: 12
         leftPadding: 8
         background: Rectangle {
             implicitHeight: 30
-            color: Qt.rgba(0, 0.05, 0.08, 0.7)
+            color: Qt.rgba(0.08, 0, 0.017, 0.7)
             border.color: parent.activeFocus ? sp.accent : Qt.rgba(sp.accent.r, sp.accent.g, sp.accent.b, 0.3)
             radius: 3
         }
@@ -129,20 +131,20 @@ Item {
         Layout.fillWidth: true
         textRole: "t"
         font.pixelSize: 12
-        palette.buttonText: "#e6fbff"
-        palette.text: "#e6fbff"
-        palette.window: "#06202b"
-        palette.base: "#06202b"
+        palette.buttonText: "#eceef1"
+        palette.text: "#eceef1"
+        palette.window: "#1f0a0e"
+        palette.base: "#1f0a0e"
         palette.highlight: Qt.rgba(sp.accent.r, sp.accent.g, sp.accent.b, 0.35)
         palette.highlightedText: "#ffffff"
-        palette.light: "#0a2f3c"
-        palette.midlight: "#0a2f3c"
-        palette.mid: "#0a2f3c"
+        palette.light: "#341118"
+        palette.midlight: "#341118"
+        palette.mid: "#341118"
         palette.dark: sp.accent
-        palette.button: Qt.rgba(0, 0.05, 0.08, 0.7)
+        palette.button: Qt.rgba(0.08, 0, 0.017, 0.7)
         background: Rectangle {
             implicitHeight: 30
-            color: Qt.rgba(0, 0.05, 0.08, 0.7)
+            color: Qt.rgba(0.08, 0, 0.017, 0.7)
             border.color: cb.activeFocus || cb.popup.visible ? sp.accent : Qt.rgba(sp.accent.r, sp.accent.g, sp.accent.b, 0.3)
             radius: 3
         }
@@ -161,20 +163,20 @@ Item {
             x: sl.leftPadding + sl.visualPosition * (sl.availableWidth - width)
             y: sl.topPadding + sl.availableHeight / 2 - height / 2
             width: 14; height: 14; radius: 7
-            color: "#06202b"
+            color: "#1f0a0e"
             border.color: sp.accent; border.width: 2
         }
     }
     component Hint: Text {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
-        color: Qt.rgba(0.75, 0.93, 1, 0.5)
+        color: Qt.rgba(0.93, 0.9, 0.92, 0.5)
         font.pixelSize: 10
     }
     component Toggle: Switch {
         id: sw
         font.pixelSize: 12
-        palette.windowText: "#e6fbff"
+        palette.windowText: "#eceef1"
         indicator: Rectangle {
             implicitWidth: 34; implicitHeight: 16; radius: 8
             x: sw.width - width - sw.rightPadding
@@ -189,14 +191,14 @@ Item {
             }
         }
         contentItem: Text {
-            text: sw.text; color: "#d8f6ff"; font.pixelSize: 12
+            text: sw.text; color: "#e1e4e8"; font.pixelSize: 12
             verticalAlignment: Text.AlignVCenter
             rightPadding: sw.indicator.width + 8
         }
         Layout.fillWidth: true
     }
 
-    Rectangle { anchors.fill: parent; color: Qt.rgba(0, 0.02, 0.04, 0.6); radius: 6 }
+    Rectangle { anchors.fill: parent; color: Qt.rgba(0.04, 0, 0.007, 0.6); radius: 6 }
     MouseArea { anchors.fill: parent; onClicked: sp.open = false }
 
     HoloPanel {
@@ -224,7 +226,7 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
-                    color: Qt.rgba(0.75, 0.93, 1, 0.5)
+                    color: Qt.rgba(0.93, 0.9, 0.92, 0.5)
                     font.pixelSize: 10
                     text: sp.isPro ? "이 PC에 설치된 Claude Code의 Pro 로그인을 사용합니다. 사용량은 Pro 한도에서 차감됩니다."
                         : sp.isLocal ? "앱 실행·볼륨·음악·유튜브·검색·날씨·타이머 등 기본 명령만 처리합니다. 대화와 복잡한 작업은 할 수 없습니다."
@@ -255,13 +257,14 @@ Item {
                 Combo { id: effortBox; model: sp.efforts }
                 Label2 { text: "VOICE" }
                 Combo { id: voiceBox; model: sp.voices }
+                Toggle { id: fxSw; text: "울트론 기계음 (낮고 금속성인 목소리)" }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
                     ColumnLayout {
                         Layout.fillWidth: true
                         Label2 { text: "호칭" }
-                        Field { id: titleField; placeholderText: "주인님" }
+                        Field { id: titleField; placeholderText: "창조자" }
                     }
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -280,12 +283,12 @@ Item {
                 Label2 { text: "SPEECH RECOGNITION  ·  음성 인식" }
                 Combo { id: sttBox; model: sp.sttEngines }
                 Hint { text: sp.cfg.stt_status || ""; font.pixelSize: 11 }
-                Toggle { id: wakeSw; text: "“자비스” 호출어 상시 대기" }
+                Toggle { id: wakeSw; text: "“울트론” 호출어 상시 대기" }
 
                 Label2 { text: "VOICE ID  ·  화자 인식"; Layout.topMargin: 10 }
                 Hint {
                     text: jarvis.voiceStatus
-                    color: jarvis.voiceEnrolled ? Qt.rgba(0.6, 1, 0.8, 0.85) : Qt.rgba(0.75, 0.93, 1, 0.6)
+                    color: jarvis.voiceEnrolled ? Qt.rgba(0.6, 1, 0.8, 0.85) : Qt.rgba(0.93, 0.9, 0.92, 0.6)
                     font.pixelSize: 11
                 }
                 RowLayout {
@@ -330,7 +333,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.topMargin: 6
                     wrapMode: Text.WordWrap
-                    color: Qt.rgba(0.75, 0.93, 1, 0.45)
+                    color: Qt.rgba(0.93, 0.9, 0.92, 0.45)
                     font.pixelSize: 10
                     text: "설정은 data/config.json 에 저장됩니다. API 키 대신 ANTHROPIC_API_KEY 환경변수를 써도 됩니다."
                 }

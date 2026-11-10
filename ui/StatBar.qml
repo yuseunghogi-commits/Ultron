@@ -3,7 +3,7 @@ import QtQuick
 
 Item {
     id: sb
-    property color accent: "#3ee6ff"
+    property color accent: "#ff2d3f"
     property string label: ""
     property real value: 0            // 0..1
     property string valueText: ""
@@ -27,7 +27,7 @@ Item {
         anchors.right: parent.right
         y: -3
         text: sb.valueText
-        color: sb.warn ? "#ffb3bf" : "#e9fcff"
+        color: sb.warn ? "#ffb3bf" : "#f1f2f5"
         font.family: "Bahnschrift"; font.pixelSize: 15; font.weight: Font.DemiBold
     }
     Row {

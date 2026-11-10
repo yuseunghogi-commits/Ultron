@@ -8,7 +8,7 @@ from jarvis.local_router import normalize
 
 
 @pytest.mark.parametrize("text", [
-    "액티브 모드", "자비스 액티브 모드 켜줘", "액티브 모드로 전환해", "엑티브 모드 가동",
+    "액티브 모드", "울트론 액티브 모드 켜줘", "액티브 모드로 전환해", "엑티브 모드 가동",
     "액티비 모드 켜", "active mode", "액티브 모드 시작해 줘", "액티브 화면 켜",
 ])
 def test_active_on(text):
@@ -47,7 +47,7 @@ from jarvis.tools import _weather_ko  # noqa: E402
 
 
 @pytest.mark.parametrize("text,n", [
-    ("1번 꺼줘", 1), ("자비스 2번 종료해 줘", 2), ("첫 번째 거 꺼줘", 1), ("3번 프로그램 강제 종료", 3),
+    ("1번 꺼줘", 1), ("울트론 2번 종료해 줘", 2), ("첫 번째 거 꺼줘", 1), ("3번 프로그램 강제 종료", 3),
     ("다섯 번째 거 닫아줘", 5), ("사번 정리해줘", 4),
 ])
 def test_kill_index(text, n):

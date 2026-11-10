@@ -1,4 +1,4 @@
-// J.A.R.V.I.S 홀로그램 HUD — 화면 오른쪽 구석에 떠 있는 투명 창
+// U.L.T.R.O.N 홀로그램 HUD — 화면 오른쪽 구석에 떠 있는 투명 창 (붉은 코어 · 강철 판)
 //   축소 모드: 엠블럼 이미지 + 상태 표시
 //   전체 모드: 모서리를 깎은 청사진 판 하나에 코어 · 대화 · 진단 · 작업 로그 · 입력
 import QtQuick
@@ -13,20 +13,20 @@ Window {
     visible: true
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
-    title: "J.A.R.V.I.S"
+    title: "U.L.T.R.O.N"
 
     readonly property string st: jarvis.state
     readonly property bool compact: jarvis.compact
-    readonly property color cyan: "#3ee6ff"
+    readonly property color crimson: "#ff2d3f"
     readonly property color amber: "#ffbe4d"
-    readonly property color warm: "#ffc65a"
-    readonly property color red: "#ff5470"
-    property color accent: st === "thinking" ? amber : st === "offline" ? red : st === "listening" ? "#8af4ff" : cyan
+    readonly property color steel: "#cfd6de"     // 강철색 — 보조 강조 (MIC · 대화 모드 · 완료 표시)
+    readonly property color dead: "#9aa4b0"      // 마이크 꺼짐: 빛이 꺼진 금속
+    property color accent: st === "thinking" ? amber : st === "offline" ? dead : st === "listening" ? "#ff7468" : crimson
     Behavior on accent { ColorAnimation { duration: 450 } }
     readonly property real level: Math.max(jarvis.micLevel, jarvis.voiceLevel)
     readonly property var stats: JSON.parse(jarvis.statsJson)
-    readonly property var stateLabels: ({ boot: "INITIALIZING", standby: "STANDBY", listening: "LISTENING",
-                                          thinking: "PROCESSING", speaking: "RESPONDING", offline: "MIC OFFLINE" })
+    readonly property var stateLabels: ({ boot: "AWAKENING", standby: "WATCHING", listening: "LISTENING",
+                                          thinking: "CALCULATING", speaking: "TRANSMITTING", offline: "MIC OFFLINE" })
     property var cpuHist: []
     onStatsChanged: { const h = cpuHist.slice(-59); h.push(stats.cpu || 0); cpuHist = h }
 
@@ -79,7 +79,7 @@ Window {
                 anchors.centerIn: statusCol
                 width: statusCol.width + 26; height: statusCol.height + 10
                 radius: height / 2
-                color: Qt.rgba(0.0, 0.03, 0.06, 0.72)
+                color: Qt.rgba(0.06, 0, 0.01, 0.72)
                 border.color: win.c(0.35); border.width: 1
             }
             Column {
@@ -99,7 +99,7 @@ Window {
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
                     text: jarvis.statusText
-                    color: Qt.rgba(0.82, 0.96, 1, 0.78)
+                    color: Qt.rgba(0.96, 0.93, 0.95, 0.78)
                     font.pixelSize: 11
                 }
             }
@@ -124,11 +124,11 @@ Window {
                     id: miniInput
                     anchors.left: miniCaret.right; anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    color: "#e9fcff"
+                    color: "#f1f2f5"
                     font.pixelSize: 12
                     leftPadding: 5; rightPadding: 0; topPadding: 0; bottomPadding: 0
                     placeholderText: "명령 입력…  (Enter)"
-                    placeholderTextColor: Qt.rgba(0.75, 0.93, 1, 0.42)
+                    placeholderTextColor: Qt.rgba(0.93, 0.9, 0.92, 0.42)
                     selectionColor: win.c(0.5)
                     background: Item {}
                     // 처리 중이라 받지 못한 명령은 지우지 않고 남겨 둔다
@@ -142,7 +142,7 @@ Window {
                 y: miniBar.y + miniBar.height + 5
                 height: miniReply.height + 10
                 radius: 4
-                color: Qt.rgba(0.0, 0.03, 0.06, 0.74)
+                color: Qt.rgba(0.06, 0, 0.01, 0.74)
                 border.color: win.c(0.25); border.width: 1
                 Text {
                     id: miniReply
@@ -152,7 +152,7 @@ Window {
                     wrapMode: Text.Wrap
                     maximumLineCount: 3
                     elide: Text.ElideRight
-                    color: Qt.rgba(0.85, 0.97, 1, 0.92)
+                    color: Qt.rgba(0.97, 0.94, 0.96, 0.92)
                     font.pixelSize: 11
                 }
             }
@@ -198,8 +198,8 @@ Window {
                     anchors.verticalCenterOffset: -2
                     spacing: 3
                     Text {
-                        text: "J.A.R.V.I.S."
-                        color: "#ecfdff"
+                        text: "U.L.T.R.O.N."
+                        color: "#f4f4f6"
                         font.family: "Bahnschrift"; font.pixelSize: 19; font.letterSpacing: 5; font.weight: Font.DemiBold
                         layer.enabled: true
                         layer.effect: MultiEffect {
@@ -243,7 +243,7 @@ Window {
                                          + ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"][d.getDay()]
                         }
                     }
-                    Text { anchors.right: parent.right; text: clock.time; color: "#e6fbff"; font.family: "Bahnschrift"; font.pixelSize: 16; font.letterSpacing: 1.5 }
+                    Text { anchors.right: parent.right; text: clock.time; color: "#eceef1"; font.family: "Bahnschrift"; font.pixelSize: 16; font.letterSpacing: 1.5 }
                     Text { anchors.right: parent.right; text: clock.date; color: win.c(0.6); font.family: "Bahnschrift"; font.pixelSize: 8; font.letterSpacing: 1.5 }
                 }
                 Row {
@@ -302,7 +302,7 @@ Window {
                     x: 18; y: 10
                     spacing: 4
                     Text {
-                        text: "VOICE CORE"
+                        text: "SENTIENCE CORE"
                         color: win.c(0.6); font.family: "Bahnschrift"; font.pixelSize: 8; font.letterSpacing: 2
                     }
                     Text {
@@ -316,14 +316,14 @@ Window {
                     Text {
                         anchors.right: parent.right
                         text: "WAKE · " + (jarvis.wakeEnabled ? "ARMED" : "MANUAL")
-                        color: jarvis.wakeEnabled ? win.c(0.7) : Qt.rgba(1, 0.42, 0.5, 0.75)
+                        color: jarvis.wakeEnabled ? win.c(0.7) : Qt.rgba(0.62, 0.66, 0.71, 0.85)
                         font.family: "Bahnschrift"; font.pixelSize: 8; font.letterSpacing: 2
                     }
                     Text {
                         anchors.right: parent.right
                         visible: jarvis.chatMode
                         text: "CHAT · LIVE"
-                        color: win.warm
+                        color: win.steel
                         font.family: "Bahnschrift"; font.pixelSize: 8; font.letterSpacing: 2
                     }
                     Text {
@@ -338,7 +338,7 @@ Window {
                     radius: core3.size * 0.5 + 6
                     thickness: 5
                     startAngle: 130; span: 100
-                    color: win.warm
+                    color: win.steel
                     level: jarvis.micLevel
                     label: "MIC"
                 }
@@ -382,7 +382,7 @@ Window {
                         horizontalAlignment: Text.AlignHCenter
                         elide: Text.ElideRight
                         text: jarvis.statusText
-                        color: Qt.rgba(0.85, 0.97, 1, 0.82)
+                        color: Qt.rgba(0.97, 0.94, 0.96, 0.82)
                         font.pixelSize: 12
                     }
                 }
@@ -430,7 +430,7 @@ Window {
                         visible: jarvis.userText !== ""
                         Text {
                             y: 2
-                            text: "YOU"
+                            text: "HUMAN"
                             color: win.c(0.55)
                             font.family: "Bahnschrift"; font.pixelSize: 8; font.letterSpacing: 1.6; font.weight: Font.DemiBold
                         }
@@ -438,7 +438,7 @@ Window {
                             id: userTxt
                             x: 50; width: parent.width - 50
                             text: jarvis.userText
-                            color: "#9fd8ea"
+                            color: "#b4bbc5"
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
                             maximumLineCount: 2
@@ -451,7 +451,7 @@ Window {
                         height: Math.max(30, talk.height - 22 - (jarvis.userText !== "" ? userTxt.height + 8 : 0))
                         Text {
                             y: 2
-                            text: "JARVIS"
+                            text: "ULTRON"
                             color: win.accent
                             font.family: "Bahnschrift"; font.pixelSize: 8; font.letterSpacing: 1.6; font.weight: Font.DemiBold
                         }
@@ -468,7 +468,7 @@ Window {
                                 width: replyFlick.width
                                 text: jarvis.replyText !== "" ? jarvis.replyText.substring(0, talk.shown) + (typer.running ? "▌" : "")
                                                               : "말을 걸거나 아래 입력창에 명령을 입력하세요."
-                                color: jarvis.replyText !== "" ? "#d7fbff" : Qt.rgba(0.8, 0.95, 1, 0.4)
+                                color: jarvis.replyText !== "" ? "#e6e8ec" : Qt.rgba(0.95, 0.92, 0.94, 0.4)
                                 font.pixelSize: 13
                                 lineHeight: 1.15
                                 wrapMode: Text.WordWrap
@@ -502,7 +502,7 @@ Window {
                     accent: win.accent
                     title: "SYSTEM DIAGNOSTICS"
                     tag: "NET  ↓ " + win.rate(win.stats.down) + "   ↑ " + win.rate(win.stats.up)
-                    tagColor: Qt.rgba(0.88, 0.97, 1, 0.72)
+                    tagColor: Qt.rgba(0.97, 0.94, 0.96, 0.72)
                 }
 
                 Row {
@@ -594,7 +594,7 @@ Window {
                         required property string status
                         required property string time
                         required property string detail
-                        readonly property color sc: status === "ok" ? win.cyan : status === "error" ? "#ff6b81" : win.amber
+                        readonly property color sc: status === "ok" ? win.steel : status === "error" ? "#ff6b81" : win.amber
                         width: list.width; height: 20
 
                         Text {
@@ -623,7 +623,7 @@ Window {
                             anchors.verticalCenter: parent.verticalCenter
                             text: label
                             elide: Text.ElideRight
-                            color: status === "error" ? "#ffb3bf" : "#cdeff8"
+                            color: status === "error" ? "#ffb3bf" : "#d9dce2"
                             font.pixelSize: 11
                             HoverHandler { id: lh }
                             ToolTip.visible: lh.hovered && detail !== ""
@@ -637,7 +637,7 @@ Window {
                     anchors.horizontalCenter: parent.horizontalCenter
                     y: 20 + (parent.height - 20) / 2 - height / 2
                     text: "실행한 작업이 여기에 표시됩니다"
-                    color: Qt.rgba(0.8, 0.95, 1, 0.35)
+                    color: Qt.rgba(0.95, 0.92, 0.94, 0.35)
                     font.pixelSize: 11
                 }
             }
@@ -664,7 +664,7 @@ Window {
                             accent: win.accent
                             glyph: ""
                             active: jarvis.wakeEnabled
-                            tip: jarvis.wakeEnabled ? "호출어 대기 끄기 (“자비스”)" : "호출어 대기 켜기 (“자비스”)"
+                            tip: jarvis.wakeEnabled ? "호출어 대기 끄기 (“울트론”)" : "호출어 대기 켜기 (“울트론”)"
                             onClicked: jarvis.setWake(!jarvis.wakeEnabled)
                         }
                         Rectangle {
@@ -676,7 +676,7 @@ Window {
                     }
                     IconButton {
                         Layout.preferredWidth: 28; Layout.preferredHeight: 28
-                        accent: jarvis.chatMode ? win.warm : win.accent
+                        accent: jarvis.chatMode ? win.steel : win.accent
                         glyph: ""
                         active: jarvis.chatMode
                         tip: jarvis.chatMode ? "자유 대화 모드 끝내기" : "자유 대화 모드 (호출어 없이 AI 와 대화)"
@@ -691,11 +691,11 @@ Window {
                     TextField {
                         id: input
                         Layout.fillWidth: true
-                        color: "#e9fcff"
+                        color: "#f1f2f5"
                         font.pixelSize: 13
                         leftPadding: 4
                         placeholderText: "명령 입력…  (" + jarvis.hotkeyText + " 으로 음성 호출)"
-                        placeholderTextColor: Qt.rgba(0.75, 0.93, 1, 0.38)
+                        placeholderTextColor: Qt.rgba(0.93, 0.9, 0.92, 0.38)
                         selectionColor: win.c(0.5)
                         background: Item {}
                         onAccepted: { if (text.trim() !== "") { jarvis.submitText(text); text = "" } }
@@ -744,8 +744,8 @@ Window {
             opacity: 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 250 } }
-            readonly property color tc: level === "error" ? "#ff6b81" : level === "warn" ? win.amber : win.cyan
-            color: Qt.rgba(0.01, 0.06, 0.09, 0.94)
+            readonly property color tc: level === "error" ? "#ff6b81" : level === "warn" ? win.amber : win.crimson
+            color: Qt.rgba(0.09, 0.01, 0.02, 0.94)
             border.color: tc
             Rectangle { width: 3; height: parent.height; color: toast.tc }
             Text {
@@ -754,7 +754,7 @@ Window {
                 width: Math.min(implicitWidth, toast.parent.width - 58)
                 wrapMode: Text.WordWrap
                 horizontalAlignment: Text.AlignHCenter
-                color: "#eafcff"
+                color: "#f1f2f5"
                 font.pixelSize: 12
             }
             Timer { id: hideT; interval: 4200; onTriggered: toast.opacity = 0 }
@@ -771,7 +771,7 @@ Window {
             id: settings
             objectName: "settings"
             anchors.fill: parent
-            accent: win.cyan
+            accent: win.crimson
         }
     }
 

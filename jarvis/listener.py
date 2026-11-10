@@ -3,7 +3,7 @@
 sounddevice 로 16kHz 모노 PCM 을 받아 에너지 기반으로 발화를 잘라내고 한국어 텍스트로 변환한다.
 
 인식 엔진 (stt_engine):
-- auto  : 호출어 대기 중에는 오프라인 인식(local_stt.py)으로만 듣고, '자비스'가 들렸을 때만
+- auto  : 호출어 대기 중에는 오프라인 인식(local_stt.py)으로만 듣고, '울트론'이 들렸을 때만
           Google 웹 음성 API 로 정확하게 다시 받아 적는다 → 주변 대화는 PC 밖으로 나가지 않음.
           대화 중(호출 직후·이어 말하기·승인 대기)에는 Google 우선. 인터넷이 끊기면 오프라인 인식으로 대체.
 - local : 항상 오프라인 인식 (인터넷 불필요, 소리가 밖으로 나가지 않음)
@@ -173,7 +173,7 @@ class Listener:
         self.local_stt: LocalSTT | None = None
         self.wake_needed: Callable[[], bool] = lambda: False   # 지금 호출어 없이는 명령을 받지 않는 상태인가
         self.has_wake: Callable[[str], bool] = lambda t: True   # 텍스트에 호출어가 있는가
-        self.wake_prefix = "자비스"
+        self.wake_prefix = "울트론"
         self.last_engine = ""         # 마지막 발화를 인식한 엔진 (HUD 표시·로그용)
         # Google 이 준 인식 후보들 중 하나를 고른다 (기본: 첫 번째). app 이 '알아들을 수 있는 명령'을 고르게 바꾼다
         self.pick: Callable[[list[str]], str] = lambda alts: alts[0]
@@ -460,7 +460,7 @@ class Listener:
             gt, online = self._google(rec, sr, pcm, ai_heard)
             if gt:
                 self.last_engine = "google"
-                # 로컬은 '자비스'를 들었는데 Google 이 다르게 적었으면 호출어를 붙여 준다
+                # 로컬은 '울트론'을 들었는데 Google 이 다르게 적었으면 호출어를 붙여 준다
                 return gt if self.has_wake(gt) else f"{self.wake_prefix} {gt}"
             self.last_engine = "local"
             return lt

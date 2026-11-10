@@ -5,7 +5,7 @@ import QtQuick.Shapes
 
 Item {
     id: m
-    property color color: "#3ee6ff"
+    property color color: "#ff2d3f"
     property real level: 0           // 0..1
     property real radius: 110
     property real startAngle: 130    // 아래쪽 끝 (도, 3시 방향에서 시계 방향)

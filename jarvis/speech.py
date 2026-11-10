@@ -47,23 +47,23 @@ def clean_for_speech(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def synthesize(text: str, voice: str, rate: str) -> tuple[bytes, str]:
+def synthesize(text: str, voice: str, rate: str, pitch: str = "+0Hz") -> tuple[bytes, str]:
     """(오디오 바이트, 확장자) 반환. 워커 스레드에서 호출."""
     text = clean_for_speech(text)
     if not text:
         return b"", ".mp3"
     try:
-        return _edge_tts(text, voice, rate), ".mp3"
+        return _edge_tts(text, voice, rate, pitch), ".mp3"
     except Exception as e:
         log.warning("edge-tts 실패, SAPI로 대체: %s", e)
     return _sapi(text), ".wav"
 
 
-def _edge_tts(text: str, voice: str, rate: str) -> bytes:
+def _edge_tts(text: str, voice: str, rate: str, pitch: str = "+0Hz") -> bytes:
     import edge_tts
 
     async def run() -> bytes:
-        comm = edge_tts.Communicate(text, voice, rate=rate)
+        comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch or "+0Hz")
         buf = bytearray()
         async for chunk in comm.stream():
             if chunk.get("type") == "audio":
@@ -202,12 +202,32 @@ def pause_after(text: str) -> float:
     return 0.22
 
 
-def render(text: str, voice: str, rate: str) -> np.ndarray:
-    """텍스트 → 재생할 PCM (앞뒤 무음 정리 완료). 워커 스레드에서 호출."""
-    data, suffix = synthesize(text, voice, rate)
+def robotize(a: np.ndarray, amount: float) -> np.ndarray:
+    """울트론 기계음: 짧은 금속성 울림(지연 메아리) + 약한 링 변조 + 살짝 거친 포화.
+    amount 0 이면 원음 그대로. 음량(최대값)은 원음과 같게 맞춘다."""
+    if amount <= 0 or a.size < 2048:
+        return a
+    x = a.astype(np.float32)
+    peak = float(np.max(np.abs(x))) or 1.0
+    y = x.copy()
+    for delay_ms, gain in ((4.3, 0.42), (9.1, 0.26), (15.7, 0.14)):   # 금속 통 안에서 울리는 듯한 짧은 메아리
+        d = int(SR * delay_ms / 1000)
+        y[d:] += gain * amount * x[:-d]
+    t = np.arange(x.size, dtype=np.float32) / SR
+    y += 0.22 * amount * x * np.sin(2 * np.pi * 60.0 * t).astype(np.float32)   # 기계 특유의 웅웅거림
+    y *= peak / (float(np.max(np.abs(y))) or 1.0)
+    drive = 1.0 + 1.2 * amount
+    y = np.tanh(drive * y) / np.tanh(drive)
+    y *= peak / (float(np.max(np.abs(y))) or 1.0)
+    return y.astype(np.float32)
+
+
+def render(text: str, voice: str, rate: str, pitch: str = "+0Hz", fx: float = 0.0) -> np.ndarray:
+    """텍스트 → 재생할 PCM (앞뒤 무음 정리 + 기계음 효과). 워커 스레드에서 호출."""
+    data, suffix = synthesize(text, voice, rate, pitch)
     if not data:
         return np.zeros(0, np.float32)
-    return trim_silence(decode(data, suffix))
+    return robotize(trim_silence(decode(data, suffix)), fx)
 
 
 class Speaker(QObject):
@@ -378,7 +398,7 @@ class TTS(QObject):
     def __init__(self, speaker: Speaker, voice_getter, parent=None) -> None:
         super().__init__(parent)
         self.speaker = speaker
-        self.voice_getter = voice_getter   # () -> (voice, rate)
+        self.voice_getter = voice_getter   # () -> (voice, rate, pitch, fx)
         self._ready.connect(self.speaker.play)
         self._chunk.connect(self._on_chunk)
         self._chunks_done.connect(self._on_chunks_done)
@@ -393,7 +413,7 @@ class TTS(QObject):
         self.speaker.begin_stream()
         q: queue.Queue = queue.Queue()
         self._sq = q
-        voice, rate = self.voice_getter()
+        opts = self.voice_getter()
 
         def work():
             while gen == self._gen:
@@ -405,7 +425,7 @@ class TTS(QObject):
                     self._chunks_done.emit(gen)
                     return
                 try:
-                    pcm = render(text, voice, rate)
+                    pcm = render(text, *opts)
                 except Exception as e:
                     log.exception("TTS 실패: %s", e)
                     continue
@@ -441,11 +461,11 @@ class TTS(QObject):
         self._sq = None
         self._gen += 1
         gen = self._gen
-        voice, rate = self.voice_getter()
+        opts = self.voice_getter()
 
         def work():
             try:
-                pcm = render(text, voice, rate)
+                pcm = render(text, *opts)
             except Exception as e:
                 log.exception("TTS 실패: %s", e)
                 pcm = np.zeros(0, np.float32)

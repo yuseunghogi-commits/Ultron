@@ -19,7 +19,7 @@ _TAIL = re.compile(
 _PUNCT = re.compile(r"[\s.!?~,]+$")
 # 여러 동작이 섞인 문장 → Claude
 _COMPOUND = re.compile(r"(하고\s|그리고|다음에|한\s*뒤|한\s*후|해서\s|면서|열고|켜고|틀고|닫고|끄고|찾아서|보고\s|뒤에\s*\S|후에\s*\S|랑\s.*(열|켜|틀))")
-_NOT_APP = re.compile(r"(컴퓨터|피씨|pc|시스템|자비스|너|화면|소리|음악|노래|영상|불|타이머|알람|파일|폴더|창|전원)$", re.I)
+_NOT_APP = re.compile(r"(컴퓨터|피씨|pc|시스템|울트론|자비스|너|화면|소리|음악|노래|영상|불|타이머|알람|파일|폴더|창|전원)$", re.I)
 _SITES = {"구글": "google", "네이버": "naver", "유튜브": "youtube", "지도": "maps"}
 
 # 이름으로 바로 여는 웹사이트 (기록: '핀터레스트 들어가줘', 'ebs 들어가줘', '리로스쿨' 이 매번 Claude 로 넘어가 3~8초씩 걸림)
@@ -162,7 +162,7 @@ def normalize(text: str) -> str:
     t = _PUNCT.sub("", dedupe(text))
     for pat, rep in _STT_FIX:
         t = pat.sub(rep, t)
-    t = re.sub(r"^(자비스|쟈비스|jarvis)\s*(야|아)?[,\s]*", "", t, flags=re.I)
+    t = re.sub(r"^(울트론|울트롱|얼트론|올트론|ultron|자비스|쟈비스|jarvis)\s*(야|아)?[,\s]*", "", t, flags=re.I)
     for _ in range(2):
         t = _PUNCT.sub("", _TAIL.sub("", t))
     return re.sub(r"\s+", " ", t).strip()
@@ -369,7 +369,7 @@ class LocalRouter:
             return "잠갔습니다."
         if re.fullmatch(r"(?:스크린\s*샷|화면\s*캡처|캡처)\s*(?:찍어|저장|해)?", c):
             out, err = self._run("save_screenshot", {})
-            return out if err else "스크린샷을 사진 폴더의 Jarvis에 저장했습니다."
+            return out if err else "스크린샷을 사진 폴더의 Ultron에 저장했습니다."
         if re.fullmatch(r"(?:컴퓨터|시스템|피씨|pc)\s*(?:상태|성능)\s*(?:어때|알려|확인|체크)?|(?:cpu|씨피유|메모리|램)\s*(?:사용량|상태)?\s*(?:어때|알려|확인|몇)?", lc):
             out, err = self._run("system_status", {})
             return out if err else self._status_speech(out)

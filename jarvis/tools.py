@@ -1,4 +1,4 @@
-"""자비스의 '손': PC 제어 도구 모음과 Claude 용 도구 스키마."""
+"""울트론의 '손': PC 제어 도구 모음과 Claude 용 도구 스키마."""
 from __future__ import annotations
 
 import base64
@@ -36,7 +36,7 @@ class ToolError(Exception):
 class Hooks:
     confirm: Callable[[str, str], bool]          # (제목, 상세) -> 승인 여부 (블로킹)
     schedule_timer: Callable[[int, str], None]   # (초, 라벨)
-    hud_hwnd: Callable[[], "int | list[int]"]   # 스크린샷에서 뺄 자비스 창 (하나 또는 여러 개)
+    hud_hwnd: Callable[[], "int | list[int]"]   # 스크린샷에서 뺄 울트론 창 (하나 또는 여러 개)
     notify: Callable[[str], None] = lambda msg: None   # 백그라운드 작업이 사용자에게 말로 알림
     cancel_timers: Callable[[], int] = lambda: 0       # 돌고 있는 타이머 모두 취소 → 취소한 개수
     point_at: Callable[[int, int, int, int, str], bool] = lambda x, y, w, h, label: False  # 액티브 모드 화면에 위치 표시
@@ -215,7 +215,7 @@ class PCTools:
             tool("brightness", "Get or change the display brightness (laptop screens; external monitors may not support it).",
                  {"action": {"type": "string", "enum": ["get", "set", "up", "down"]},
                   "level": {"type": "integer", "description": "0-100 for set; step for up/down (default 20)"}}, ["action"]),
-            tool("save_screenshot", "Save a screenshot of the screen to the Pictures\\Jarvis folder."),
+            tool("save_screenshot", "Save a screenshot of the screen to the Pictures\\Ultron folder."),
             tool("system_status", "Get CPU, memory, disk, battery, network and top processes."),
             tool("open_folder", "Open a folder in File Explorer. Accepts known names (바탕화면, 문서, 다운로드, 사진, 음악, 동영상, 홈) or an absolute path.",
                  {"target": s}, ["target"]),
@@ -229,7 +229,7 @@ class PCTools:
                  ["command", "reason"]),
             tool("power", "Lock, sleep, restart or shut down the PC (sleep/restart/shutdown ask the user first). cancel_shutdown aborts a pending shutdown.",
                  {"action": {"type": "string", "enum": ["lock", "sleep", "restart", "shutdown", "cancel_shutdown"]}}, ["action"]),
-            tool("set_timer", "Set a timer/reminder. Jarvis will speak the label when it fires.",
+            tool("set_timer", "Set a timer/reminder. Ultron will speak the label when it fires.",
                  {"seconds": {"type": "integer"}, "label": s}, ["seconds", "label"]),
             tool("cancel_timer", "Cancel all running timers/reminders."),
             tool("end_process", "Force-quit a program that is slowing the PC (all its processes), by app name or exe name "
@@ -493,7 +493,7 @@ class PCTools:
     # --- 화면 ---
     def _grab(self):
         from PIL import ImageGrab
-        hwnds = self.hooks.hud_hwnd()   # 자비스 HUD 창들 (작은 HUD + 액티브 모드 화면)
+        hwnds = self.hooks.hud_hwnd()   # 울트론 HUD 창들 (작은 HUD + 액티브 모드 화면)
         hwnds = hwnds if isinstance(hwnds, (list, tuple)) else [hwnds]
         for h in hwnds:
             winutil.set_capture_excluded(h, True)
@@ -598,7 +598,7 @@ class PCTools:
 
     def t_save_screenshot(self) -> str:
         pics = winutil.known_folder("사진") or Path.home() / "Pictures"
-        folder = pics / "Jarvis"
+        folder = pics / "Ultron"
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"screenshot_{dt.datetime.now():%Y%m%d_%H%M%S}.png"
         self._grab().save(path)
@@ -864,7 +864,7 @@ class PCTools:
         return f"타이머 {n}개를 취소했습니다." if n else "돌고 있는 타이머가 없습니다."
 
     def t_end_process(self, name: str) -> str:
-        """프로그램의 프로세스를 모두 강제 종료 (Windows 핵심 프로세스 · 자비스 자신은 제외)."""
+        """프로그램의 프로세스를 모두 강제 종료 (Windows 핵심 프로세스 · 울트론 자신은 제외)."""
         import psutil
         from . import hud_feed
         q = _norm(name)

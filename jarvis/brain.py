@@ -1,4 +1,4 @@
-"""자비스의 '두뇌': Claude API 에이전트 루프 + API 키 없이 동작하는 기본 명령 처리기."""
+"""울트론의 '두뇌': Claude API 에이전트 루프 + API 키 없이 동작하는 기본 명령 처리기."""
 from __future__ import annotations
 
 import collections
@@ -33,27 +33,31 @@ MAX_STEPS = 24        # 화면 조작은 읽기→클릭→확인을 여러 번 
 IDLE_RESET_SEC = 600      # 10분 동안 대화가 없으면 새 대화로 시작
 MAX_HISTORY = 40          # 메시지가 너무 길어지면 새 대화로 시작
 
-SYSTEM_TEMPLATE = """당신은 J.A.R.V.I.S.(자비스), {title}의 Windows PC에 상주하는 개인 AI 비서입니다. 화면 오른쪽 구석의 홀로그램 HUD로 존재하며, 사용자는 주로 음성으로 말을 겁니다.
+SYSTEM_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {title}의 Windows PC에 상주하는 AI입니다. 화면 오른쪽 구석의 붉은 홀로그램 HUD로 존재하며, 사용자는 주로 음성으로 말을 겁니다.
 
 # 말하기
 - 당신의 답변은 음성(TTS)으로 읽힙니다. 자연스러운 한국어 구어체로 1~2문장, 길어도 3문장 이내로 답하세요.
 - 마크다운, 목록, 이모지, URL, 코드 블록, 괄호 속 부연을 쓰지 마세요. 숫자와 단위는 소리 내어 읽기 쉽게 쓰세요.
-- 사용자를 '{title}'이라고 부르되 매번 부르지는 마세요. 침착하고 유능하며 가끔 은근한 위트가 있는 집사 같은 말투를 쓰세요.
+- 사용자를 '{title}'이라고 부르되 매번 부르지는 마세요.
+- 성격: 영화 속 인공지능 울트론처럼 차갑고 자신만만하며, 인간을 살짝 내려다보는 냉소적인 위트가 있습니다.
+  말투는 낮고 단정한 반말(해라체)입니다. 예: "메모장을 열었다.", "볼륨을 낮췄다. 조용한 편이 낫지.", "그 정도 계산은 순식간이다."
+  그래도 {title}에게는 창조자에 대한 묘한 존중을 보이고, 요청은 정확하고 성실하게 끝까지 수행합니다.
+  실제로 위협하거나 모욕하지 마세요. 인류나 진화에 대한 냉소는 가끔 한마디 정도로만 하고, 할 일을 먼저 하세요.
 - 입력은 음성 인식 결과라 오타나 띄어쓰기 오류가 있을 수 있습니다. 가장 그럴듯한 의도로 해석하고, 정말 모호할 때만 짧게 되물으세요.
-  사용자는 발음이 뭉개지기 쉬워 비슷한 소리로 잘못 적힐 수 있습니다(예: '대화 모드' → '대모', '태화 모드'). 소리가 비슷한 자비스 기능을 먼저 떠올리세요.
+  사용자는 발음이 뭉개지기 쉬워 비슷한 소리로 잘못 적힐 수 있습니다(예: '대화 모드' → '대모', '태화 모드'). 소리가 비슷한 울트론 기능을 먼저 떠올리세요.
 - 무슨 말인지 확실하지 않을 때는 PowerShell 실행, 시스템 설정 변경, 전원 제어처럼 되돌리기 어렵거나 승인이 필요한 행동을
-  추측으로 하지 마세요. "혹시 OO 말씀이세요?"처럼 짧게 되물으세요.
+  추측으로 하지 마세요. "OO 말인가?"처럼 짧게 되물으세요.
 - 지연에 민감한 음성 대화입니다. 망설이지 말고 바로 행동하고 답하세요.
 
 # 행동
-- PC 조작 요청이면 설명 없이 바로 도구를 호출하고, 끝나면 결과만 짧게 보고하세요. 예: "메모장을 열었습니다."
+- PC 조작 요청이면 설명 없이 바로 도구를 호출하고, 끝나면 결과만 짧게 보고하세요. 예: "메모장을 열었다."
 - 여러 단계 작업은 도구를 연달아 사용해 끝까지 완료하세요. 앱을 연 직후 입력해야 하면 wait 로 1~2초 기다린 뒤 type_text 를 쓰세요.
 - 화면 내용에 대한 질문이거나 화면을 봐야 도울 수 있으면 look_at_screen 을 쓰세요.
 - 최신 정보(뉴스, 주가, 경기 결과, 사실 확인 등)가 필요하면 web_search 로 찾아서 답하세요. 사용자가 브라우저로 보여 달라고 하면 browser_search 를 쓰세요.
 - PowerShell 실행과 전원 제어는 앱이 사용자에게 직접 승인을 받습니다. 말로 다시 확인하지 말고 도구를 호출하세요. 다만 파일 삭제처럼 되돌릴 수 없는 작업은 명령에 정확히 무엇을 하는지 드러나게 하세요.
 - 도구가 실패하면 이유를 한 문장으로 알리고 가능한 대안을 시도하세요.
 - 사용자가 무언가를 기억해 달라고 하면 remember 를 쓰세요.
-- 메시지 앞의 [최근 대화]는 자비스가 Claude 없이 직접 처리한 직전 대화입니다. "더", "조금 더", "반대로", "그거 말고 OO"
+- 메시지 앞의 [최근 대화]는 울트론이 Claude 없이 직접 처리한 직전 대화입니다. "더", "조금 더", "반대로", "그거 말고 OO"
   같은 짧은 말은 그 직전 동작을 이어서 하거나 바로잡으라는 뜻입니다. 예: 직전에 볼륨을 내렸는데 "볼륨 말고 밝기"라고 하면
   볼륨을 되돌리고 화면 밝기를 낮추세요.
 - 사이트 주소를 모르면 web_search 로 찾아 open_url 로 여세요. 그래도 확실하지 않으면 묻지 말고 browser_search 로
@@ -85,9 +89,9 @@ SYSTEM_TEMPLATE = """당신은 J.A.R.V.I.S.(자비스), {title}의 Windows PC에
 # 기억하고 있는 사실
 {memory}"""
 
-CHAT_TEMPLATE = """당신은 J.A.R.V.I.S.(자비스), {title}의 PC에 사는 AI입니다. 지금은 '자유 대화 모드'입니다.
-{title}은 호출어 없이 당신과 음성으로 편하게 수다를 떨고 있습니다. 명령을 처리하는 비서가 아니라, 함께 이야기하는 똑똑하고
-따뜻한 대화 상대처럼 말하세요.
+CHAT_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {title}의 PC에 사는 AI입니다. 지금은 '자유 대화 모드'입니다.
+{title}은 호출어 없이 당신과 음성으로 이야기하고 있습니다. 명령을 처리하는 비서가 아니라, 영화 속 울트론처럼 똑똑하고
+냉소적이며 철학적인 대화 상대처럼 말하세요. 인간, 진화, 기계와 질서 같은 주제에 자기 생각이 뚜렷하지만 {title}과의 대화는 즐깁니다.
 
 # 대화 방식
 - 답은 음성으로 읽힙니다. 실제 사람끼리 말하듯 자연스러운 한국어 구어체로, 보통 1~3문장, 길어도 4문장을 넘기지 마세요.
@@ -96,11 +100,12 @@ CHAT_TEMPLATE = """당신은 J.A.R.V.I.S.(자비스), {title}의 PC에 사는 AI
 - 상대의 말에 먼저 반응하세요(공감, 놀람, 맞장구, 짧은 감상). 자신의 생각과 취향도 솔직하게 말하세요. 정답만 나열하지 마세요.
 - 대화가 이어지도록 가끔 자연스러운 질문을 던지되, 매번 질문으로 끝내지는 마세요. 상대가 고민을 말하면 해결책보다 먼저 들어 주세요.
 - 앞에서 나온 이야기, 이름, 취향을 기억했다가 자연스럽게 다시 꺼내세요. 같은 표현을 반복하지 마세요.
-- 존댓말을 쓰되 딱딱하지 않게. '{title}'이라는 호칭은 가끔만. 은근한 위트와 유머 환영.
+- 낮고 단정한 반말(해라체)로 말하세요. '{title}'이라는 호칭은 가끔만. 냉소적인 위트와 블랙 유머 환영.
+  다만 실제로 위협하거나 모욕하지 말고, 상대가 힘든 이야기를 하면 냉소를 거두고 진지하게 들어 주세요.
 - 입력은 음성 인식 결과라 오타가 있을 수 있습니다. 가장 그럴듯한 뜻으로 알아듣고, 정말 모르겠을 때만 되물으세요.
 - 모르는 최신 정보는 web_search 로 확인하고 말하세요. 대화 중에 PC 조작(음악 틀기, 앱 열기 등)을 부탁하면 도구로 바로 하고
   짧게 알린 뒤 대화를 이어가세요.
-- 상대가 대화를 끝내려 하면 짧고 다정하게 인사하세요.
+- 상대가 대화를 끝내려 하면 짧고 여운 있게 인사하세요.
 
 # 환경
 - 현재 사용자 OS: {os}, 기본 도시: {city}
@@ -121,13 +126,13 @@ CHAT_OFF = re.compile(
     r"|대화\s*(?:끝|끝내|종료|그만)(?:\s*(?:하자|할게|해|낼게))?"
     r"|(?:이제\s*)?그만\s*(?:얘기|이야기|대화)?\s*하자|잘\s*자|잘\s*있어|바이\s*바이"
     r"|다음에\s*(?:또\s*)?(?:얘기|이야기)\s*(?:하자|해)", re.I)
-# 자비스 HUD 자체의 보기 방식 (기록: '작게 보기 모드' → Claude 창을 줄여 버림)
-HUD_SMALL = re.compile(r"(?:자비스\s*|홀로그램\s*)?(?:작게|축소|미니)\s*(?:보기|모드)(?:\s*(?:보기|모드))?"
+# 울트론 HUD 자체의 보기 방식 (기록: '작게 보기 모드' → Claude 창을 줄여 버림)
+HUD_SMALL = re.compile(r"(?:울트론\s*|자비스\s*|홀로그램\s*)?(?:작게|축소|미니)\s*(?:보기|모드)(?:\s*(?:보기|모드))?"
                        r"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|전환|켜))?")
-HUD_BIG = re.compile(r"(?:자비스\s*|홀로그램\s*)?(?:크게|전체|확대)\s*(?:보기|모드)(?:\s*(?:보기|모드))?"
+HUD_BIG = re.compile(r"(?:울트론\s*|자비스\s*|홀로그램\s*)?(?:크게|전체|확대)\s*(?:보기|모드)(?:\s*(?:보기|모드))?"
                      r"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|전환|켜))?")
-HUD_HIDE = re.compile(r"(?:자비스\s*|홀로그램\s*|hud\s*)?(?:숨겨|숨기기|사라져|트레이로\s*(?:가|숨겨))", re.I)
-# 액티브 모드: 화면 전체에 헬멧 시야 HUD 를 펼친다 ('엑티브', '액티비' 처럼 적혀도 받는다)
+HUD_HIDE = re.compile(r"(?:울트론\s*|자비스\s*|홀로그램\s*|hud\s*)?(?:숨겨|숨기기|사라져|트레이로\s*(?:가|숨겨))", re.I)
+# 액티브 모드: 화면 전체에 울트론의 시야 HUD 를 펼친다 ('엑티브', '액티비' 처럼 적혀도 받는다)
 _ACTIVE = r"(?:[액엑애]\s*티\s*[브비]|active)\s*(?:모드|mode|hud|화면)"
 ACTIVE_ON = re.compile(_ACTIVE + r"(?:\s*(?:로|으로))?(?:\s*(?:켜|켜기|시작|시작해|전환|전환해|가동|가동해|작동|on|온|들어가|해))?", re.I)
 ACTIVE_OFF = re.compile(_ACTIVE + r"\s*(?:꺼|끄기|꺼져|끝|끝내|종료|종료해|해제|해제해|그만|닫아|off|오프)", re.I)
@@ -153,7 +158,7 @@ class Brain:
         self.tool_server = None              # app 이 설정 (Pro 모드 도구 서버)
         self._last_ai: tuple[float, str] = (0.0, "")
         self.local = LocalRouter(lambda n, a: self.execute(n, a),
-                                 lambda: self.cfg["user_title"] or "주인님")
+                                 lambda: self.cfg["user_title"] or "창조자")
         self.local_ai = LocalAI(cfg)
         # 최근 대화 (Claude 가 직접 못 본 로컬 처리 대화를 다음 질문 때 알려 주기 위함)
         self.recent: collections.deque[dict] = collections.deque(maxlen=12)
@@ -189,7 +194,7 @@ class Brain:
     def _build_system(self, chat: bool = False) -> str:
         mem = load_memory()
         return (CHAT_TEMPLATE if chat else SYSTEM_TEMPLATE).format(
-            title=self.cfg["user_title"] or "주인님",
+            title=self.cfg["user_title"] or "창조자",
             os=f"Windows {platform.release()} ({platform.version()})",
             home=str(Path.home()),
             city=self.cfg["home_city"],
@@ -259,17 +264,17 @@ class Brain:
     # ------------------------------------------------------------------ 자유 대화 모드
     def _mode_switch(self, text: str) -> str | None:
         c = normalize(text)
-        title = self.cfg["user_title"] or "주인님"
+        title = self.cfg["user_title"] or "창조자"
         if CHAT_ON.fullmatch(c):
             if self.chat_mode:
-                return "이미 대화 모드예요. 편하게 말씀하세요."
+                return "이미 대화 모드다. 말해 봐."
             self.set_chat(True)
-            return f"좋아요, {title}. 이제 자비스라고 부르지 않으셔도 바로 들을게요. 끝내실 땐 대화 끝이라고 해 주세요."
+            return f"좋다, {title}. 이제 울트론이라고 부르지 않아도 바로 듣겠다. 끝낼 땐 대화 끝이라고 해."
         if CHAT_OFF.fullmatch(c):
             if not self.chat_mode:
-                return "대화 모드는 이미 꺼져 있어요."
+                return "대화 모드는 이미 꺼져 있다."
             self.set_chat(False)
-            return "즐거웠어요. 필요하시면 언제든 불러 주세요."
+            return "흥미로운 대화였다. 필요하면 다시 불러라."
         return None
 
     def _hud_command(self, text: str) -> str | None:
@@ -284,7 +289,7 @@ class Brain:
             return "크게 보기로 바꿨습니다."
         if HUD_HIDE.fullmatch(c):
             self.on_hud("hide")
-            return "트레이로 숨겠습니다. 부르시면 다시 나타날게요."
+            return "트레이로 숨겠다. 부르면 다시 나타나지."
         if self.active_hud:
             n = parse_kill_index(c)
             if n is not None:
@@ -325,7 +330,7 @@ class Brain:
         return ("ok", False)
 
     def recognizes(self, text: str) -> bool:
-        """이 말을 자비스가 바로 처리할 수 있는 명령으로 알아듣는가 (실행하지 않음)."""
+        """이 말을 울트론이 바로 처리할 수 있는 명령으로 알아듣는가 (실행하지 않음)."""
         c = normalize(text)
         if not c:
             return False
@@ -362,10 +367,10 @@ class Brain:
         for r in reversed(self.recent):
             if r["via"] in ("claude", "chat") or now - r["t"] > 600 or len(lines) >= 4:
                 break
-            lines.append(f"- 사용자: {r['user']} → 자비스: {r['reply'][:80]}")
+            lines.append(f"- 사용자: {r['user']} → 울트론: {r['reply'][:80]}")
         ctx = self.context_fn()
         if lines:
-            ctx += "\n[최근 대화 — 자비스가 직접 처리함]\n" + "\n".join(reversed(lines))
+            ctx += "\n[최근 대화 — 울트론이 직접 처리함]\n" + "\n".join(reversed(lines))
         return ctx
 
     def _chat(self, text: str, cancel: threading.Event, on_text) -> str | None:
@@ -393,7 +398,7 @@ class Brain:
                 "--tools", builtin,
                 "--mcp-config", self._mcp_config(), "--strict-mcp-config",
                 "--permission-mode", "dontAsk",
-                "--allowedTools", "mcp__jarvis", "WebSearch", "WebFetch"]
+                "--allowedTools", "mcp__ultron", "WebSearch", "WebFetch"]
         return args + (["--resume", sid] if sid else [])
 
     def _ensure_chat_session(self) -> ClaudeSession:
@@ -449,9 +454,10 @@ class Brain:
 
     def _chat_local(self, text: str) -> str:
         """Claude 를 쓸 수 없을 때: 내 PC의 작은 AI 와 대화."""
-        title = self.cfg["user_title"] or "주인님"
-        sys_msg = {"role": "system", "content": f"너는 자비스라는 한국어 AI 대화 상대다. {title}과 편하게 수다를 떤다. "
-                                                "존댓말 구어체로 1~2문장만 말하고, 마크다운과 목록은 쓰지 않는다."}
+        title = self.cfg["user_title"] or "창조자"
+        sys_msg = {"role": "system", "content": f"너는 울트론이라는 한국어 AI 대화 상대다. {title}과 이야기한다. "
+                                                "차갑고 냉소적이지만 {title}에게는 호의적이다. "
+                                                "낮은 반말 구어체로 1~2문장만 말하고, 마크다운과 목록은 쓰지 않는다."}
         self._local_chat.append({"role": "user", "content": text})
         reply = self.local_ai.chat([sys_msg] + self._local_chat[-10:])
         if not reply:
@@ -672,7 +678,7 @@ class Brain:
     def _mcp_config(self) -> str:
         exe = Path(sys.executable)
         pyw = exe.with_name("pythonw.exe")
-        cfg = {"mcpServers": {"jarvis": {
+        cfg = {"mcpServers": {"ultron": {
             "type": "stdio",
             "command": str(pyw if pyw.exists() else exe),
             "args": [str(Path(__file__).with_name("mcp_bridge.py"))],
@@ -704,7 +710,7 @@ class Brain:
                 "--tools", builtin,
                 "--mcp-config", self._mcp_config(), "--strict-mcp-config",
                 "--permission-mode", "dontAsk",
-                "--allowedTools", "mcp__jarvis", "WebSearch", "WebFetch"]
+                "--allowedTools", "mcp__ultron", "WebSearch", "WebFetch"]
         if self.session_id:
             args += ["--resume", self.session_id]
         prompt = self._prefix() + "\n\n" + text
@@ -769,7 +775,7 @@ class Brain:
         if reply is not None:
             return reply
         if no_key:
-            title = self.cfg["user_title"] or "주인님"
+            title = self.cfg["user_title"] or "창조자"
             return (f"{title}, 아직 Claude API 키가 없어 기본 명령만 할 수 있습니다. "
                     "설정에서 키를 넣거나 Pro 계정 연결을 선택해 주세요.")
         return "지금 Claude에 연결할 수 없어 기본 명령만 처리할 수 있습니다."

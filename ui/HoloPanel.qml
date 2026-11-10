@@ -4,7 +4,7 @@ import QtQuick.Shapes
 
 Item {
     id: p
-    property color accent: "#3ee6ff"
+    property color accent: "#ff2d3f"
     property string title: ""
     property string tag: ""
     property real fillAlpha: 0.66
@@ -22,7 +22,7 @@ Item {
         preferredRendererType: Shape.CurveRenderer
         ShapePath {
             strokeColor: "transparent"
-            fillColor: Qt.rgba(0.012, 0.055, 0.085, p.fillAlpha)
+            fillColor: Qt.rgba(0.085, 0.012, 0.018, p.fillAlpha)
             PathPolyline { path: p.pts }
         }
         ShapePath {

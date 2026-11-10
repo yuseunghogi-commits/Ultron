@@ -1,8 +1,8 @@
 """Claude Code 가 실행하는 MCP 서버(stdio).
 
-자비스 앱 안의 도구 서버(toolserver.py)로 요청을 그대로 전달한다.
-도구 실행·승인 카드·작업 로그는 모두 자비스 앱에서 처리된다.
-이 파일은 자비스 패키지를 import 하지 않는다 (별도 프로세스, 표준 라이브러리만 사용).
+울트론 앱 안의 도구 서버(toolserver.py)로 요청을 그대로 전달한다.
+도구 실행·승인 카드·작업 로그는 모두 울트론 앱에서 처리된다.
+이 파일은 jarvis 패키지를 import 하지 않는다 (별도 프로세스, 표준 라이브러리만 사용).
 """
 import json
 import os
@@ -36,7 +36,7 @@ def handle(req: dict):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "jarvis", "version": "1.0"}}
+                "serverInfo": {"name": "ultron", "version": "1.0"}}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -45,7 +45,7 @@ def handle(req: dict):
         try:
             return call_app("/call", {"name": params.get("name"), "arguments": params.get("arguments") or {}})
         except Exception as e:
-            return {"content": [{"type": "text", "text": f"자비스 앱에 연결할 수 없습니다: {e}"}], "isError": True}
+            return {"content": [{"type": "text", "text": f"울트론 앱에 연결할 수 없습니다: {e}"}], "isError": True}
     raise KeyError(method)
 
 

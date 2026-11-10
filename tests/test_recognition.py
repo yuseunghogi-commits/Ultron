@@ -54,14 +54,14 @@ def test_chat_not_triggered(text):
 
 def test_chat_off_when_already_off_is_local():
     b = brain()
-    assert b._mode_switch("대화 모드 끝") == "대화 모드는 이미 꺼져 있어요."
+    assert b._mode_switch("대화 모드 끝") == "대화 모드는 이미 꺼져 있다."
     assert not b.chat_mode
 
 
 # ---- HUD 보기 방식 ----
 @pytest.mark.parametrize("text,action", [
     ("작게 보기 모드", "small"), ("작게 보기로 바꿔 줘", "small"), ("축소 모드", "small"),
-    ("크게 보기", "big"), ("전체 보기로 해 줘", "big"), ("자비스 숨겨", "hide"),
+    ("크게 보기", "big"), ("전체 보기로 해 줘", "big"), ("울트론 숨겨", "hide"),
 ])
 def test_hud_commands(text, action):
     b = brain()

@@ -217,12 +217,12 @@ def test_loose_wake_word_matches_noisy_transcripts():
     src = pathlib.Path(__file__).resolve().parent.parent.joinpath("jarvis", "app.py").read_text(encoding="utf-8")
     body = src.split("_WAKE_LOOSE = re.compile(", 1)[1].split(", re.I)", 1)[0]
     loose = re.compile(eval("(" + body + ")"), re.I)
-    for t in ("잠비스 크롬 열어줘", "잡비스 그럼 열어줘", "다비스 크롬 열어줘", "비스 크롬 열어 줘", "아미스 크롬 열어 줘", "재비스",
-              # 실제 녹음(교실)에서 나온 모양
-              "자비크롬 열어줘", "잡비크롬 열어줘", "잡비 스크롬 열어줘", "사비 스크롬 열어줘", "미스크롬 열어줘", "사비크롬 열어"):
+    for t in ("울트롱 크롬 열어줘", "얼트론 볼륨 올려 줘", "올트론 크롬 열어줘", "울뜨론 크롬 열어 줘", "울터론 메모장 열어",
+              # 끝소리가 사라지거나(울트로) 첫 음절이 소음에 묻힌(트론) 모양
+              "울트런 노래 틀어 줘", "울트로 크롬 열어줘", "트론 크롬 열어 줘", "울트론아 몇 시야", "ultron open chrome"):
         assert loose.search(t), t
-    for t in ("크롬 열어 줘", "오늘 날씨 어때", "서비스 센터 알려 줘", "버스 시간 알려 줘", "그 비스 뭐야",
-              "크롬에서 자비 검색해 줘", "내일 회사비 정산"):
+    for t in ("크롬 열어 줘", "오늘 날씨 어때", "울트라 마라톤 검색해 줘", "트로피 사진 보여 줘", "상을 트로피로 받았어",
+              "울트로맨 틀어 줘", "버스 시간 알려 줘", "트럭 사진 찾아 줘", "자비스 크롬 열어 줘"):
         assert not loose.search(t), t
 
 

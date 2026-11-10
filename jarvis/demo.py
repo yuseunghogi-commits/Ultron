@@ -32,12 +32,12 @@ def run_demo(core, args) -> None:
             from PySide6.QtCore import QMetaObject, QObject
             obj = core.win.findChild(QObject, "settings")
             QMetaObject.invokeMethod(obj, "show")
-            core._set_state("standby", "“자비스”라고 불러주세요")
+            core._set_state("standby", "“울트론”이라고 불러주세요")
         elif state == "confirm":
             b.confirmRequest.emit("democ", "PowerShell 실행", "임시 파일 정리\n\nRemove-Item $env:TEMP\\*.log -Force")
             core._set_state("speaking")
         else:
-            core._set_state(state, {"standby": "“자비스”라고 불러주세요"}.get(state))
+            core._set_state(state, {"standby": "“울트론”이라고 불러주세요"}.get(state))
 
     def wobble():
         t = time.monotonic() - t0

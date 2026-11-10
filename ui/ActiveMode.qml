@@ -1,6 +1,6 @@
-// 액티브 모드 — 화면 전체에 펼쳐지는 헬멧 시야 HUD
-//   켜질 때: 섬광 · 렌즈 플레어 · 충격파가 퍼지고, 조준경과 양쪽 눈 고리가 그려지며,
-//            패널들이 헬멧 곡면을 따라 휘어진 채 가운데에서 날아가 자리를 잡는다. 글자는 암호가 풀리듯 나타난다.
+// 액티브 모드 — 화면 전체에 펼쳐지는 울트론의 시야 HUD (붉은 빛 · 강철 · 잦은 지직거림)
+//   켜질 때: 붉은 섬광 · 렌즈 플레어 · 충격파가 퍼지고, 조준경과 양쪽 눈(치켜 올라간 붉은 눈)이 그려지며,
+//            패널들이 시야 곡면을 따라 휘어진 채 가운데에서 날아가 자리를 잡는다. 글자는 암호가 풀리듯 나타난다.
 //   꺼질 때: 같은 과정을 거꾸로 — 모든 것이 가운데로 빨려 들어가며 사라진다.
 //   마우스 · 키보드 입력은 그대로 아래 창으로 통과한다 (켜 둔 채로 PC 를 쓸 수 있음).
 //   단, 아래 가운데의 채팅 입력 바만은 따로 뜬 창이라 눌러서 글로 명령할 수 있다.
@@ -16,20 +16,21 @@ Window {
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
            | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
     visible: false
-    title: "J.A.R.V.I.S ACTIVE"
+    title: "U.L.T.R.O.N ACTIVE"
 
     readonly property bool on: jarvis.activeMode
     readonly property string st: jarvis.state
-    readonly property color cyan: "#46d9ff"
-    readonly property color hot: "#eafdff"
+    readonly property color crimson: "#ff2d3f"
+    readonly property color hot: "#ffecea"
     readonly property color red: "#ff3b4f"
-    readonly property color shade: Qt.rgba(0.0, 0.03, 0.06, 0.9)     // 글자 테두리 · 받침 (밝은 화면 위에서도 읽히게)
-    property color accent: st === "thinking" ? "#ffb347" : st === "offline" ? "#ff4d61" : st === "listening" ? "#8af4ff" : cyan
+    readonly property color steel: "#cfd6de"
+    readonly property color shade: Qt.rgba(0.06, 0, 0.01, 0.9)     // 글자 테두리 · 받침 (밝은 화면 위에서도 읽히게)
+    property color accent: st === "thinking" ? "#ffb347" : st === "offline" ? "#9aa4b0" : st === "listening" ? "#ff7468" : crimson
     Behavior on accent { ColorAnimation { duration: 450 } }
     readonly property real level: Math.max(jarvis.micLevel, jarvis.voiceLevel)
     readonly property var stats: JSON.parse(jarvis.statsJson)
-    readonly property var stateLabels: ({ boot: "INITIALIZING", standby: "STANDBY", listening: "LISTENING",
-                                          thinking: "PROCESSING", speaking: "RESPONDING", offline: "MIC OFFLINE" })
+    readonly property var stateLabels: ({ boot: "AWAKENING", standby: "WATCHING", listening: "LISTENING",
+                                          thinking: "CALCULATING", speaking: "TRANSMITTING", offline: "MIC OFFLINE" })
     property var cpuHist: []
     readonly property var timers: JSON.parse(jarvis.timersJson)     // 돌고 있는 타이머 (가까운 순)
     readonly property var procs: JSON.parse(jarvis.procsJson)       // 무거운 프로그램 상위 5개
@@ -124,11 +125,11 @@ Window {
     property real flick: 1
     Timer {
         interval: 5000; running: ov.live && ov.p >= 1; repeat: true
-        onTriggered: { interval = 3500 + Math.random() * 6500; flickAnim.restart() }
+        onTriggered: { interval = 2200 + Math.random() * 4300; flickAnim.restart() }
     }
     SequentialAnimation {
         id: flickAnim
-        NumberAnimation { target: ov; property: "flick"; to: 0.45; duration: 35 }
+        NumberAnimation { target: ov; property: "flick"; to: 0.3; duration: 30 }
         NumberAnimation { target: ov; property: "flick"; to: 1; duration: 45 }
         NumberAnimation { target: ov; property: "flick"; to: 0.7; duration: 30 }
         NumberAnimation { target: ov; property: "flick"; to: 1; duration: 90 }
@@ -149,12 +150,12 @@ Window {
     }
 
     // 시스템 기록 (켜질 때는 부팅 순서, 그다음은 흘러가는 데이터)
-    readonly property var bootLines: ["J.A.R.V.I.S  HUD  v4.2", "OPTICAL ARRAY ...... ONLINE", "VOICE CHANNEL ...... LINKED",
-                                      "SENSOR GRID ........ CALIBRATED", "DIAGNOSTICS ........ NOMINAL", "ALL SYSTEMS ........ READY"]
+    readonly property var bootLines: ["U.L.T.R.O.N  CORE  v7.0", "NEURAL MATRIX ...... AWAKE", "VOICE CHANNEL ...... SEIZED",
+                                      "SENSOR GRID ........ ASSIMILATED", "OVERRIDE ........... GRANTED", "ALL SYSTEMS ........ MINE"]
     property int streamBase: 0
     Timer { interval: 420; running: ov.live && ov.p >= 1; repeat: true; onTriggered: ov.streamBase++ }
     function streamLine(k) {
-        const tags = ["SYNC", "UPLINK", "THERMAL", "OPTIC", "AUDIO", "MEMBLK", "CACHE", "GRID", "VECTOR", "SENSOR"]
+        const tags = ["NODE", "UPLINK", "SWARM", "OPTIC", "AUDIO", "CORTEX", "CACHE", "GRID", "VECTOR", "DRONE"]
         const addr = "0x" + Math.floor(rnd(k * 1.7) * 65535).toString(16).toUpperCase().padStart(4, "0")
         if (k % 6 === 0) return addr + "  CPU       " + (stats.cpu || 0).toFixed(1) + " %"
         if (k % 6 === 3) return addr + "  MEMORY    " + (stats.ram || 0).toFixed(1) + " %"
@@ -290,9 +291,29 @@ Window {
             width: er.rr * 0.92; height: width; radius: width / 2; anchors.centerIn: parent
             color: ov.c(0.05 + 0.05 * ov.pulse); border.color: ov.c(0.3); border.width: 1
         }
-        Rectangle { width: er.rr * 0.36; height: 1; anchors.centerIn: parent; color: ov.c(0.7) }
-        Rectangle { width: 1; height: er.rr * 0.36; anchors.centerIn: parent; color: ov.c(0.7) }
-        Rectangle { width: 5 * ov.u; height: width; radius: width / 2; anchors.centerIn: parent; color: ov.hot }
+        // 눈: 화면 가운데 쪽 끝이 아래로 내려간 날카로운 눈 (들을 땐 크게 뜨고, 생각할 땐 가늘게)
+        Shape {
+            id: slit
+            anchors.fill: parent
+            preferredRendererType: Shape.CurveRenderer
+            readonly property real k: er.rr * 0.62
+            readonly property real open: ov.st === "listening" ? 1.25 : ov.st === "thinking" ? 0.55 : ov.st === "offline" ? 0.35 : 1.0
+            readonly property var outline: [[0.46, -0.27], [-0.03, -0.17], [-0.46, 0.06], [-0.37, 0.26], [0.03, 0.09], [0.41, -0.09], [0.46, -0.27]]
+            readonly property var pts: slit.outline.map(q => Qt.point(er.rr + er.dir * q[0] * slit.k, er.rr + q[1] * slit.k))
+            property real shownOpen: open * er.e
+            Behavior on shownOpen { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+            opacity: 0.75 + 0.25 * ov.pulse
+            transform: Scale { origin.x: er.rr; origin.y: er.rr; yScale: Math.max(0.05, slit.shownOpen) }
+            ShapePath {
+                strokeColor: ov.accent; strokeWidth: 1.5; joinStyle: ShapePath.MiterJoin
+                fillGradient: LinearGradient {
+                    x1: er.rr; y1: er.rr - 0.27 * slit.k; x2: er.rr; y2: er.rr + 0.26 * slit.k
+                    GradientStop { position: 0.0; color: ov.hot }
+                    GradientStop { position: 1.0; color: ov.accent }
+                }
+                PathPolyline { path: slit.pts }
+            }
+        }
         Column {
             x: er.mirror ? -width - 10 * ov.u : er.width + 10 * ov.u
             y: er.rr * 0.15
@@ -318,7 +339,7 @@ Window {
         opacity: ov.seg(0.1, 0.45) * ov.flick
         Rectangle {   // 헬멧 바이저 색: 화면 전체를 살짝 어둡게 (뒤 창은 그대로 보임)
             anchors.fill: parent
-            color: Qt.rgba(0.0, 0.025, 0.05, 0.42)
+            color: Qt.rgba(0.05, 0, 0.008, 0.42)
         }
         Repeater {    // 조준경 · 눈 고리 뒤 어두운 원 (가운데가 가장 진함)
             model: [[0, 0, 245], [-300, -40, 120], [300, -40, 120]]
@@ -332,9 +353,9 @@ Window {
                     fillGradient: RadialGradient {
                         centerX: px; centerY: py; centerRadius: r
                         focalX: px; focalY: py; focalRadius: 0
-                        GradientStop { position: 0.0; color: Qt.rgba(0.0, 0.03, 0.06, 0.62) }
-                        GradientStop { position: 0.72; color: Qt.rgba(0.0, 0.03, 0.06, 0.45) }
-                        GradientStop { position: 1.0; color: Qt.rgba(0.0, 0.03, 0.06, 0.0) }
+                        GradientStop { position: 0.0; color: Qt.rgba(0.06, 0, 0.01, 0.62) }
+                        GradientStop { position: 0.72; color: Qt.rgba(0.06, 0, 0.01, 0.45) }
+                        GradientStop { position: 1.0; color: Qt.rgba(0.06, 0, 0.01, 0.0) }
                     }
                     PathAngleArc { centerX: px; centerY: py; radiusX: r; radiusY: r; startAngle: 0; sweepAngle: 360 }
                 }
@@ -344,19 +365,19 @@ Window {
             x: ov.cx - width / 2; y: 10 * ov.u
             width: ov.width * 0.42; height: 84 * ov.u
             gradient: Gradient { orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: Qt.rgba(0, 0.03, 0.06, 0) }
-                GradientStop { position: 0.2; color: Qt.rgba(0, 0.03, 0.06, 0.62) }
-                GradientStop { position: 0.8; color: Qt.rgba(0, 0.03, 0.06, 0.62) }
-                GradientStop { position: 1.0; color: Qt.rgba(0, 0.03, 0.06, 0) } }
+                GradientStop { position: 0.0; color: Qt.rgba(0.06, 0, 0.01, 0) }
+                GradientStop { position: 0.2; color: Qt.rgba(0.06, 0, 0.01, 0.62) }
+                GradientStop { position: 0.8; color: Qt.rgba(0.06, 0, 0.01, 0.62) }
+                GradientStop { position: 1.0; color: Qt.rgba(0.06, 0, 0.01, 0) } }
         }
         Rectangle {   // 아래 상태 글 · 파형 뒤 띠
             x: ov.cx - width / 2; y: ov.cy + 168 * ov.u + 8 * ov.u
             width: 520 * ov.u; height: 150 * ov.u
             gradient: Gradient { orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: Qt.rgba(0, 0.03, 0.06, 0) }
-                GradientStop { position: 0.2; color: Qt.rgba(0, 0.03, 0.06, 0.62) }
-                GradientStop { position: 0.8; color: Qt.rgba(0, 0.03, 0.06, 0.62) }
-                GradientStop { position: 1.0; color: Qt.rgba(0, 0.03, 0.06, 0) } }
+                GradientStop { position: 0.0; color: Qt.rgba(0.06, 0, 0.01, 0) }
+                GradientStop { position: 0.2; color: Qt.rgba(0.06, 0, 0.01, 0.62) }
+                GradientStop { position: 0.8; color: Qt.rgba(0.06, 0, 0.01, 0.62) }
+                GradientStop { position: 1.0; color: Qt.rgba(0.06, 0, 0.01, 0) } }
         }
         Shape {
             anchors.fill: parent
@@ -366,9 +387,9 @@ Window {
                     centerX: ov.cx; centerY: ov.cy; centerRadius: ov.diag * 0.56
                     focalX: ov.cx; focalY: ov.cy; focalRadius: 0
                     GradientStop { position: 0.0; color: "transparent" }
-                    GradientStop { position: 0.55; color: Qt.rgba(0.0, 0.03, 0.06, 0.0) }
-                    GradientStop { position: 0.82; color: Qt.rgba(0.0, 0.05, 0.09, 0.42) }
-                    GradientStop { position: 1.0; color: Qt.rgba(0.0, 0.02, 0.05, 0.78) }
+                    GradientStop { position: 0.55; color: Qt.rgba(0.06, 0, 0.01, 0.0) }
+                    GradientStop { position: 0.82; color: Qt.rgba(0.09, 0, 0.017, 0.42) }
+                    GradientStop { position: 1.0; color: Qt.rgba(0.05, 0, 0.007, 0.78) }
                 }
                 PathPolyline { path: [Qt.point(0, 0), Qt.point(ov.width, 0), Qt.point(ov.width, ov.height), Qt.point(0, ov.height), Qt.point(0, 0)] }
             }
@@ -391,7 +412,7 @@ Window {
             onPaint: {
                 const g = getContext("2d")
                 g.reset()
-                g.fillStyle = "rgba(120, 230, 255, 0.07)"
+                g.fillStyle = "rgba(255, 80, 80, 0.07)"
                 for (let y = 0; y < height; y += 3) g.fillRect(0, y, width, 1)
             }
         }
@@ -504,7 +525,7 @@ Window {
             }
         }
 
-        // ---- 추적 박스: 지금 쓰고 있는 창을 따라다니고, 자비스가 짚은 곳에는 빨갛게 잠금 ----
+        // ---- 추적 박스: 지금 쓰고 있는 창을 따라다니고, 울트론이 짚은 곳에는 잠금 표시 ----
         Item {
             id: tg
             readonly property bool has: ov.target.kind !== undefined && ov.p >= 1
@@ -563,7 +584,7 @@ Window {
             Rectangle {
                 x: tgLabel.x - 6 * ov.u; y: tgLabel.y - 4 * ov.u
                 width: tgLabel.width + 12 * ov.u; height: tgLabel.height + 8 * ov.u
-                color: Qt.rgba(0, 0.03, 0.06, 0.72)
+                color: Qt.rgba(0.06, 0, 0.01, 0.72)
                 border.color: Qt.rgba(tg.col.r, tg.col.g, tg.col.b, 0.5); border.width: 1
             }
             Column {
@@ -726,7 +747,7 @@ Window {
                     text: tmr.t0 ? ov.hms(ov.left(tmr.t0)) : ""
                     color: tmr.frac < 0.1 ? ov.red : ov.hot
                     font.family: "Bahnschrift"; font.pixelSize: 17 * ov.u; font.weight: Font.DemiBold
-                    style: Text.Outline; styleColor: Qt.rgba(0, 0.05, 0.1, 0.5)
+                    style: Text.Outline; styleColor: Qt.rgba(0.1, 0, 0.017, 0.5)
                 }
             }
             // 가운데 십자선
@@ -784,7 +805,7 @@ Window {
         }
         // 조준경 대각선 수치
         Repeater {
-            model: [["ALT", (120 + ov.rnd(ov.slow) * 4).toFixed(1) + " m"], ["VEL", (ov.lvl * 40 + ov.rnd(ov.slow + 1) * 2).toFixed(1) + " m/s"],
+            model: [["NODES", String(1024 + Math.floor(ov.rnd(ov.slow) * 48))], ["THREAT", (ov.lvl * 40 + ov.rnd(ov.slow + 1) * 2).toFixed(1) + " %"],
                     ["PWR", (99 + ov.rnd(ov.slow + 2)).toFixed(1) + " %"], ["SYS", Math.round(ov.stats.cpu || 0) + " / " + Math.round(ov.stats.ram || 0)]]
             Column {
                 readonly property bool onRight: index % 2 === 1
@@ -808,7 +829,7 @@ Window {
             opacity: ov.seg(0.45, 0.7)
             Decode {
                 anchors.horizontalCenter: parent.horizontalCenter
-                full: ov.p < 1 ? "ACTIVE MODE ENGAGED" : (ov.stateLabels[ov.st] || ov.st.toUpperCase())
+                full: ov.p < 1 ? "OVERRIDE PROTOCOL ENGAGED" : (ov.stateLabels[ov.st] || ov.st.toUpperCase())
                 t: ov.lin(0.45, 0.8); seed: 3
                 color: ov.hot
                 font.pixelSize: 15 * ov.u; font.letterSpacing: 6 * ov.u; font.weight: Font.DemiBold
@@ -883,7 +904,7 @@ Window {
             Decode {
                 anchors.horizontalCenter: parent.horizontalCenter
                 y: 44 * ov.u
-                full: "J.A.R.V.I.S   ·   ACTIVE MODE   ·   HDG " + ("00" + Math.floor(ov.heading)).slice(-3)
+                full: "U.L.T.R.O.N   ·   ACTIVE MODE   ·   HDG " + ("00" + Math.floor(ov.heading)).slice(-3)
                 t: ov.lin(0.4, 0.75); seed: 1
                 font.letterSpacing: 4 * ov.u; font.weight: Font.DemiBold
             }
@@ -929,7 +950,7 @@ Window {
             HText {
                 anchors.horizontalCenter: parent.horizontalCenter
                 y: parent.height + 6 * ov.u
-                text: "LIFT"
+                text: "RISE"
                 color: ov.red; font.family: "Bahnschrift"; font.pixelSize: 9 * ov.u; font.letterSpacing: 2 * ov.u; font.weight: Font.DemiBold
             }
         }
@@ -1163,7 +1184,7 @@ Window {
                     x: 10 * ov.u; anchors.verticalCenter: parent.verticalCenter
                     spacing: 8 * ov.u
                     Rectangle { width: 7 * ov.u; height: width; radius: width / 2; color: "#fff"; opacity: 0.4 + 0.6 * ov.pulse; anchors.verticalCenter: parent.verticalCenter }
-                    HText { text: "PROCESS MONITOR"; color: "#fff"; font.family: "Bahnschrift"; font.pixelSize: 10 * ov.u; font.letterSpacing: 3 * ov.u; font.weight: Font.DemiBold }
+                    HText { text: "KILL LIST"; color: "#fff"; font.family: "Bahnschrift"; font.pixelSize: 10 * ov.u; font.letterSpacing: 3 * ov.u; font.weight: Font.DemiBold }
                 }
                 HText {
                     anchors.right: parent.right; anchors.rightMargin: 10 * ov.u; anchors.verticalCenter: parent.verticalCenter
@@ -1252,7 +1273,7 @@ Window {
                     }
                     HText { anchors.horizontalCenter: parent.horizontalCenter; y: pie.width / 2 - height / 2
                            text: Math.round(pie.used * 100) + "%"; color: "#ffffff"; font.family: "Bahnschrift"; font.pixelSize: 12 * ov.u
-                           style: Text.Outline; styleColor: Qt.rgba(0, 0.1, 0.15, 0.6) }
+                           style: Text.Outline; styleColor: Qt.rgba(0.15, 0, 0.033, 0.6) }
                     Label { anchors.horizontalCenter: parent.horizontalCenter; y: pie.width - 4 * ov.u; text: "STORAGE"; font.pixelSize: 8 * ov.u }
                 }
             }
@@ -1270,17 +1291,17 @@ Window {
             d: 0.5; tilt: -22
             width: 300 * ov.u; height: 214 * ov.u
             x: ov.width - 62 * ov.u - width; y: ov.height * 0.8 - height
-            HoloPanel { anchors.fill: parent; accent: ov.accent; fillAlpha: 0.82; cut: 12; title: "COMMS LINK"; tag: jarvis.chatMode ? "CHAT MODE" : "SECURE" }
+            HoloPanel { anchors.fill: parent; accent: ov.accent; fillAlpha: 0.82; cut: 12; title: "COMMS INTERCEPT"; tag: jarvis.chatMode ? "CHAT MODE" : "INTERCEPTED" }
             Column {
                 x: 14 * ov.u; y: 32 * ov.u
                 width: parent.width - 28 * ov.u
                 spacing: 5 * ov.u
-                Label { text: "▸ OPERATOR"; font.pixelSize: 8 * ov.u }
+                Label { text: "▸ HUMAN"; font.pixelSize: 8 * ov.u }
                 HText {
                     width: parent.width; text: jarvis.userText || "—"
                     color: ov.hot; font.pixelSize: 12 * ov.u; elide: Text.ElideRight; maximumLineCount: 2; wrapMode: Text.Wrap
                 }
-                Label { text: "▸ J.A.R.V.I.S"; font.pixelSize: 8 * ov.u }
+                Label { text: "▸ U.L.T.R.O.N"; font.pixelSize: 8 * ov.u }
                 HText {
                     width: parent.width; text: jarvis.replyText || "—"
                     color: ov.c(0.95); font.pixelSize: 12 * ov.u; elide: Text.ElideRight; maximumLineCount: 2; wrapMode: Text.Wrap
@@ -1293,7 +1314,7 @@ Window {
                         Rectangle {
                             width: 5 * ov.u; height: width; rotation: 45
                             anchors.verticalCenter: parent.verticalCenter
-                            color: status === "error" ? ov.red : status === "run" ? "#ffb347" : "#53ffa8"
+                            color: status === "error" ? ov.red : status === "run" ? "#ffb347" : ov.steel
                         }
                         HText { text: t; color: ov.c(0.55); font.family: "Bahnschrift"; font.pixelSize: 9 * ov.u }
                         HText { text: label; color: ov.c(0.85); font.pixelSize: 10 * ov.u; elide: Text.ElideRight; width: 220 * ov.u }
@@ -1380,7 +1401,7 @@ Window {
     Window {
         id: chatBar
         objectName: "activeChat"
-        title: "J.A.R.V.I.S CHAT"
+        title: "U.L.T.R.O.N CHAT"
         color: "transparent"
         flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
         readonly property real e: ov.seg(0.62, 0.94)
@@ -1409,7 +1430,7 @@ Window {
                 font.pixelSize: Math.max(13, 13 * ov.u)
                 leftPadding: 8; rightPadding: 0; topPadding: 0; bottomPadding: 0
                 placeholderText: chatBar.active ? "명령 입력…" : "여기를 눌러 글로 명령…"
-                placeholderTextColor: Qt.rgba(0.75, 0.93, 1, 0.5)
+                placeholderTextColor: Qt.rgba(0.93, 0.9, 0.92, 0.5)
                 selectionColor: ov.c(0.5)
                 background: Item {}
                 // 처리 중이라 받지 못한 명령은 지우지 않고 남겨 둔다

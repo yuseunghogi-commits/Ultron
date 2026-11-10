@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo.
-echo  [J.A.R.V.I.S] 필요한 패키지를 설치합니다...
+echo  [U.L.T.R.O.N] 필요한 패키지를 설치합니다...
 echo.
 python -m pip install -r requirements.txt
 if errorlevel 1 (
@@ -12,5 +12,5 @@ if errorlevel 1 (
     exit /b 1
 )
 echo.
-echo  완료! start_jarvis.bat 을 더블클릭해서 실행하세요.
+echo  완료! start_ultron.bat 을 더블클릭해서 실행하세요.
 pause

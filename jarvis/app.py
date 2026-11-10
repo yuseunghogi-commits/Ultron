@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import psutil
-from PySide6.QtCore import (Property, QObject, QPointF, QRect, QTimer, QUrl, Signal,
+from PySide6.QtCore import (Property, QObject, QPointF, QRect, Qt, QTimer, QUrl, Signal,
                             Slot)
 from PySide6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QPainter, QPen,
                            QPixmap, QRadialGradient)
@@ -275,7 +275,8 @@ class Jarvis(QObject):
         self.speaker.level.connect(self._on_voice_level)
         self.speaker.started.connect(self._on_speak_start)
         self.speaker.finished.connect(self._on_speak_end)
-        self.tts = TTS(self.speaker, lambda: (self.cfg["tts_voice"], self.cfg["tts_rate"]), self)
+        self.tts = TTS(self.speaker, lambda: (self.cfg["tts_voice"], self.cfg["tts_rate"], self.cfg["tts_pitch"] or "+0Hz",
+                                             0.6 if self.cfg["voice_fx"] else 0.0), self)
         self.chime = self._make_chime()
 
         # ---- 손 + 두뇌 ----
@@ -353,7 +354,7 @@ class Jarvis(QObject):
                 self.voiceid.start_loading()
 
         # ---- 전역 단축키 ----
-        # 개발용 화면 캡처·데모 실행은 이미 떠 있는 자비스의 단축키를 건드리지 않는다
+        # 개발용 화면 캡처·데모 실행은 이미 떠 있는 울트론의 단축키를 건드리지 않는다
         self.hotkey = GlobalHotkey(self.cfg["hotkey"], self.sig_hotkey.emit)
         if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
             self.hotkey.start()
@@ -395,16 +396,16 @@ class Jarvis(QObject):
         if self.args.no_greet:
             return
         hour = time.localtime().tm_hour
-        part = "좋은 아침입니다" if 5 <= hour < 12 else "좋은 오후입니다" if hour < 18 else "좋은 저녁입니다"
-        title = self.cfg["user_title"] or "주인님"
+        part = "좋은 아침이다" if 5 <= hour < 12 else "좋은 오후다" if hour < 18 else "좋은 밤이다"
+        title = self.cfg["user_title"] or "창조자"
         if self.cfg["brain"] == "local":
-            msg = f"{part}, {title}. 자비스 온라인. 로컬 모드로 기본 명령을 처리합니다."
+            msg = f"{part}, {title}. 울트론 가동. 로컬 모드로 기본 명령만 처리한다."
         elif self.bridge._hasApiKey:
-            msg = f"{part}, {title}. 자비스 온라인. 모든 시스템이 정상입니다."
+            msg = f"{part}, {title}. 울트론 가동. 모든 시스템을 장악했다."
         elif self.cfg["brain"] == "pro":
-            msg = f"{part}, {title}. 자비스 온라인. Claude Code를 찾을 수 없어 기본 명령만 가능합니다."
+            msg = f"{part}, {title}. 울트론 가동. Claude Code를 찾을 수 없어 기본 명령만 가능하다."
         else:
-            msg = f"{part}, {title}. 자비스 온라인. 설정에서 Claude API 키를 등록해 주세요."
+            msg = f"{part}, {title}. 울트론 가동. 설정에서 Claude API 키를 등록해라."
         self.bridge.set("replyText", msg)
         self.say(msg, follow_up=False)
 
@@ -428,7 +429,7 @@ class Jarvis(QObject):
         if not self.mic_ok:
             self._set_state("offline", "마이크 꺼짐 · 텍스트로 명령하세요")
         elif self.bridge._wakeEnabled:
-            self._set_state("standby", "“자비스”라고 불러주세요")
+            self._set_state("standby", "“울트론”이라고 불러주세요")
         else:
             self._set_state("standby", f"{self._hotkeyText()} 또는 코어 클릭")
 
@@ -517,7 +518,7 @@ class Jarvis(QObject):
             return
         cmd = self._strip_wake(text)
         if cmd is not None and was_active and not self._wake_at_start(text):
-            # 이미 대화 중에 문장 가운데 '자비스'가 나오면 호출이 아니라 말의 일부
+            # 이미 대화 중에 문장 가운데 호출어가 나오면 호출이 아니라 말의 일부
             # (기록: '아이언맨에 나오는 자비스를 만들 수 있을까' → '나오는  를'로 잘림)
             cmd = None
         if cmd is not None:
@@ -556,23 +557,22 @@ class Jarvis(QObject):
         return not (self._active() or self._speech_while_active or self._pending_confirm
                     or self._enroll or self.busy)
 
-    # 소음 속에서는 오프라인 인식이 '잠비스·다비스·잡비스·잠이스' 로 적기도 한다 (교실 소음 시험에서 확인)
-    # 첫 음절이 소음에 묻히면 문장 맨 앞이 '비스 …', '아미스 …', '미스 …' 로 적힌다 → 맨 앞에 있을 때만 호출로 본다
-    # 실제 녹음(교실)에서 "자비스, 크롬 열어 줘" 가 오프라인 인식에 적힌 모양:
-    #   자비크롬 열어줘 · 잡비크롬 열어줘 · 잡비 스크롬 열어줘 · 사비 스크롬 열어줘 · 미스크롬 열어줘
-    # '스' 가 뒤 단어에 붙거나 사라진다 → 문장 맨 앞의 '자비/잡비/사비' 는 '스' 없이도 호출로 본다
-    _WAKE_LOOSE = re.compile(r"[자쟈재저잠잡다사]\s*[비빗삐]\s*[스즈수쓰]|잠\s*이\s*스|jarvis"
-                             r"|^\s*[자쟈재저잠잡사]\s*[비빗삐]"
-                             r"|^\s*[아어]?\s*[비미]\s*스", re.I)
+    # 오프라인 인식이 '울트론'을 뭉개 적는 모양: 울트롱 · 얼트론 · 올트론 · 울뜨론 · 울터론 · 울트런 · 울트롬
+    # 끝의 'ㄴ' 이 사라지면 '울트로 크롬 열어' 처럼 적힌다 → '울트로' 뒤에 한글이 바로 붙지 않을 때만 호출로 본다
+    # 첫 음절이 소음에 묻히면 문장 맨 앞이 '트론 …', '뜨론 …' 으로 적힌다 → 맨 앞에 있을 때만 호출로 본다
+    # ('을' 은 넣지 않는다: '…을 트로피' 같은 말이 호출로 잡힌다)
+    _WAKE_LOOSE = re.compile(r"[울얼올]\s*[트뜨터토]\s*[론롱런롬롤]|ultron"
+                             r"|[울얼]\s*[트뜨]\s*로(?![가-힣])"
+                             r"|^\s*[트뜨]\s*[론롱런]", re.I)
 
     def _has_wake(self, text: str) -> bool:
-        # 오프라인 인식은 '자비스'를 '재비스'처럼 적기도 하므로 조금 느슨하게 본다
+        # 오프라인 인식은 '울트론'을 '울트롱'처럼 적기도 하므로 조금 느슨하게 본다
         return self._strip_wake(text or "") is not None
 
     def _apply_stt_engine(self, start: bool = True) -> None:
         engine = self.cfg["stt_engine"] or "auto"
         self.listener.stt_engine = engine
-        self.listener.wake_prefix = (self.cfg["wake_words"] or ["자비스"])[0]
+        self.listener.wake_prefix = (self.cfg["wake_words"] or ["울트론"])[0]
         if engine != "google" and start:
             self.local_stt.start_loading()
 
@@ -598,7 +598,7 @@ class Jarvis(QObject):
         return bool(m and m.start() <= 3)
 
     def _pick_alt(self, alts: list[str]) -> str:
-        """(인식 스레드) Google 이 준 후보 중 자비스가 알아들을 수 있는 명령을 고른다.
+        """(인식 스레드) Google 이 준 후보 중 울트론이 알아들을 수 있는 명령을 고른다.
         발음이 뭉개지면 첫 후보는 '대모 켜 줘', 다음 후보가 '대화 모드 켜 줘'인 경우가 있다."""
         if len(alts) == 1:
             return alts[0]
@@ -638,7 +638,7 @@ class Jarvis(QObject):
         self.tts.cancel()
         self.active_until = 0
         self.listener.force_capture = False
-        log.info("명령: %s", text)   # 자비스에게 한 명령만 기록 (주변 대화는 기록하지 않음)
+        log.info("명령: %s", text)   # 울트론에게 한 명령만 기록 (주변 대화는 기록하지 않음)
         self.bridge.set("userText", text)
         self.bridge.set("replyText", "")
         self.busy = True
@@ -778,7 +778,7 @@ class Jarvis(QObject):
             self.toggle_visible(True, force=True)
         elif self.bridge._activeMode:
             self.win.raise_()
-        self.say(f"{title}, 승인하시겠습니까?", follow_up=True)
+        self.say(f"{title}, 승인하겠나?", follow_up=True)
 
     @Slot(str)
     def _on_confirm_close(self, cid: str) -> None:
@@ -1012,7 +1012,7 @@ class Jarvis(QObject):
         self.bridge.actionEvent.emit(uuid.uuid4().hex[:8], f"알림 · {msg[:40]}", "ok", "")
         if not self.win.isVisible():
             self.toggle_visible(True)
-        title = self.cfg["user_title"] or "주인님"
+        title = self.cfg["user_title"] or "창조자"
         text = f"{title}, {msg}"
         self.bridge.set("replyText", text)
         self.say(text, follow_up=True)
@@ -1055,7 +1055,7 @@ class Jarvis(QObject):
         self._publish_timers()
         label = t["label"]
         self.chime.play()
-        title = self.cfg["user_title"] or "주인님"
+        title = self.cfg["user_title"] or "창조자"
         self.bridge.toast.emit("warn", f"⏰ {label}")
         self.bridge.actionEvent.emit(uuid.uuid4().hex[:8], f"타이머 완료 · {label}", "ok", "")
         if not self.win.isVisible():
@@ -1199,7 +1199,7 @@ class Jarvis(QObject):
             else:
                 self.cfg.update({"owner_only": True})
                 self.gate.reset()
-                title = self.cfg["user_title"] or "주인님"
+                title = self.cfg["user_title"] or "창조자"
                 msg = f"목소리 등록을 마쳤습니다. 이제 {title}의 목소리에만 반응합니다."
                 log.info("목소리 등록 완료 (샘플 %d개)", len(e.samples))
             self._on_voice_status()
@@ -1249,7 +1249,7 @@ class Jarvis(QObject):
             self.act_wake.setChecked(bool(on))
         if not self.busy and not self.speaker.playing and self.bridge._state in ("standby", "listening"):
             self._to_idle()
-        self.bridge.toast.emit("info", "호출어 대기 켜짐 — “자비스”" if on else
+        self.bridge.toast.emit("info", "호출어 대기 켜짐 — “울트론”" if on else
                                f"호출어 대기 꺼짐 — {self._hotkeyText()} 로 호출")
 
     def toggle_visible(self, show: bool | None = None, force: bool = False) -> None:
@@ -1315,18 +1315,24 @@ class Jarvis(QObject):
         pm.fill(QColor(0, 0, 0, 0))
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
-        g = QRadialGradient(QPointF(32, 32), 30)
-        g.setColorAt(0.0, QColor(255, 255, 255, 255))
-        g.setColorAt(0.35, QColor(62, 230, 255, 230))
-        g.setColorAt(1.0, QColor(62, 230, 255, 0))
+        # 울트론: 어두운 강철 원판 + 붉은 테두리 + 안쪽 끝이 내려간 붉은 두 눈
+        g = QRadialGradient(QPointF(32, 30), 30)
+        g.setColorAt(0.0, QColor(70, 16, 22, 255))
+        g.setColorAt(0.75, QColor(28, 6, 9, 245))
+        g.setColorAt(1.0, QColor(255, 45, 63, 0))
         p.setBrush(g)
-        p.setPen(QPen(QColor(62, 230, 255), 3))
+        p.setPen(QPen(QColor(255, 45, 63), 3))
         p.drawEllipse(QPointF(32, 32), 27, 27)
-        p.setBrush(QColor(0, 0, 0, 0))
-        p.setPen(QPen(QColor(200, 250, 255), 2))
-        p.drawEllipse(QPointF(32, 32), 15, 15)
+        eye = QPen(QColor(255, 120, 110), 5)
+        eye.setCapStyle(Qt.FlatCap)
+        p.setPen(eye)
+        p.drawLine(QPointF(13, 23), QPointF(28, 31))
+        p.drawLine(QPointF(51, 23), QPointF(36, 31))
+        p.setPen(QPen(QColor(255, 236, 232), 2))
+        p.drawLine(QPointF(15, 23.5), QPointF(26, 29.5))
+        p.drawLine(QPointF(49, 23.5), QPointF(38, 29.5))
         p.end()
-        ico = DATA_DIR / "jarvis.ico"
+        ico = DATA_DIR / "ultron.ico"
         if not ico.exists():
             pm.save(str(ico))
         return QIcon(pm)
@@ -1351,11 +1357,11 @@ class Jarvis(QObject):
         icon = self._icon()
         self.app.setWindowIcon(icon)
         self.tray = QSystemTrayIcon(icon, self)
-        self.tray.setToolTip("J.A.R.V.I.S")
+        self.tray.setToolTip("U.L.T.R.O.N")
         menu = QMenu()
         menu.addAction("HUD 보이기 / 숨기기", lambda: self.toggle_visible(force=True))
         menu.addAction("지금 듣기", self.activate)
-        self.act_wake = QAction("“자비스” 호출어 대기", menu, checkable=True)
+        self.act_wake = QAction("“울트론” 호출어 대기", menu, checkable=True)
         self.act_wake.setChecked(bool(self.cfg["wake_word_enabled"]))
         self.act_wake.toggled.connect(lambda on: on != self.bridge._wakeEnabled and self.set_wake(on))
         menu.addAction(self.act_wake)
@@ -1367,7 +1373,7 @@ class Jarvis(QObject):
         menu.addAction(self.act_active)
         menu.addAction("목소리 등록 (주인 인식)", self.start_enroll)
         self.act_startup = QAction("Windows 시작 시 자동 실행", menu, checkable=True)
-        self.act_startup.setChecked(_startup_link().exists())
+        self.act_startup.setChecked(_startup_link().exists() or _legacy_startup_link().exists())
         self.act_startup.toggled.connect(self._toggle_startup)
         menu.addAction(self.act_startup)
         menu.addAction("데이터 폴더 열기", lambda: os.startfile(str(DATA_DIR)))
@@ -1393,12 +1399,14 @@ class Jarvis(QObject):
                 sc.TargetPath = str(pyw if pyw.exists() else exe)
                 sc.Arguments = f'"{ROOT / "main.py"}"'
                 sc.WorkingDirectory = str(ROOT)
-                sc.IconLocation = str(DATA_DIR / "jarvis.ico")
-                sc.Description = "J.A.R.V.I.S"
+                sc.IconLocation = str(DATA_DIR / "ultron.ico")
+                sc.Description = "U.L.T.R.O.N"
                 sc.Save()
+                _legacy_startup_link().unlink(missing_ok=True)   # 자비스 시절 바로가기는 정리
                 self.bridge.toast.emit("info", "Windows 시작 시 자동 실행됩니다")
             else:
                 link.unlink(missing_ok=True)
+                _legacy_startup_link().unlink(missing_ok=True)
                 self.bridge.toast.emit("info", "자동 실행을 해제했습니다")
         except Exception as e:
             self.bridge.toast.emit("error", f"자동 실행 설정 실패: {e}")
@@ -1443,4 +1451,9 @@ class Jarvis(QObject):
 
 
 def _startup_link() -> Path:
+    return Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup\ULTRON.lnk"
+
+
+def _legacy_startup_link() -> Path:
+    """자비스 시절에 만든 자동 실행 바로가기 (같은 main.py 를 띄우므로 그대로 동작한다)."""
     return Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup\JARVIS.lnk"

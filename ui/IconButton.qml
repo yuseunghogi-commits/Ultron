@@ -4,7 +4,7 @@ import QtQuick.Controls.Basic
 
 Item {
     id: b
-    property color accent: "#3ee6ff"
+    property color accent: "#ff2d3f"
     property string glyph: ""
     property string tip: ""
     property bool active: false

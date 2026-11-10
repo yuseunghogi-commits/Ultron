@@ -56,7 +56,7 @@ def display_name(exe: str) -> str:
 
 
 def own_pids() -> set[int]:
-    """자비스 자신과 자신을 띄운 부모들 (목록 · 종료에서 제외)."""
+    """울트론 자신과 자신을 띄운 부모들 (목록 · 종료에서 제외)."""
     out = {os.getpid()}
     try:
         p = psutil.Process()
@@ -180,7 +180,7 @@ def _class_name(hwnd: int) -> str:
 
 
 def foreground_window(own_hwnds: set[int] | None = None) -> dict | None:
-    """지금 앞에 있는 창 → {hwnd, pid, exe, title, x, y, w, h} (실제 화면 픽셀). 바탕화면 · 작업 표시줄 · 자비스 창이면 None."""
+    """지금 앞에 있는 창 → {hwnd, pid, exe, title, x, y, w, h} (실제 화면 픽셀). 바탕화면 · 작업 표시줄 · 울트론 창이면 None."""
     hwnd = _user32.GetForegroundWindow()
     if not hwnd or (own_hwnds and hwnd in own_hwnds) or _user32.IsIconic(hwnd):
         return None

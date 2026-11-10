@@ -4,7 +4,7 @@ import QtQuick.Shapes
 
 Item {
     id: ch
-    property color accent: "#3ee6ff"
+    property color accent: "#ff2d3f"
     property real cut: 20        // 왼쪽 위 · 오른쪽 아래 (크게 깎음)
     property real cut2: 6        // 나머지 두 모서리
     property real glowY: 190     // 코어 쪽을 살짝 밝게
@@ -35,27 +35,27 @@ Item {
             g.closePath()
 
             const lg = g.createLinearGradient(0, 0, 0, h)
-            lg.addColorStop(0, "rgba(5, 20, 31, 0.93)")
-            lg.addColorStop(0.5, "rgba(3, 13, 21, 0.93)")
-            lg.addColorStop(1, "rgba(2, 9, 15, 0.95)")
+            lg.addColorStop(0, "rgba(24, 7, 10, 0.93)")
+            lg.addColorStop(0.5, "rgba(16, 4, 7, 0.93)")
+            lg.addColorStop(1, "rgba(10, 2, 4, 0.95)")
             g.fillStyle = lg
             g.fill()
 
             g.save()
             g.clip()
             const rg = g.createRadialGradient(w / 2, ch.glowY, 0, w / 2, ch.glowY, w * 0.62)
-            rg.addColorStop(0, "rgba(62, 230, 255, 0.10)")
-            rg.addColorStop(1, "rgba(62, 230, 255, 0)")
+            rg.addColorStop(0, "rgba(255, 45, 63, 0.10)")
+            rg.addColorStop(1, "rgba(255, 45, 63, 0)")
             g.fillStyle = rg
             g.fillRect(0, 0, w, h)
 
             g.lineWidth = 1
-            g.strokeStyle = "rgba(62, 230, 255, 0.035)"
+            g.strokeStyle = "rgba(255, 45, 63, 0.035)"
             g.beginPath()
             for (let x = 12; x < w; x += 12) { g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, h) }
             for (let y = 12; y < h; y += 12) { g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5) }
             g.stroke()
-            g.strokeStyle = "rgba(62, 230, 255, 0.06)"
+            g.strokeStyle = "rgba(255, 45, 63, 0.06)"
             g.beginPath()
             for (let x = 48; x < w; x += 48) { g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, h) }
             for (let y = 48; y < h; y += 48) { g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5) }

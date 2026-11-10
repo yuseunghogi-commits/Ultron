@@ -107,7 +107,7 @@ class StreamVad:
         c = sherpa_onnx.VadModelConfig()
         c.silero_vad.model = model_path
         c.silero_vad.threshold = threshold
-        c.silero_vad.min_speech_duration = 0.1    # 짧은 '자비스' 도 놓치지 않게
+        c.silero_vad.min_speech_duration = 0.1    # 짧은 '울트론' 도 놓치지 않게
         c.silero_vad.min_silence_duration = 0.15  # 발화 끝 판단은 listener 가 따로 한다
         c.silero_vad.max_speech_duration = 30
         c.sample_rate = RATE

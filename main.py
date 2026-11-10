@@ -1,4 +1,4 @@
-"""J.A.R.V.I.S 실행 진입점.
+"""U.L.T.R.O.N 실행 진입점.
 
     python main.py              # 일반 실행
     python main.py --no-mic     # 마이크 없이 (텍스트 입력만)
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import QApplication
 
 from jarvis.config import DATA_DIR, LOG_PATH
 
-INSTANCE_KEY = "jarvis-hud-" + os.environ.get("USERNAME", "user")
+INSTANCE_KEY = "ultron-hud-" + os.environ.get("USERNAME", "user")
 
 
 def setup_logging() -> None:
@@ -48,7 +48,7 @@ def already_running() -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="J.A.R.V.I.S")
+    parser = argparse.ArgumentParser(description="U.L.T.R.O.N")
     parser.add_argument("--no-mic", action="store_true", help="마이크 사용 안 함")
     parser.add_argument("--no-greet", action="store_true", help="시작 인사 생략")
     parser.add_argument("--shot", metavar="PNG", help="(개발용) N초 후 HUD 화면을 PNG로 저장하고 종료")
@@ -59,11 +59,11 @@ def main() -> int:
     setup_logging()
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
-    app.setApplicationName("JARVIS")
+    app.setApplicationName("ULTRON")
     app.setQuitOnLastWindowClosed(False)
 
     if not args.shot and already_running():
-        print("J.A.R.V.I.S 가 이미 실행 중입니다.")
+        print("U.L.T.R.O.N 이 이미 실행 중입니다.")
         return 0
 
     from jarvis.app import Jarvis

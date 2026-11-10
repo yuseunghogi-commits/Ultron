@@ -3,7 +3,7 @@ import QtQuick
 
 Item {
     id: s
-    property color accent: "#3ee6ff"
+    property color accent: "#ff2d3f"
     property string title: ""
     property string tag: ""
     property color tagColor: c(0.55)

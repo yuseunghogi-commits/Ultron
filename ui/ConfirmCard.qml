@@ -15,7 +15,7 @@ Item {
     function show(id, t, d) { cid = id; title = t; detail = d; countdown.restart() }
     function close(id) { if (id === cid) cid = "" }
 
-    Rectangle { anchors.fill: parent; color: Qt.rgba(0, 0.02, 0.04, 0.55); radius: 6 }
+    Rectangle { anchors.fill: parent; color: Qt.rgba(0.04, 0, 0.007, 0.55); radius: 6 }
     MouseArea { anchors.fill: parent }   // 뒤쪽 클릭 차단
 
     HoloPanel {
