@@ -113,6 +113,7 @@ export interface Timer {
   id: string;
   label: string;
   due: number;      // ms since epoch
+  notice?: number;  // 설치형 앱에서 예약한 휴대폰 알림 번호
 }
 export function loadTimers(): Timer[] {
   return read<Timer[]>(K.timers, []);

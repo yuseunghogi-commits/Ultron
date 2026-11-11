@@ -12,8 +12,9 @@
   --muted: rgba(241, 230, 233, 0.62);
   --hud: "Rajdhani", "Segoe UI", system-ui, sans-serif;
   --body: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
-  --safe-t: env(safe-area-inset-top, 0px);
-  --safe-b: env(safe-area-inset-bottom, 0px);
+  /* 설치형 앱(Capacitor)은 --safe-area-inset-* 를 직접 넣어 준다 */
+  --safe-t: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-b: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
   color-scheme: dark;
 }
 
@@ -204,6 +205,9 @@ body.icon-only { background: #0b0204; }
 body.icon-only #app > :not(.core), body.icon-only .hint { display: none; }
 body.icon-only #app { display: grid; grid-template-rows: 1fr; place-items: center; padding: 0; height: 100vh; max-width: none; }
 body.icon-only #emblem { width: 80vmin; }
+
+/* 설치형 앱에서는 인쇄 대신 공유로 */
+body.native #docPrint { display: none; }
 
 /* ---------- 인쇄: 문서만 ---------- */
 @media print {

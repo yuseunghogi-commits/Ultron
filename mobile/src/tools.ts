@@ -50,7 +50,7 @@ const CLIENT_TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: "set_timer",
-    description: "N초 뒤에 울리는 타이머 · 알림을 맞춘다. 이 앱이 열려 있어야 제때 울린다.",
+    description: "N초 뒤에 울리는 타이머 · 알림을 맞춘다.",
     input_schema: {
       type: "object",
       properties: {

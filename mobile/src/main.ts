@@ -13,6 +13,9 @@ import {
 } from "./store";
 import type { ActionCard, ToolHost } from "./tools";
 import { Speaker, canListen, koreanVoices, listenForever, listenOnce } from "./voice";
+import {
+  cancelTimerNotice, isNative, nativeCopy, nativeKeepAwake, nativeShare, nativeVibrate, onBackButton, onResume, scheduleTimerNotice,
+} from "./native";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -296,16 +299,22 @@ const host: ToolHost = {
   },
   setTimer(seconds, label) {
     const t: Timer = { id: uid(), label, due: Date.now() + seconds * 1000 };
+    if (isNative) {
+      // 앱을 닫아 두어도 울리도록 휴대폰 알림으로도 예약한다
+      t.notice = Math.floor(Math.random() * 2_000_000_000) + 1;
+      void scheduleTimerNotice(t.notice, label, t.due).then((ok) => {
+        if (!ok) toast("알림 권한이 없어 앱을 켜 둔 동안에만 울린다.");
+      });
+    }
     timers = [...timers, t].sort((a, b) => a.due - b.due);
     saveTimers(timers);
     renderTimerBar();
-    return `${sayDuration(seconds)} 뒤`;
+    return `${sayDuration(seconds)} 뒤${isNative ? "" : " (웹 판은 앱이 열려 있어야 제때 울린다)"}`;
   },
   cancelTimers(label) {
     const before = timers.length;
-    timers = label ? timers.filter((t) => !t.label.includes(label)) : [];
-    saveTimers(timers);
-    renderTimerBar();
+    const gone = label ? timers.filter((t) => t.label.includes(label)) : timers;
+    removeTimers(gone);
     return before - timers.length;
   },
   listTimers() {
@@ -337,6 +346,19 @@ const host: ToolHost = {
 };
 
 // ---------------------------------------------------------------- 타이머
+function removeTimers(gone: Timer[]): void {
+  const ids = new Set(gone.map((t) => t.id));
+  cancelTimerNotice(gone.map((t) => t.notice).filter((n): n is number => typeof n === "number"));
+  timers = timers.filter((t) => !ids.has(t.id));
+  saveTimers(timers);
+  renderTimerBar();
+}
+
+function vibrate(pattern: number[]): void {
+  if (isNative) nativeVibrate(pattern.filter((_, i) => i % 2 === 0).reduce((a, b) => a + b, 0));
+  else navigator.vibrate?.(pattern);
+}
+
 function renderTimerBar(): void {
   const bar = $("timerBar");
   if (!timers.length) { bar.hidden = true; return; }
@@ -358,7 +380,7 @@ function tickTimers(): void {
       const late = now - t.due > 60_000;
       unlockAudio();
       beep(988, 0.18); setTimeout(() => beep(784, 0.18), 220); setTimeout(() => beep(988, 0.3), 440);
-      navigator.vibrate?.([300, 120, 300, 120, 500]);
+      vibrate([300, 120, 300, 120, 500]);
       say(late ? `${t.label} — 시간이 이미 지났다.` : `${t.label}. 시간이다.`);
     }
   }
@@ -401,7 +423,7 @@ function maybeGlitch(force = false): void {
   void app.offsetWidth;
   app.classList.add("glitching");
   if (audio) { beep(110, 0.25); setTimeout(() => beep(73, 0.35), 160); }
-  navigator.vibrate?.([40, 60, 40]);
+  vibrate([40, 60, 40]);
   setTimeout(() => {
     app.classList.remove("glitching");
     lastGlitch = pickLine(GLITCH_LINES, lastGlitch);
@@ -412,6 +434,7 @@ function maybeGlitch(force = false): void {
 // ---------------------------------------------------------------- 화면 켜 두기
 let wakeLock: { release(): Promise<void> } | null = null;
 async function syncWakeLock(): Promise<void> {
+  if (isNative) { await nativeKeepAwake(settings.keepAwake); return; }
   const nav = navigator as Navigator & { wakeLock?: { request(t: "screen"): Promise<{ release(): Promise<void> }> } };
   if (settings.keepAwake && !document.hidden && nav.wakeLock && !wakeLock) {
     try { wakeLock = await nav.wakeLock.request("screen"); } catch { wakeLock = null; }
@@ -423,6 +446,7 @@ async function syncWakeLock(): Promise<void> {
 
 // ---------------------------------------------------------------- 공유 · 문서
 async function shareText(title: string, text: string): Promise<void> {
+  if (isNative) { await nativeShare(title, text); return; }
   if (navigator.share) {
     try { await navigator.share({ title, text }); return; } catch { /* 취소 */ return; }
   }
@@ -431,7 +455,8 @@ async function shareText(title: string, text: string): Promise<void> {
 
 async function copyText(text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text);
+    if (isNative) await nativeCopy(text);
+    else await navigator.clipboard.writeText(text);
     toast("복사했다.");
   } catch {
     toast("복사하지 못했다.");
@@ -479,7 +504,7 @@ function fillSettingsForm(): void {
   const voice = $("sVoice") as HTMLSelectElement;
   voice.innerHTML = "";
   voice.add(new Option("자동 (남성 목소리 우선)", ""));
-  for (const v of koreanVoices()) voice.add(new Option(v.name, v.name, false, v.name === settings.voiceName));
+  for (const name of koreanVoices()) voice.add(new Option(name, name, false, name === settings.voiceName));
   ($("sPitch") as HTMLInputElement).value = String(settings.pitch);
   ($("sRate") as HTMLInputElement).value = String(settings.rate);
   $("oPitch").textContent = settings.pitch.toFixed(2);
@@ -555,7 +580,7 @@ function renderLog(): void {
     const s = document.createElement("span");
     s.className = "item";
     s.textContent = `${t.label} · ${new Date(t.due).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}`;
-    li.append(s, delButton(() => { timers = timers.filter((x) => x.id !== t.id); saveTimers(timers); renderTimerBar(); renderLog(); }));
+    li.append(s, delButton(() => { removeTimers([t]); renderLog(); }));
     tl.appendChild(li);
   }
   const ml = $("memList");
@@ -687,9 +712,31 @@ function boot(): void {
     ($("setupTitle") as HTMLInputElement).value = settings.title;
     openSheet("setup");
   }
-  if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  if (isNative) setupNative();
+  else if ("serviceWorker" in navigator && import.meta.env.PROD) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
+}
+
+// ---------------------------------------------------------------- 설치형 앱 전용
+function setupNative(): void {
+  document.body.classList.add("native");
+  // 뒤로 가기: 열린 창부터 닫는다
+  onBackButton(() => {
+    const open = [...document.querySelectorAll<HTMLElement>(".sheet:not([hidden])")].pop();
+    if (!open) return false;
+    if (open.id === "settings") readSettingsForm();
+    closeSheet(open);
+    return true;
+  });
+  onResume(() => { tickTimers(); if (state === "standby") syncHandsFree(); });
+  // 바깥 링크(https · tel · sms)는 앱 안이 아니라 휴대폰의 브라우저 · 전화 · 문자 앱으로 연다
+  document.addEventListener("click", (e) => {
+    const a = (e.target as HTMLElement).closest?.("a[href]") as HTMLAnchorElement | null;
+    if (!a || !/^(https?:|tel:|sms:|mailto:)/i.test(a.href) || a.origin === location.origin) return;
+    e.preventDefault();
+    window.location.href = a.href;
+  }, true);
 }
 
 boot();

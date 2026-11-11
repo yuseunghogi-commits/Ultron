@@ -1,4 +1,8 @@
-// 듣기(음성 인식)와 말하기(음성 합성) — 휴대폰 브라우저에 들어 있는 기능을 쓴다
+// 듣기(음성 인식)와 말하기(음성 합성)
+// 브라우저에서는 브라우저에 들어 있는 기능을, 설치형 앱에서는 휴대폰의 음성 인식기 · 음성 합성기(native.ts)를 쓴다.
+import {
+  isNative, loadNativeVoices, nativeKoreanVoices, nativeListenForever, nativeListenOnce, nativeSpeak, nativeStopSpeaking, onNativeWord,
+} from "./native";
 
 // ---------------------------------------------------------------- 듣기
 interface SRResult { isFinal: boolean; 0: { transcript: string } }
@@ -19,7 +23,7 @@ function ctor(): SRCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-export const canListen = (): boolean => ctor() !== null;
+export const canListen = (): boolean => isNative || ctor() !== null;
 
 export interface ListenHandlers {
   onInterim(text: string): void;
@@ -30,6 +34,10 @@ export interface ListenHandlers {
 
 /** 한 마디 듣기. 돌려준 함수를 부르면 그만 듣는다. */
 export function listenOnce(h: ListenHandlers): () => void {
+  if (isNative) {
+    h.onSpeech();
+    return nativeListenOnce(h.onFinal, h.onError);
+  }
   const C = ctor();
   if (!C) {
     h.onError("other", "이 브라우저는 음성 인식을 지원하지 않는다");
@@ -78,6 +86,7 @@ export function listenOnce(h: ListenHandlers): () => void {
 
 /** 호출어 기다리기 (핸즈프리). 들린 말을 계속 넘겨 주고, 끊기면 다시 시작한다. 돌려준 함수로 멈춘다. */
 export function listenForever(onHeard: (text: string) => void, onError: (kind: string) => void): () => void {
+  if (isNative) return nativeListenForever(onHeard, onError);
   const C = ctor();
   if (!C) {
     onError("unsupported");
@@ -127,14 +136,19 @@ export function listenForever(onHeard: (text: string) => void, onError: (kind: s
 // ---------------------------------------------------------------- 말하기
 export interface VoiceOpts { voiceName: string; pitch: number; rate: number }
 
-export function koreanVoices(): SpeechSynthesisVoice[] {
+function webKoreanVoices(): SpeechSynthesisVoice[] {
   if (!("speechSynthesis" in window)) return [];
   return speechSynthesis.getVoices().filter((v) => /^ko/i.test(v.lang));
 }
 
+/** 고를 수 있는 한국어 목소리 이름들 */
+export function koreanVoices(): string[] {
+  return isNative ? nativeKoreanVoices() : webKoreanVoices().map((v) => v.name);
+}
+
 /** 울트론에게 어울리는 목소리: 이름을 고른 게 있으면 그것, 아니면 남성 목소리 → 아무 한국어 목소리 */
 function pickVoice(name: string): SpeechSynthesisVoice | null {
-  const ko = koreanVoices();
+  const ko = webKoreanVoices();
   if (name) {
     const v = ko.find((x) => x.name === name);
     if (v) return v;
@@ -147,16 +161,20 @@ export class Speaker {
   private onIdle: (() => void) | null = null;
   private onBoundary: (() => void) | null = null;
   private unlocked = false;
+  private gen = 0;   // 멈춘 뒤에 늦게 끝난 말이 상태를 흔들지 않게
 
   constructor(private opts: () => VoiceOpts) {
-    if ("speechSynthesis" in window) {
+    if (isNative) {
+      void loadNativeVoices();
+      onNativeWord(() => this.onBoundary?.());
+    } else if ("speechSynthesis" in window) {
       speechSynthesis.getVoices();
       speechSynthesis.addEventListener?.("voiceschanged", () => speechSynthesis.getVoices());
     }
   }
 
   get available(): boolean {
-    return "speechSynthesis" in window;
+    return isNative || "speechSynthesis" in window;
   }
 
   get speaking(): boolean {
@@ -165,7 +183,7 @@ export class Speaker {
 
   /** iOS 는 사용자가 화면을 누른 순간에 한 번 말해 둬야 그 뒤로도 말할 수 있다 */
   unlock(): void {
-    if (this.unlocked || !this.available) return;
+    if (this.unlocked || !this.available || isNative) return;
     this.unlocked = true;
     const u = new SpeechSynthesisUtterance(" ");
     u.volume = 0;
@@ -180,6 +198,17 @@ export class Speaker {
   say(text: string): void {
     if (!this.available || !text.trim()) return;
     const o = this.opts();
+    if (isNative) {
+      const gen = this.gen;
+      this.pending++;
+      const finish = () => {
+        if (gen !== this.gen) return;
+        this.pending = Math.max(0, this.pending - 1);
+        if (this.pending === 0) this.onIdle?.();
+      };
+      nativeSpeak(text, o.pitch, o.rate, o.voiceName).then(finish, finish);
+      return;
+    }
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "ko-KR";
     const v = pickVoice(o.voiceName);
@@ -203,7 +232,9 @@ export class Speaker {
     if (!this.available) return;
     const had = this.pending > 0;
     this.pending = 0;
-    speechSynthesis.cancel();
+    this.gen++;
+    if (isNative) nativeStopSpeaking();
+    else speechSynthesis.cancel();
     if (had) this.onIdle?.();
   }
 }
