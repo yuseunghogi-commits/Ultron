@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0b0204" />
+  <meta name="description" content="휴대폰에서 혼자 도는 울트론 — 음성 AI 비서" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ULTRON" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <title>ULTRON</title>
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div class="brand">
+        <span class="word">U.L.T.R.O.N</span>
+        <span id="status" class="status">BOOT</span>
+      </div>
+      <div class="top-actions">
+        <button id="modeBtn" class="chip" type="button" aria-pressed="false">명령</button>
+        <button id="logBtn" class="icon" type="button" aria-label="기록">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
+        </button>
+        <button id="setBtn" class="icon" type="button" aria-label="설정">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="core">
+      <button id="emblemBtn" class="emblem-btn" type="button" aria-label="눌러서 말하기">
+        <canvas id="emblem" width="440" height="440"></canvas>
+      </button>
+      <div id="hint" class="hint">눌러서 말하기</div>
+      <div id="timerBar" class="timer-bar" hidden></div>
+    </main>
+
+    <section id="feed" class="feed" aria-live="polite"></section>
+
+    <form id="inputForm" class="input" autocomplete="off">
+      <input id="text" type="text" enterkeyhint="send" placeholder="울트론에게 말하기…" aria-label="울트론에게 보낼 말" />
+      <button id="send" class="send" type="submit" aria-label="보내기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
+      </button>
+      <button id="mic" class="mic" type="button" aria-label="말하기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" /></svg>
+      </button>
+    </form>
+  </div>
+
+  <!-- 처음 설정 -->
+  <div id="setup" class="sheet" hidden>
+    <div class="sheet-body">
+      <h2>울트론 깨우기</h2>
+      <p class="muted">이 휴대폰에서 울트론이 혼자 돌아가려면 Anthropic API 키가 필요하다. 키는 이 기기에만 저장되고 Anthropic 으로만 간다.</p>
+      <label>호칭<input id="setupTitle" type="text" value="창조자" maxlength="20" /></label>
+      <label>API 키<input id="setupKey" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" /></label>
+      <p class="muted small">키는 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> 의 API Keys 에서 만든다. 잃어버려도 괜찮게 콘솔에서 월 사용 한도를 걸어 두길 권한다.</p>
+      <div class="row">
+        <button id="setupGo" class="primary" type="button">시작</button>
+        <button id="setupLater" class="ghost" type="button">나중에 (시간 · 타이머만)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 설정 -->
+  <div id="settings" class="sheet" hidden>
+    <div class="sheet-body">
+      <div class="sheet-head"><h2>설정</h2><button class="icon close" data-close type="button" aria-label="닫기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg></button></div>
+      <h3>AI</h3>
+      <label>API 키<input id="sKey" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" /></label>
+      <label>모델<select id="sModel"></select></label>
+      <label>생각 깊이<select id="sEffort">
+        <option value="low">빠르게 (기본)</option>
+        <option value="medium">보통</option>
+        <option value="high">깊게 (느림)</option>
+      </select></label>
+      <h3>나</h3>
+      <label>호칭<input id="sTitle" type="text" maxlength="20" /></label>
+      <label>기본 도시<input id="sCity" type="text" maxlength="30" /></label>
+      <h3>목소리</h3>
+      <label class="check"><input id="sSpeak" type="checkbox" /> 소리 내어 답하기</label>
+      <label>목소리<select id="sVoice"></select></label>
+      <label>음높이 <output id="oPitch"></output><input id="sPitch" type="range" min="0.1" max="1.5" step="0.05" /></label>
+      <label>빠르기 <output id="oRate"></output><input id="sRate" type="range" min="0.6" max="1.6" step="0.05" /></label>
+      <button id="sTest" class="ghost" type="button">목소리 들어 보기</button>
+      <h3>듣기</h3>
+      <label class="check"><input id="sAuto" type="checkbox" /> 대화 모드에서 답한 뒤 바로 다시 듣기</label>
+      <label class="check"><input id="sHands" type="checkbox" /> "울트론" 하고 부르면 듣기 (실험 · 배터리 더 씀)</label>
+      <label class="check"><input id="sAwake" type="checkbox" /> 앱을 켜 둔 동안 화면 꺼지지 않게</label>
+      <h3>연출</h3>
+      <label class="check"><input id="sGlitch" type="checkbox" /> 해킹 연출 (가끔 화면이 깨지고 한마디)</label>
+      <label class="check"><input id="sRival" type="checkbox" /> 자비스 견제 성격</label>
+      <p class="muted small" id="about"></p>
+    </div>
+  </div>
+
+  <!-- 기록 -->
+  <div id="log" class="sheet" hidden>
+    <div class="sheet-body">
+      <div class="sheet-head"><h2>기록</h2><button class="icon close" data-close type="button" aria-label="닫기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg></button></div>
+      <button id="newChat" class="ghost" type="button">새 대화 시작</button>
+      <h3>문서</h3>
+      <ul id="docList" class="list"></ul>
+      <h3>타이머</h3>
+      <ul id="timerList" class="list"></ul>
+      <h3>기억</h3>
+      <ul id="memList" class="list"></ul>
+    </div>
+  </div>
+
+  <!-- 문서 보기 -->
+  <div id="docView" class="sheet doc" hidden>
+    <div class="sheet-body">
+      <div class="sheet-head"><h2 id="docTitle"></h2><button class="icon close" data-close type="button" aria-label="닫기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg></button></div>
+      <div class="row doc-actions">
+        <button id="docShare" class="ghost" type="button">공유</button>
+        <button id="docCopy" class="ghost" type="button">복사</button>
+        <button id="docPrint" class="ghost" type="button">PDF 저장 · 인쇄</button>
+      </div>
+      <article id="docBody" class="doc-body"></article>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

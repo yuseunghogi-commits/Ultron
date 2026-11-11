@@ -1,0 +1,17 @@
+{
+  "name": "U.L.T.R.O.N",
+  "short_name": "ULTRON",
+  "description": "휴대폰에서 혼자 도는 울트론 — 음성 AI 비서",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0204",
+  "theme_color": "#0b0204",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
