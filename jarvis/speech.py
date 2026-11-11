@@ -21,7 +21,11 @@ import numpy as np
 from PySide6.QtCore import QEventLoop, QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
 
+from .config import DATA_DIR
+from .tts_cache import TTSCache
+
 log = logging.getLogger("jarvis.speech")
+CACHE = TTSCache(DATA_DIR / "tts_cache")      # 자주 하는 짧은 말은 저장해 두고 바로 재생 (tts_cache.py)
 TMP = Path(tempfile.gettempdir()) / "jarvis_tts"
 TMP.mkdir(exist_ok=True)
 SR = 24000            # edge-tts 원음과 같은 표본율 (SAPI 음성도 이 값으로 맞춰 디코딩)
@@ -223,11 +227,21 @@ def robotize(a: np.ndarray, amount: float) -> np.ndarray:
 
 
 def render(text: str, voice: str, rate: str, pitch: str = "+0Hz", fx: float = 0.0) -> np.ndarray:
-    """텍스트 → 재생할 PCM (앞뒤 무음 정리 + 기계음 효과). 워커 스레드에서 호출."""
+    """텍스트 → 재생할 PCM (앞뒤 무음 정리 + 기계음 효과). 워커 스레드에서 호출.
+    짧은 말은 캐시에서 바로 꺼낸다 (인터넷 합성 0.5~1초를 건너뜀)."""
+    spoken = clean_for_speech(text)
+    key = CACHE.key(spoken, voice, rate, pitch, fx) if TTSCache.wanted(spoken) else None
+    if key:
+        hit = CACHE.get(key)
+        if hit is not None:
+            return hit
     data, suffix = synthesize(text, voice, rate, pitch)
     if not data:
         return np.zeros(0, np.float32)
-    return robotize(trim_silence(decode(data, suffix)), fx)
+    pcm = robotize(trim_silence(decode(data, suffix)), fx)
+    if key and suffix == ".mp3":                 # Edge 음성만 저장 (SAPI 대체 음성은 저장하지 않음)
+        CACHE.put(key, pcm)
+    return pcm
 
 
 class Speaker(QObject):
@@ -478,6 +492,19 @@ class TTS(QObject):
         self._gen += 1
         self._sq = None
         self.speaker.stop()
+
+    def prewarm(self, phrases) -> None:
+        """자주 하는 말을 미리 합성해 캐시에 넣어 둔다 (백그라운드 — 처음 말할 때도 기다리지 않게)."""
+        opts = self.voice_getter()
+
+        def work():
+            for text in phrases:
+                try:
+                    render(text, *opts)
+                except Exception as e:      # 인터넷이 없으면 다음에
+                    log.debug("말소리 미리 만들기 실패: %s", e)
+                    return
+        threading.Thread(target=work, daemon=True, name="tts-prewarm").start()
 
 
 _SENT_END = re.compile(r"(.+?[.!?…~]+[\"')]?)(?=\s)|(.+?\n)", re.S)   # 뒤에 공백이 와야 문장 끝 ('3.5' 보호)

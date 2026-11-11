@@ -238,6 +238,7 @@ RESEARCH = re.compile(r"자료\s*조사|조사\s*해|리서치|찾아\s*서|출�
 # 작업 요청을 받으면 모델이 생각하는 동안 울트론이 바로 하는 대답 (첫 반응을 0.5초 안에).
 # 무언가를 만들어 달라는 말일 때만 한다 — "과제 언제까지야" · "영화 포스터 보여 줘" 에는 하지 않는다
 WORK_ACKS = ("알았다. 바로 만들지.", "좋다. 금방 만들어 주지.", "알았다. 잠깐이면 된다.")
+RESEARCH_ACK = "알았다. 자료를 모아 바로 만들지."
 MAKE_WORDS = re.compile(r"만들|작성|써\s*줘|써줘|써\s*주|정리|조사|그려|꾸며|준비|짜\s*줘|짜줘|뽑아|디자인", re.I)
 # 만드는 방법을 묻는 말 ("PPT 만드는 법 알려 줘") — 만들어 달라는 요청이 아니다
 HOW_TO = re.compile(r"(?:만드는|쓰는|하는|그리는|짜는)\s*(?:법|방법|요령|순서)|어떻게\s*(?:만들|쓰|써|해|하|짜)", re.I)
@@ -815,6 +816,7 @@ class Brain:
 
     def _claude(self, text: str, key: str, cancel: threading.Event, chat: bool = False,
                 on_text: Callable[[str], None] | None = None) -> str | None:
+        import anthropic
         client = self._client_for(key)
         model = self.cfg["model"] or "claude-opus-5-5"
         self._vision_model(model)
@@ -850,23 +852,22 @@ class Brain:
             # 안전 분류기가 거절하면 서버가 권장 모델로 자동 재시도
             kwargs["betas"] = ["server-side-fallback-2026-07-01"]
             kwargs["fallbacks"] = "default"
+        if self._fast(model):
+            kwargs["speed"] = "fast"           # 빠른 모드: 같은 모델을 약 2배 빠르게 (요금 2배)
 
         search_ids: dict[str, str] = {}
         try:
             for _ in range(MAX_STEPS):
                 if cancel.is_set():
                     raise _Cancelled()
-                if on_text:   # 대화 모드: 글자가 만들어지는 대로 넘겨 첫 문장부터 읽는다
-                    with client.beta.messages.stream(messages=history, **kwargs) as st:
-                        for ev in st:
-                            if cancel.is_set():
-                                raise _Cancelled()
-                            if ev.type == "content_block_delta" and getattr(ev.delta, "type", "") == "text_delta":
-                                on_text(ev.delta.text)
-                        resp = st.get_final_message()
-                    on_text("\n")
-                else:
-                    resp = client.beta.messages.create(messages=history, **kwargs)
+                try:
+                    resp = self._request(client, history, kwargs, cancel, on_text)
+                except (anthropic.RateLimitError, anthropic.BadRequestError) as e:
+                    if not kwargs.pop("speed", None):
+                        raise
+                    log.warning("빠른 모드를 쓸 수 없어 보통 속도로 다시: %s", e)   # 빠른 모드 한도 · 미지원
+                    self._fast_off = time.time()
+                    resp = self._request(client, history, kwargs, cancel, on_text)
                 if cancel.is_set():
                     raise _Cancelled()
                 history.append({"role": "assistant", "content": resp.content})
@@ -905,6 +906,25 @@ class Brain:
             del history[start_len:]   # 실패한 턴은 기록에서 제거 (앞부분은 그대로 유지)
             raise
 
+    def _request(self, client, history: list, kwargs: dict, cancel: threading.Event, on_text):
+        """Claude 한 번 부르기. on_text 가 있으면 글자가 만들어지는 대로 넘겨 첫 문장부터 읽는다."""
+        if not on_text:
+            return client.beta.messages.create(messages=history, **kwargs)
+        with client.beta.messages.stream(messages=history, **kwargs) as st:
+            for ev in st:
+                if cancel.is_set():
+                    raise _Cancelled()
+                if ev.type == "content_block_delta" and getattr(ev.delta, "type", "") == "text_delta":
+                    on_text(ev.delta.text)
+            resp = st.get_final_message()
+        on_text("\n")
+        return resp
+
+    def _fast(self, model: str) -> bool:
+        """빠른 모드를 쓸까 — 설정이 켜져 있고 Opus 5.5 이며, 최근 10분 안에 빠른 모드가 거절되지 않았을 때."""
+        return (bool(self.cfg["fast_mode"]) and model == "claude-opus-5-5"
+                and time.time() - getattr(self, "_fast_off", 0.0) > 600)
+
     def _vision_model(self, model: str | None) -> None:
         """화면을 보는 모델을 도구에 알려 준다 → 그 모델이 다시 줄이지 않을 크기로 화면을 찍어 보낸다 (좌표가 어긋나지 않게)."""
         setter = getattr(self.tools, "set_vision_model", None)
@@ -928,7 +948,7 @@ class Brain:
     def _work_ack(text: str) -> str:
         """작업 요청에 울트론이 곧바로 하는 한마디."""
         if RESEARCH.search(text or ""):
-            return "알았다. 자료를 모아 바로 만들지."
+            return RESEARCH_ACK
         return random.choice(WORK_ACKS)
 
     def _effort_for(self, text: str) -> str:
@@ -1061,18 +1081,30 @@ class Brain:
         key = self.cfg.api_key()
         if mode == "api" and key:
             def ask(system: str, prompts: list, timeout: float) -> list:
+                import anthropic
                 client = self._client_for(key)
                 model = self.cfg["writer_model"] or self.cfg["model"] or "claude-opus-5-5"
 
+                fast = self._fast(model)
+
                 def one(prompt: str):
-                    try:
-                        resp = client.beta.messages.create(
-                            model=model, max_tokens=8000, system=system, timeout=timeout,
-                            messages=[{"role": "user", "content": prompt}], output_config={"effort": "low"})
-                        return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-                    except Exception as e:
-                        log.warning("작가 실패: %s", e)
-                        return None
+                    extra = {"speed": "fast"} if fast else {}
+                    for _ in range(2):
+                        try:
+                            resp = client.beta.messages.create(
+                                model=model, max_tokens=8000, system=system, timeout=timeout,
+                                messages=[{"role": "user", "content": prompt}], output_config={"effort": "low"}, **extra)
+                            return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+                        except (anthropic.RateLimitError, anthropic.BadRequestError) as e:
+                            if not extra:
+                                log.warning("작가 실패: %s", e)
+                                return None
+                            extra = {}                      # 빠른 모드가 막혔으면 보통 속도로 한 번 더
+                            self._fast_off = time.time()
+                        except Exception as e:
+                            log.warning("작가 실패: %s", e)
+                            return None
+                    return None
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(prompts))) as pool:
                     return list(pool.map(one, prompts))
             return ask

@@ -73,6 +73,7 @@ Item {
         screenModelBox.currentIndex = Math.max(0, screenModels.findIndex(m => m.v === (cfg.pro_screen_model || "")))
         screenSmallSw.checked = cfg.screen_detail === "standard"
         effortBox.currentIndex = Math.max(0, efforts.findIndex(m => m.v === cfg.effort))
+        fastSw.checked = cfg.fast_mode === true
         voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
         fxSw.checked = cfg.voice_fx !== false
         rivalSw.checked = cfg.rival_jarvis !== false
@@ -110,6 +111,7 @@ Item {
             screen_detail: screenSmallSw.checked ? "standard" : "auto",
             model: models[modelBox.currentIndex].v,
             effort: efforts[effortBox.currentIndex].v,
+            fast_mode: fastSw.checked,
             tts_voice: voices[voiceBox.currentIndex].v,
             voice_fx: fxSw.checked,
             rival_jarvis: rivalSw.checked,
@@ -288,6 +290,11 @@ Item {
                     id: screenSmallSw
                     visible: !sp.isLocal
                     text: "화면 캡처를 작게 보내기 (토큰 절약 · 작은 글씨는 덜 선명)"
+                }
+                Toggle {
+                    id: fastSw
+                    visible: !sp.isPro && !sp.isLocal
+                    text: "빠른 모드 — Opus 5.5 답 · 결과물이 약 2배 빨라짐 (요금 2배, 막히면 보통 속도로)"
                 }
                 Label2 { text: "RESPONSE DEPTH" }
                 Combo { id: effortBox; model: sp.efforts }

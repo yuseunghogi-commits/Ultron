@@ -30,6 +30,7 @@ DEFAULTS: dict = {
     "anthropic_api_key": "",          # 비워두면 ANTHROPIC_API_KEY 환경변수 사용
     "model": "claude-opus-5-5",
     "effort": "low",                  # low | medium | high  (음성 비서는 low 권장: 빠른 응답)
+    "fast_mode": False,               # API 방식 · Opus 5.5 빠른 모드 (답 · 결과물이 약 2배 빠름, 요금 2배)
     "web_search": True,               # Claude 서버측 웹 검색 사용 (검색당 별도 과금)
     # --- 음성 ---
     "wake_word_enabled": True,        # '울트론' 호출어 상시 대기

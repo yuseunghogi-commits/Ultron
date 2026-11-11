@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from . import absorb, approval, glitch, hearing, hud_feed, rival, winutil
 from .absorb_view import AbsorbView
 from .absorb_view import crop as crop_image
-from .brain import Brain, situation_text
+from .brain import RESEARCH_ACK, WORK_ACKS, Brain, situation_text
 from .glitch_view import GlitchView, from_qimage, to_qimage
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
@@ -318,6 +318,8 @@ class Jarvis(QObject):
         self._refresh_link()
         # 로컬 AI 모델을 미리 메모리에 올려 둠 (없으면 조용히 건너뜀)
         threading.Thread(target=self.brain.local_ai.warmup, daemon=True, name="local-ai-warmup").start()
+        # 작업을 시킬 때 바로 하는 대답은 미리 합성해 둔다 (켜진 뒤 잠시 있다가, 이미 저장돼 있으면 건너뜀)
+        QTimer.singleShot(6000, lambda: self.tts.prewarm(WORK_ACKS + (RESEARCH_ACK,)))
 
         # ---- HUD ----
         self.engine = QQmlApplicationEngine()

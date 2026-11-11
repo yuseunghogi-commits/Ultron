@@ -183,8 +183,11 @@ def _canvas(w: int, h: int, color):
 
 def _save(img, w: int, h: int, path: Path) -> object:
     from PIL import Image
-    out = img.resize((w, h), Image.LANCZOS)
-    out.save(path)                      # (optimize 는 몇 배 느려 쓰지 않는다)
+    if img.size == (w * SS, h * SS):
+        out = img.reduce(SS)            # 정확히 절반: 상자 평균으로 줄인다 (LANCZOS 와 거의 같은 결과, 몇 배 빠름)
+    else:
+        out = img.resize((w, h), Image.LANCZOS)
+    out.save(path, compress_level=3)    # 압축은 가볍게 (기본 6 보다 훨씬 빠르고 파일은 조금 큼 · optimize 는 쓰지 않음)
     return out
 
 
@@ -283,11 +286,10 @@ def build_cardnews(folder: Path, title: str, cards: list, subtitle: str = "", cl
     end = closing if isinstance(closing, str) else ""
     first, *rest = (end.splitlines() or ["감사합니다"]) if end.strip() else ["감사합니다"]
     imgs.append(_closing(th, _text(first), [_text(x) for x in rest if x.strip()], refs, total))
-    files, saved = [], []
-    for i, img in enumerate(imgs, 1):
-        p = folder / f"{i:02d}.png"
-        saved.append(_save(img, CARD, CARD, p))
-        files.append(p)
+    files = [folder / f"{i:02d}.png" for i in range(1, len(imgs) + 1)]
+    from concurrent.futures import ThreadPoolExecutor      # 줄이기 · PNG 저장은 여러 장을 동시에 (Pillow 가 그동안 GIL 을 놓는다)
+    with ThreadPoolExecutor(max_workers=min(4, len(imgs))) as pool:
+        saved = list(pool.map(lambda pair: _save(pair[0], CARD, CARD, pair[1]), zip(imgs, files)))
     pdf = folder / f"{folder.name}.pdf"
     saved[0].save(pdf, save_all=True, append_images=saved[1:], resolution=150)
     return {"cards": len(files), "pdf": pdf, "files": files}
