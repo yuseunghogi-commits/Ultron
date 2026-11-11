@@ -295,10 +295,15 @@ def build_poster(path: Path, title: str, sections: list, subtitle: str = "", hig
     d.ellipse((860 * S, -240 * S, 1480 * S, 380 * S), fill=_mix(th.accent, th.on_accent, 0.12))
     d.ellipse((1010 * S, 300 * S, 1360 * S, 650 * S), fill=_mix(th.accent, th.on_accent, 0.07))
     f, lines, sz = fit(d, title, "bold", 1040 * S, 330 * S, 128 * S, 64 * S, gap=1.15, max_lines=3)
-    used = text_block(d, (100 * S, 110 * S), lines, f, sz, _rgb(th.on_accent), gap=1.15)
+    block = len(lines) * sz * 1.15
     if _text(subtitle):
         sf, sl, ss = fit(d, _text(subtitle), "regular", 1040 * S, 120 * S, 42 * S, 28 * S, gap=1.3, max_lines=2)
-        text_block(d, (100 * S, 110 * S + used + 26 * S), sl, sf, ss, _mix(th.on_accent, th.accent, 0.15), gap=1.3)
+        block += 26 * S + len(sl) * ss * 1.3
+    room = ((head - (110 if _text(highlight) else 40)) - 90) * S         # 제목이 짧아도 머리 띠 가운데에 오게
+    top = 90 * S + max(0.0, (room - block) / 2)
+    used = text_block(d, (100 * S, top), lines, f, sz, _rgb(th.on_accent), gap=1.15)
+    if _text(subtitle):
+        text_block(d, (100 * S, top + used + 26 * S), sl, sf, ss, _mix(th.on_accent, th.accent, 0.15), gap=1.3)
     y = head * S + 50 * S
     if _text(highlight):
         hb = (100 * S, head * S - 70 * S, 1140 * S, head * S + 110 * S)

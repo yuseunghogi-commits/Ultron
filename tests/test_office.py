@@ -216,6 +216,28 @@ def test_chart_slides_are_real_editable_charts_with_korean_fonts(tmp_path):
             assert fonts[:2] == [qn("a:latin"), qn("a:ea")] and rpr.find(qn("a:ea")).get("typeface") == office.FONT
 
 
+def test_charts_read_naturally_numbers_do_not_collide_and_bars_go_top_down(tmp_path):
+    from pptx.oxml.ns import qn
+    path = tmp_path / "read.pptx"
+    office.build_presentation(path, "읽기 좋은 차트", [
+        {"layout": "chart", "title": "세 줄", "chart": {"type": "line", "categories": ["3월", "4월"], "series": [
+            {"name": "중간", "values": [2, 3]}, {"name": "위", "values": [5, 6]}, {"name": "아래", "values": [-1, 0]}]}},
+        {"layout": "chart", "title": "가로 막대", "chart": {"type": "bar", "categories": ["첫째", "둘째"],
+                                                        "series": [{"name": "값", "values": [3, -2]}]}},
+    ], agenda=False)
+    prs = pptx.Presentation(path)
+    line, bar = chart_of(prs.slides[1]).chart, chart_of(prs.slides[2]).chart
+    pos = {}
+    for ser in line.plots[0].series:
+        d = ser._element.find(qn("c:dLbls"))
+        pos[ser.name] = (d.find(qn("c:dLblPos")).get("val"), d.find(qn("c:showVal")).get("val"))
+    assert pos == {"위": ("t", "1"), "아래": ("b", "1"), "중간": ("b", "0")}     # 위 선은 위에, 아래 선은 아래에, 가운데는 감춤
+    for ch in (line, bar):
+        assert ch.category_axis._element.find(qn("c:tickLblPos")).get("val") == "low"   # 음수가 있어도 이름은 가장자리에
+    assert bar.category_axis.reverse_order                                              # 첫 항목이 맨 위
+    assert bar.value_axis._element.find(qn("c:crosses")).get("val") == "max"           # 숫자 눈금은 아래에
+
+
 def test_spreadsheet_charts_use_the_table_and_skip_sheets_without_numbers(tmp_path):
     path = tmp_path / "성적.xlsx"
     office.build_spreadsheet(path, [

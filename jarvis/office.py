@@ -434,7 +434,9 @@ class _Deck:
     def chart(self, title: str, spec: dict, items: list[tuple[str, int]], notes: str) -> bool:
         """진짜 차트 (파워포인트에서 바로 고칠 수 있음). 데이터가 차트로 그릴 수 없으면 False (→ 목록 장으로)."""
         from pptx.chart.data import CategoryChartData
-        from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_MARKER_STYLE
+        from pptx.enum.chart import (XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_MARKER_STYLE,
+                                     XL_TICK_LABEL_POSITION)
+        from pptx.oxml.ns import qn
         from pptx.util import Inches, Pt
         kind = str(spec.get("type") or "column").strip().lower()
         kind = {"막대": "column", "가로막대": "bar", "꺾은선": "line", "선": "line", "원": "pie", "파이": "pie"}.get(kind, kind)
@@ -469,7 +471,8 @@ class _Deck:
         plot = ch.plots[0]
         plot.has_data_labels = True
         dl = plot.data_labels
-        dl.number_format, dl.number_format_is_linked = (f'General"{unit}"' if unit else "General"), False
+        fmt = f'General"{unit}"' if unit else "General"
+        dl.number_format, dl.number_format_is_linked = fmt, False
         dl.font.size = Pt(13)
         dl.font.color.rgb = self.rgb(t.text)
         if kind == "pie":
@@ -482,6 +485,8 @@ class _Deck:
             dl.position = XL_LABEL_POSITION.ABOVE if kind == "line" else XL_LABEL_POSITION.OUTSIDE_END
             if kind != "line":
                 plot.gap_width = 70
+            mean = [sum(v for v in vals if v is not None) / max(1, sum(v is not None for v in vals)) for _, vals in series]
+            high, low = mean.index(max(mean)), mean.index(min(mean))
             for i, ser in enumerate(plot.series):
                 c = self.rgb(colors[i % len(colors)])
                 if kind == "line":
@@ -492,6 +497,13 @@ class _Deck:
                     ser.marker.format.fill.solid()
                     ser.marker.format.fill.fore_color.rgb = c
                     ser.marker.format.line.color.rgb = c
+                    if len(series) > 1:                 # 선이 여러 개: 위쪽 선은 숫자를 위에, 아래쪽 선은 아래에 (겹치지 않게)
+                        sl = ser.data_labels
+                        sl.show_value = i in (high, low)       # 가운데 선들의 숫자는 감춘다 (눈금으로 읽는다)
+                        sl.number_format, sl.number_format_is_linked = fmt, False
+                        sl.font.size = Pt(13)
+                        sl.font.color.rgb = self.rgb(t.text)
+                        sl.position = XL_LABEL_POSITION.ABOVE if i == high else XL_LABEL_POSITION.BELOW
                 else:
                     ser.format.fill.solid()
                     ser.format.fill.fore_color.rgb = c
@@ -499,6 +511,12 @@ class _Deck:
                 axis.tick_labels.font.size = Pt(13)
                 axis.tick_labels.font.color.rgb = self.rgb(t.muted)
                 axis.format.line.color.rgb = self.rgb(t.soft)
+            ch.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW   # 음수가 있어도 이름은 맨 아래에
+            if kind == "bar":                               # 가로 막대: 첫 항목이 맨 위에 (위에서 아래로 읽게), 눈금은 아래 그대로
+                ch.category_axis.reverse_order = True
+                crosses = ch.value_axis._element.find(qn("c:crosses"))
+                if crosses is not None:
+                    crosses.set("val", "max")              # 숫자 축이 마지막 항목(맨 아래) 쪽에서 만나게
             ch.value_axis.has_major_gridlines = True
             ch.value_axis.major_gridlines.format.line.color.rgb = self.rgb(t.soft)
             ch.value_axis.format.line.fill.background()
