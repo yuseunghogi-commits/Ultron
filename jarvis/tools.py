@@ -374,7 +374,8 @@ class PCTools:
                   "open": {"type": "boolean", "description": "open the file after saving (default true)"}},
                  ["title", "slides"]),
             tool("make_document",
-                 "Create a Word (.docx) report or document and open it. Use for 보고서 / 레포트 / 조사 정리 / 문서로 정리 requests. "
+                 "Create a report or document and open it — Word (.docx) by default, or 한글 (.hwpx) when the user asks for "
+                 "한글 / 한컴 / hwp / 아래아한글. Use for 보고서 / 레포트 / 조사 정리 / 문서로 정리 / 가정통신문 requests. "
                  "Give the sections in order; how much you write yourself (just headings, or the full text) is set by the "
                  "작업 rules in your instructions — sections without text are written by writer agents in parallel. A 참고 자료 "
                  "list is added from sources and pages are numbered.",
@@ -395,6 +396,8 @@ class PCTools:
                           "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
                           "caption": {"type": "string"}}}}}},
                   "sources": {"type": "array", "items": {"type": "string"}},
+                  "format": {"type": "string", "enum": ["docx", "hwpx"],
+                             "description": "docx = Word (default), hwpx = 한글 (when the user says 한글 · 한컴 · hwp)"},
                   "filename": s, "folder": s,
                   "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["title", "sections"]),
@@ -1470,16 +1473,21 @@ class PCTools:
 
     def t_make_document(self, title: str, sections: list, subtitle: str = "", sources: list | None = None,
                         filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True,
-                        audience: str = "", facts: list | None = None, **_extra) -> str:
-        from . import office, writers
+                        audience: str = "", facts: list | None = None, format: str = "docx", **_extra) -> str:
+        from . import hwpx, office, writers
+        hangul = str(format or "").strip().lower() in ("hwpx", "hwp", "한글", "한컴")
         sections, found, team = self._team("document", {"title": title, "subtitle": subtitle, "audience": audience,
                                                         "facts": facts}, sections)
         refs = writers.merge_sources(sources, found)
+        build = hwpx.build_hwpx if hangul else office.build_document
         path, info, note = self._make_file(
-            lambda p: office.build_document(p, title, sections, subtitle, refs),
-            filename or title, ".docx", folder, overwrite, open)
+            lambda p: build(p, title, sections, subtitle, refs),
+            filename or title, ".hwpx" if hangul else ".docx", folder, overwrite, open)
+        if hangul and "열 프로그램을 찾지 못해" in note:
+            note += " 한컴오피스 한글이나 무료 '한컴오피스 뷰어'가 있으면 열 수 있다."
         tables = f", 표 {info['tables']}개" if info["tables"] else ""
-        return (f"문서를 만들었다 — 장 {info['sections']}개{tables}.{team} 저장한 곳: {self._where(path)} "
+        kind = "한글 문서" if hangul else "문서"
+        return (f"{kind}를 만들었다 — 장 {info['sections']}개{tables}.{team} 저장한 곳: {self._where(path)} "
                 f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
 
     def t_make_spreadsheet(self, sheets: list, filename: str = "", folder: str = "", overwrite: bool = False,
