@@ -4,7 +4,7 @@
 // 사용자가 그 버튼을 눌러야 실제로 일어난다 — 그것이 PC 판의 승인 카드 역할을 한다.
 
 import type Anthropic from "@anthropic-ai/sdk";
-import type { ModelId } from "./store";
+import type { DeckSlide, DocKind, ExportFormat, ModelId, SheetData } from "./store";
 
 type Tool = Anthropic.Beta.BetaToolUnion;
 
@@ -15,6 +15,18 @@ export interface ActionCard {
   href?: string;     // tel: · sms: · https: 링크
   text?: string;     // 공유할 글
   docId?: string;    // 문서 보기
+  want?: ExportFormat; // 문서 카드: 바로 만들 파일 형식
+}
+
+export interface NewDoc {
+  kind: DocKind;
+  title: string;
+  content?: string;
+  subtitle?: string;
+  style?: "light" | "dark";
+  slides?: DeckSlide[];
+  sheets?: SheetData[];
+  want?: ExportFormat;
 }
 
 /** 도구가 앱에 부탁하는 일 (main.ts 가 구현한다) */
@@ -24,7 +36,7 @@ export interface ToolHost {
   setTimer(seconds: number, label: string): string;
   cancelTimers(label?: string): number;
   listTimers(): string;
-  makeDoc(title: string, content: string): string;   // 문서 id
+  makeDoc(d: NewDoc): string;   // 문서 id
   card(c: ActionCard): void;
   deviceStatus(): Promise<string>;
 }
@@ -113,12 +125,71 @@ const CLIENT_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "make_document",
     description:
-      "보고서 · 정리 · 글 · 계획표 같은 긴 결과물을 문서로 만든다. 사용자는 앱에서 열어 보고, 공유하거나 PDF 로 저장할 수 있다. " +
-      "content 는 마크다운(# 제목, ## 소제목, - 목록, **굵게**, | 표 |)으로 쓴다. 출처가 있으면 끝에 '## 출처' 로 적는다.",
+      "보고서 · 정리 · 글 · 계획표 · 가정통신문 같은 문서를 만든다. 사용자는 앱에서 열어 보고, 한글(HWPX) · 워드(DOCX) 파일로 " +
+      "저장하거나 한컴오피스 · 구글 문서 · 워드 앱으로 열 수 있다. content 는 마크다운(## 소제목, - 목록, 1. 번호, **굵게**, | 표 |)으로 쓰고 " +
+      "제목은 title 에만 쓴다. 출처가 있으면 끝에 '## 출처' 로 적는다.",
     input_schema: {
       type: "object",
-      properties: { title: { ...str, description: "문서 제목" }, content: { ...str, description: "문서 본문 (마크다운)" } },
+      properties: {
+        title: { ...str, description: "문서 제목" },
+        content: { ...str, description: "문서 본문 (마크다운)" },
+        file: { type: "string", enum: ["hwpx", "docx", "pdf"], description: "사용자가 파일 형식을 말했으면: 한글 · 한컴 · hwp → hwpx, 워드 · 구글 문서 · 독스 → docx, PDF → pdf" },
+      },
       required: ["title", "content"],
+    },
+  },
+  {
+    name: "make_presentation",
+    description:
+      "발표 자료(PPT)를 만든다. 파워포인트 · 구글 슬라이드 · 한컴오피스 한쇼에서 열리는 PPTX 로 저장된다. 표지는 자동으로 붙으니 slides 에는 본문 장만 넣는다. " +
+      "한 장에 요점 3~6개, 요점은 짧은 명사형 문장으로. 사용자가 장 수를 말하면 그대로 따른다. 발표 대본이 필요하면 notes 에 쓴다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { ...str, description: "발표 제목" },
+        subtitle: { ...str, description: "표지 부제 (발표자 · 반 · 날짜 등, 없으면 비움)" },
+        style: { type: "string", enum: ["light", "dark"], description: "light = 흰 바탕(기본), dark = 검붉은 울트론 바탕" },
+        slides: {
+          type: "array",
+          description: "본문 장들",
+          items: {
+            type: "object",
+            properties: {
+              title: { ...str, description: "장 제목" },
+              bullets: { type: "array", items: { type: "string" }, description: "요점들" },
+              notes: { ...str, description: "발표 대본 (선택)" },
+            },
+            required: ["title", "bullets"],
+          },
+        },
+      },
+      required: ["title", "slides"],
+    },
+  },
+  {
+    name: "make_spreadsheet",
+    description:
+      "표(엑셀)를 만든다. 엑셀 · 구글 스프레드시트 · 한컴오피스 한셀에서 열리는 XLSX 로 저장된다. 시간표 · 가계부 · 명단 · 비교표처럼 칸으로 정리할 때 쓴다. " +
+      "숫자는 단위 없이 숫자만 넣고 단위는 열 이름에 쓴다 (예: '금액(원)').",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { ...str, description: "표 제목 (파일 이름)" },
+        sheets: {
+          type: "array",
+          description: "시트들 (보통 하나)",
+          items: {
+            type: "object",
+            properties: {
+              name: { ...str, description: "시트 이름" },
+              columns: { type: "array", items: { type: "string" }, description: "열 이름들" },
+              rows: { type: "array", items: { type: "array", items: { type: ["string", "number"] } }, description: "행들 (각 행은 열 순서대로)" },
+            },
+            required: ["name", "columns", "rows"],
+          },
+        },
+      },
+      required: ["title", "sheets"],
     },
   },
   {
@@ -166,7 +237,38 @@ export function validate(name: string, input: unknown): string | null {
     case "open_url": return isStr(i.url, 2000) && /^https?:\/\//i.test(i.url as string) && isStr(i.title, 100) ? null : "url 은 http(s):// 로 시작해야 함";
     case "open_map": return isStr(i.query, 300) ? null : "query 가 비었음";
     case "share_text": return isStr(i.text, 20000) ? null : "text 가 비었음";
-    case "make_document": return isStr(i.title, 200) && isStr(i.content, 200000) ? null : "title · content 가 필요함";
+    case "make_document":
+      if (!isStr(i.title, 200) || !isStr(i.content, 200000)) return "title · content 가 필요함";
+      return i.file === undefined || ["hwpx", "docx", "pdf"].includes(i.file as string) ? null : "file 은 hwpx · docx · pdf";
+    case "make_presentation": {
+      if (!isStr(i.title, 200)) return "title 이 필요함";
+      if (i.subtitle !== undefined && typeof i.subtitle !== "string") return "subtitle 은 글이어야 함";
+      if (i.style !== undefined && i.style !== "light" && i.style !== "dark") return "style 은 light · dark";
+      if (!Array.isArray(i.slides) || !i.slides.length || i.slides.length > 60) return "slides 는 1 ~ 60장";
+      for (const s of i.slides as unknown[]) {
+        const o = s as Input;
+        if (typeof o !== "object" || !o || !isStr(o.title, 300) || !Array.isArray(o.bullets) || o.bullets.length > 20 ||
+          !(o.bullets as unknown[]).every((b) => typeof b === "string") || (o.notes !== undefined && typeof o.notes !== "string")) {
+          return "각 장은 title · bullets(글 목록, 20개 이하) · notes(선택)";
+        }
+      }
+      return null;
+    }
+    case "make_spreadsheet": {
+      if (!isStr(i.title, 200)) return "title 이 필요함";
+      if (!Array.isArray(i.sheets) || !i.sheets.length || i.sheets.length > 20) return "sheets 는 1 ~ 20개";
+      for (const s of i.sheets as unknown[]) {
+        const o = s as Input;
+        const cellOk = (c: unknown) => typeof c === "string" || (typeof c === "number" && Number.isFinite(c));
+        if (typeof o !== "object" || !o || typeof o.name !== "string" || !Array.isArray(o.columns) || !o.columns.length ||
+          o.columns.length > 100 || !(o.columns as unknown[]).every((c) => typeof c === "string") ||
+          !Array.isArray(o.rows) || o.rows.length > 5000 ||
+          !(o.rows as unknown[]).every((r) => Array.isArray(r) && r.length <= 100 && r.every(cellOk))) {
+          return "각 시트는 name · columns(글 목록) · rows(행 목록, 칸은 글이나 숫자)";
+        }
+      }
+      return null;
+    }
     case "device_status": return null;
     default: return `모르는 도구: ${name}`;
   }
@@ -227,9 +329,35 @@ export async function runTool(name: string, input: unknown, host: ToolHost): Pro
       host.card({ kind: "share", title: (i.title as string) || "공유하기", detail: (i.text as string).slice(0, 80), text: i.text as string });
       return { content: "공유 버튼을 화면에 띄웠다." };
     case "make_document": {
-      const id = host.makeDoc((i.title as string).trim(), i.content as string);
-      host.card({ kind: "doc", title: i.title as string, detail: "문서를 만들었다", docId: id });
-      return { content: `문서를 만들었다. 사용자 화면에 '${i.title}' 문서 카드가 떴고, 앱의 기록 탭에도 저장됐다.` };
+      const want = i.file as ExportFormat | undefined;
+      const id = host.makeDoc({ kind: "doc", title: (i.title as string).trim(), content: i.content as string, want });
+      host.card({ kind: "doc", title: i.title as string, detail: "문서", docId: id, want });
+      const how = want === "hwpx" ? "카드의 '한글 파일' 버튼" : want === "docx" ? "카드의 '워드 파일' 버튼" : want === "pdf" ? "카드의 'PDF' 버튼" : "카드에서 한글 · 워드 파일";
+      return { content: `문서를 만들었다. 사용자 화면에 '${i.title}' 카드가 떴다. ${how}을 누르면 파일로 저장되고 한컴오피스 · 구글 문서 · 워드 같은 앱으로 열 수 있다. 기록 탭에도 저장됐다.` };
+    }
+    case "make_presentation": {
+      const slides = (i.slides as Input[]).map((s) => ({
+        title: (s.title as string).trim(),
+        bullets: (s.bullets as string[]).map((b) => b.trim()).filter(Boolean),
+        ...(typeof s.notes === "string" && s.notes.trim() ? { notes: s.notes.trim() } : {}),
+      }));
+      const id = host.makeDoc({
+        kind: "slides", title: (i.title as string).trim(), subtitle: (i.subtitle as string | undefined)?.trim() || undefined,
+        style: (i.style as "light" | "dark" | undefined) ?? "light", slides, want: "pptx",
+      });
+      host.card({ kind: "doc", title: i.title as string, detail: `발표 자료 · 표지 포함 ${slides.length + 1}장`, docId: id, want: "pptx" });
+      return { content: `발표 자료를 만들었다 (표지 포함 ${slides.length + 1}장). 사용자 화면의 카드에서 'PPT 파일' 을 누르면 저장되고 파워포인트 · 구글 슬라이드 · 한쇼로 열 수 있다.` };
+    }
+    case "make_spreadsheet": {
+      const sheets = (i.sheets as Input[]).map((s) => ({
+        name: (s.name as string).trim(),
+        columns: (s.columns as string[]).map((c) => c.trim()),
+        rows: s.rows as (string | number)[][],
+      }));
+      const id = host.makeDoc({ kind: "sheet", title: (i.title as string).trim(), sheets, want: "xlsx" });
+      const rows = sheets.reduce((a, s) => a + s.rows.length, 0);
+      host.card({ kind: "doc", title: i.title as string, detail: `표 · ${rows}줄`, docId: id, want: "xlsx" });
+      return { content: `표를 만들었다 (${rows}줄). 사용자 화면의 카드에서 '엑셀 파일' 을 누르면 저장되고 엑셀 · 구글 스프레드시트 · 한셀로 열 수 있다.` };
     }
     case "device_status":
       return { content: await host.deviceStatus() };

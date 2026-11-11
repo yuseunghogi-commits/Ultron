@@ -6,6 +6,8 @@
 import { Capacitor } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { Clipboard } from "@capacitor/clipboard";
+import { Directory, Filesystem } from "@capacitor/filesystem";
+import { FileOpener } from "@capacitor-community/file-opener";
 import { Haptics } from "@capacitor/haptics";
 import { KeepAwake } from "@capacitor-community/keep-awake";
 import { LocalNotifications } from "@capacitor/local-notifications";
@@ -154,6 +156,42 @@ export async function scheduleTimerNotice(id: number, label: string, due: number
 export function cancelTimerNotice(ids: number[]): void {
   if (!ids.length) return;
   void LocalNotifications.cancel({ notifications: ids.map((id) => ({ id })) }).catch(() => {});
+}
+
+// ---------------------------------------------------------------- 파일 저장 · 열기
+function toBase64(data: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < data.length; i += 0x8000) s += String.fromCharCode(...data.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+export interface SavedFile { uri: string; where: string }
+
+/** 휴대폰의 '문서/ULTRON' 폴더에 저장한다. 안 되면 앱 임시 폴더에. */
+export async function saveNativeFile(name: string, data: Uint8Array): Promise<SavedFile> {
+  const b64 = toBase64(data);
+  try {
+    const r = await Filesystem.writeFile({ path: `ULTRON/${name}`, data: b64, directory: Directory.Documents, recursive: true });
+    return { uri: r.uri, where: "내 파일 › 문서 › ULTRON" };
+  } catch {
+    const r = await Filesystem.writeFile({ path: `export/${name}`, data: b64, directory: Directory.Cache, recursive: true });
+    return { uri: r.uri, where: "" };
+  }
+}
+
+/** 열 앱 고르기 창을 띄운다 (한컴오피스 · 구글 문서 · 워드 …). 열 앱이 없으면 공유 창으로. */
+export async function openNativeFile(uri: string, mime: string, title: string): Promise<"opened" | "shared"> {
+  try {
+    await FileOpener.open({ filePath: uri, contentType: mime, openWithDefault: false });
+    return "opened";
+  } catch {
+    await shareNativeFile(uri, title);
+    return "shared";
+  }
+}
+
+export async function shareNativeFile(uri: string, title: string): Promise<void> {
+  try { await Share.share({ title, files: [uri], dialogTitle: title }); } catch { /* 취소 */ }
 }
 
 // ---------------------------------------------------------------- 그 밖에

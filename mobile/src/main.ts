@@ -9,12 +9,14 @@ import { renderMarkdown } from "./md";
 import { CHAT_OFF_LINES, CHAT_ON_LINES, GLITCH_LINES, GREETINGS, pickLine } from "./persona";
 import {
   MODEL_LABELS, loadChatMode, loadDocs, loadMemory, loadSettings, loadTimers, saveChatMode, saveDocs, saveMemory,
-  saveSettings, saveTimers, uid, type Doc, type ModelId, type Settings, type Timer,
+  saveSettings, saveTimers, uid, type Doc, type ExportFormat, type ModelId, type Settings, type Timer,
 } from "./store";
 import type { ActionCard, ToolHost } from "./tools";
+import { FORMAT_LABEL, buildFile, downloadFile, formatsFor } from "./office/export";
+import { deckMarkdown, sheetsMarkdown } from "./office/outline";
 import { Speaker, canListen, koreanVoices, listenForever, listenOnce } from "./voice";
 import {
-  cancelTimerNotice, isNative, nativeCopy, nativeKeepAwake, nativeShare, nativeVibrate, onBackButton, onResume, scheduleTimerNotice,
+  cancelTimerNotice, isNative, nativeCopy, openNativeFile, saveNativeFile, shareNativeFile, nativeKeepAwake, nativeShare, nativeVibrate, onBackButton, onResume, scheduleTimerNotice,
 } from "./native";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -93,6 +95,18 @@ function addCard(c: ActionCard): void {
   const d = document.createElement("span");
   d.textContent = c.detail;
   info.append(t, d);
+  if (c.kind === "doc" && c.docId) {
+    const id = c.docId;
+    const btns = document.createElement("div");
+    btns.className = "card-btns";
+    if (c.want) btns.append(cardButton(FORMAT_LABEL[c.want], () => void exportDoc(id, c.want!)));
+    btns.append(cardButton("보기", () => openDoc(id), !!c.want));
+    el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${CARD_ICON.doc}</svg>`;
+    el.append(info, btns);
+    feed.appendChild(el);
+    scrollFeed();
+    return;
+  }
   let btn: HTMLAnchorElement | HTMLButtonElement;
   if (c.href) {
     const a = document.createElement("a");
@@ -115,12 +129,21 @@ function addCard(c: ActionCard): void {
   scrollFeed();
 }
 
-function toast(text: string): void {
+function cardButton(label: string, fn: () => void, ghost = false): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = ghost ? "card-btn ghost-btn" : "card-btn";
+  b.textContent = label;
+  b.addEventListener("click", fn);
+  return b;
+}
+
+function toast(text: string, ms = 2600): void {
   const t = $("toast");
   t.textContent = text;
   t.hidden = false;
   clearTimeout((toast as unknown as { h: number }).h);
-  (toast as unknown as { h: number }).h = window.setTimeout(() => (t.hidden = true), 2600);
+  (toast as unknown as { h: number }).h = window.setTimeout(() => (t.hidden = true), ms);
 }
 
 // ---------------------------------------------------------------- 말하기
@@ -321,8 +344,15 @@ const host: ToolHost = {
     if (!timers.length) return "남은 타이머가 없다.";
     return timers.map((t) => `${t.label}: ${sayDuration(Math.max(0, (t.due - Date.now()) / 1000))} 남음`).join("\n");
   },
-  makeDoc(title, content) {
-    const d: Doc = { id: uid(), title, content, created: Date.now() };
+  makeDoc(n) {
+    const content =
+      n.kind === "slides" && n.slides ? deckMarkdown({ title: n.title, subtitle: n.subtitle, slides: n.slides })
+      : n.kind === "sheet" && n.sheets ? sheetsMarkdown(n.title, n.sheets)
+      : n.content ?? "";
+    const d: Doc = {
+      id: uid(), title: n.title, content, created: Date.now(), kind: n.kind,
+      subtitle: n.subtitle, style: n.style, slides: n.slides, sheets: n.sheets, want: n.want,
+    };
     docs = [...docs, d];
     saveDocs(docs);
     return d.id;
@@ -469,8 +499,80 @@ function openDoc(id: string): void {
   if (!d) { toast("그 문서는 지워졌다."); return; }
   openDocId = id;
   $("docTitle").textContent = d.title;
-  $("docBody").innerHTML = renderMarkdown(d.content);
+  const body = $("docBody");
+  body.innerHTML = "";
+  if (d.kind === "slides" && d.slides) body.append(renderSlides(d));
+  else body.innerHTML = renderMarkdown(d.content);
+  // 파일로 만들기 버튼
+  const files = $("docFiles");
+  files.innerHTML = "";
+  formatsFor(d).filter((f) => !(isNative && f === "pdf")).forEach((f, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = i === 0 ? "primary" : "ghost";
+    b.textContent = FORMAT_LABEL[f];
+    b.addEventListener("click", () => void exportDoc(d.id, f));
+    files.appendChild(b);
+  });
+  $("docHint").textContent = isNative
+    ? "파일 버튼을 누르면 '문서 › ULTRON' 폴더에 저장되고, 열 앱(한컴오피스 · 구글 문서 · 워드 · 엑셀)을 고를 수 있다."
+    : "파일 버튼을 누르면 내려받는다. 구글 문서로 쓰려면 워드 파일을 구글 드라이브에 올리면 된다.";
   openSheet("docView");
+}
+
+function renderSlides(d: Doc): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = `slides ${d.style ?? "light"}`;
+  const make = (title: string, items: string[], cls: string, notes?: string, sub?: string) => {
+    const s = document.createElement("section");
+    s.className = `slide ${cls}`;
+    const h = document.createElement("h3");
+    h.textContent = title;
+    s.appendChild(h);
+    if (sub) { const p = document.createElement("p"); p.textContent = sub; s.appendChild(p); }
+    if (items.length) {
+      const ul = document.createElement("ul");
+      for (const it of items) { const li = document.createElement("li"); li.textContent = it; ul.appendChild(li); }
+      s.appendChild(ul);
+    }
+    wrap.appendChild(s);
+    if (notes) {
+      const n = document.createElement("p");
+      n.className = "notes";
+      n.textContent = `대본 · ${notes}`;
+      wrap.appendChild(n);
+    }
+  };
+  make(d.title, [], "cover", undefined, d.subtitle);
+  d.slides!.forEach((s) => make(s.title, s.bullets, "", s.notes));
+  return wrap;
+}
+
+/** 문서를 파일로: 브라우저는 내려받기, 설치형 앱은 저장한 뒤 열 앱 고르기 */
+async function exportDoc(id: string, format: ExportFormat): Promise<void> {
+  const d = docs.find((x) => x.id === id);
+  if (!d) { toast("그 문서는 지워졌다."); return; }
+  if (format === "pdf") {
+    if (isNative) { toast("PDF 는 한글이나 워드 앱에서 'PDF 로 저장'을 써라."); return; }
+    if ($("docView").hidden || openDocId !== id) openDoc(id);
+    setTimeout(() => window.print(), 200);
+    return;
+  }
+  toast("파일 만드는 중…", 8000);
+  try {
+    const f = await buildFile(d, format);
+    if (isNative) {
+      const saved = await saveNativeFile(f.name, f.data);
+      toast(saved.where ? `저장했다 — ${saved.where}` : "파일을 만들었다.", 4000);
+      await openNativeFile(saved.uri, f.mime, d.title);
+    } else {
+      downloadFile(f);
+      toast(`${f.name} 을 내려받았다.`, 4000);
+    }
+  } catch (e) {
+    console.warn("[ultron] export", e);
+    toast("파일을 만들지 못했다.");
+  }
 }
 
 // ---------------------------------------------------------------- 시트 (설정 · 기록 · 문서)
@@ -655,7 +757,17 @@ $("docCopy").addEventListener("click", () => {
   const d = docs.find((x) => x.id === openDocId);
   if (d) void copyText(d.content);
 });
-$("docPrint").addEventListener("click", () => window.print());
+$("docSendFile").addEventListener("click", async () => {
+  const d = docs.find((x) => x.id === openDocId);
+  if (!d) return;
+  const f = formatsFor(d)[0];
+  if (f === "pdf") return;
+  try {
+    const built = await buildFile(d, f);
+    const saved = await saveNativeFile(built.name, built.data);
+    await shareNativeFile(saved.uri, d.title);
+  } catch { toast("파일을 보내지 못했다."); }
+});
 
 // 처음 설정
 $("setupGo").addEventListener("click", () => {

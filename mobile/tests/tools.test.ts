@@ -26,7 +26,7 @@ describe("도구", () => {
     const haiku = toolDefs("claude-haiku-5-5", "서울") as Array<{ name?: string }>;
     expect(haiku.find((t) => t.name === "web_search")).toMatchObject({ type: "web_search_20250305" });
     const custom = opus.filter((t) => t.name !== "web_search");
-    expect(custom.length).toBe(11);
+    expect(custom.length).toBe(13);
     expect(custom.every((t) => t.eager_input_streaming)).toBe(true);
   });
   it("잘못된 입력은 실행하지 않는다", async () => {

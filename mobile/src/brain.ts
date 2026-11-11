@@ -33,6 +33,8 @@ const TOOL_STATUS: Record<string, string> = {
   set_timer: "타이머 맞추는 중",
   cancel_timer: "타이머 정리 중",
   make_document: "문서 쓰는 중",
+  make_presentation: "발표 자료 만드는 중",
+  make_spreadsheet: "표 만드는 중",
   device_status: "기기 확인 중",
 };
 

@@ -95,11 +95,23 @@ export function saveMemory(m: string[]): void {
 }
 
 // ---------------------------------------------------------------- 문서 (작업 결과물)
+export type DocKind = "doc" | "slides" | "sheet";
+export type ExportFormat = "hwpx" | "docx" | "pptx" | "xlsx" | "csv" | "pdf";
+
+export interface DeckSlide { title: string; bullets: string[]; notes?: string }
+export interface SheetData { name: string; columns: string[]; rows: (string | number)[][] }
+
 export interface Doc {
   id: string;
   title: string;
-  content: string;  // 마크다운
+  content: string;          // 마크다운 (발표 자료 · 표는 앱에서 보여 줄 개요)
   created: number;
+  kind?: DocKind;           // 없으면 "doc"
+  subtitle?: string;        // 발표 자료 표지 부제
+  style?: "light" | "dark"; // 발표 자료 디자인
+  slides?: DeckSlide[];
+  sheets?: SheetData[];
+  want?: ExportFormat;      // 사용자가 처음에 달라고 한 파일 형식
 }
 export function loadDocs(): Doc[] {
   return read<Doc[]>(K.docs, []);

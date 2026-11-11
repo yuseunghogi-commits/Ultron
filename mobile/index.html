@@ -121,11 +121,13 @@
   <div id="docView" class="sheet doc" hidden>
     <div class="sheet-body">
       <div class="sheet-head"><h2 id="docTitle"></h2><button class="icon close" data-close type="button" aria-label="닫기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg></button></div>
+      <div id="docFiles" class="row doc-actions"></div>
       <div class="row doc-actions">
-        <button id="docShare" class="ghost" type="button">공유</button>
+        <button id="docSendFile" class="ghost native-only" type="button">파일 보내기</button>
+        <button id="docShare" class="ghost" type="button">글로 공유</button>
         <button id="docCopy" class="ghost" type="button">복사</button>
-        <button id="docPrint" class="ghost" type="button">PDF 저장 · 인쇄</button>
       </div>
+      <p id="docHint" class="muted small doc-actions"></p>
       <article id="docBody" class="doc-body"></article>
     </div>
   </div>
