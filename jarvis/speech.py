@@ -203,20 +203,51 @@ def pause_after(text: str) -> float:
 
 
 def robotize(a: np.ndarray, amount: float) -> np.ndarray:
-    """울트론 기계음: 짧은 금속성 울림(지연 메아리) + 약한 링 변조 + 살짝 거친 포화.
-    amount 0 이면 원음 그대로. 음량(최대값)은 원음과 같게 맞춘다."""
+    """울트론 목소리: 깊은 저음 울림 + 금속 공명 + 겹쳐 울리는 두 번째 목소리 + 기계 속 공간감 + 약한 포화.
+    사람 목소리를 "거대한 기계 안에서 울리는, 혼자가 아닌 듯한 존재"로 바꾼다.
+    amount 0 이면 원음 그대로. 음량(최대값)은 원음과 같게 맞춰 돌려준다. (numpy 만 쓰며 조각마다 워커 스레드에서 호출.)"""
     if amount <= 0 or a.size < 2048:
         return a
     x = a.astype(np.float32)
+    n = x.size
     peak = float(np.max(np.abs(x))) or 1.0
-    y = x.copy()
-    for delay_ms, gain in ((4.3, 0.42), (9.1, 0.26), (15.7, 0.14)):   # 금속 통 안에서 울리는 듯한 짧은 메아리
-        d = int(SR * delay_ms / 1000)
-        y[d:] += gain * amount * x[:-d]
-    t = np.arange(x.size, dtype=np.float32) / SR
-    y += 0.22 * amount * x * np.sin(2 * np.pi * 60.0 * t).astype(np.float32)   # 기계 특유의 웅웅거림
+    t = np.arange(n, dtype=np.float32) / SR
+
+    # 1) 겹쳐 울리는 두 번째 목소리 — 아주 느리게 흔들리는 짧은 지연 (혼자가 아닌 듯한 두께)
+    d = int(SR * 0.021) + (SR * 0.004) * (0.5 + 0.5 * np.sin(2 * np.pi * 0.11 * t))
+    src = np.arange(n, dtype=np.float32) - d
+    lo = np.clip(np.floor(src), 0, n - 1).astype(np.int64)
+    frac = (src - lo).astype(np.float32)
+    chorus = (1 - frac) * x[lo] + frac * x[np.minimum(lo + 1, n - 1)]
+    chorus[src < 0] = 0.0
+
+    # 2) 금속 공명 — 같은 간격의 짧은 메아리 여러 개가 낮은 금속 링을 만든다
+    metal = x.copy()
+    step = max(1, int(SR / 185))
+    for k in range(1, 7):
+        g = 0.52 ** k
+        if g < 0.02 or k * step >= n:
+            break
+        metal[k * step:] += (g * x[:n - k * step]).astype(np.float32)
+
+    # 3) 가슴을 울리는 저음 — 말하는 세기를 따라가는 낮은 사인 (기계의 깊은 공명)
+    win = max(2, int(SR * 0.02))
+    env = np.convolve(np.abs(x), np.full(win, 1.0 / win, np.float32), mode="same").astype(np.float32)
+    sub = (np.sin(2 * np.pi * 57.0 * t) * env).astype(np.float32)
+
+    # 4) 기계 속 공간감 — 멀리 번지는 짧은 반향 몇 겹
+    verb = np.zeros_like(x)
+    for delay_ms, g in ((37.0, 0.30), (53.0, 0.22), (71.0, 0.15), (97.0, 0.10)):
+        dd = int(SR * delay_ms / 1000)
+        if dd < n:
+            verb[dd:] += (g * x[:n - dd]).astype(np.float32)
+
+    y = ((1.0 - 0.45 * amount) * x + 0.50 * amount * metal + 0.40 * amount * chorus
+         + 0.30 * amount * sub + 0.32 * amount * verb)
+
+    # 5) 약한 하모닉 포화 — 기계적인 엣지
     y *= peak / (float(np.max(np.abs(y))) or 1.0)
-    drive = 1.0 + 1.2 * amount
+    drive = 1.0 + 0.9 * amount
     y = np.tanh(drive * y) / np.tanh(drive)
     y *= peak / (float(np.max(np.abs(y))) or 1.0)
     return y.astype(np.float32)
