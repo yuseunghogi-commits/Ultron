@@ -37,26 +37,45 @@ def hidden():
     return A.build((W, H), core=CORE, avoid=(890, 60, 420, 600), rng=np.random.default_rng(1))
 
 
-# ---------------------------------------------------------------- 시간표 · 케이블
-def test_cables_strike_from_the_core_and_the_first_one_lands_at_impact(shown):
+# ---------------------------------------------------------------- 시간표 · 촉수
+def test_tendrils_coil_then_strike_and_the_first_one_lands_at_impact(shown):
     sc = shown
     m = len(sc.t0)
     assert 5 <= m <= 7 and sc.impact == A.IMPACT and sc.duration == A.END
-    assert all(len(c) == 0 for c in A.cables(sc, A.STRIKE - 0.01))               # 조준하는 동안은 아직 뻗지 않는다
-    assert sc.t0.min() == sc.t0[0] == A.STRIKE                                   # 한가운데로 가는 가닥이 가장 먼저
+    assert all(len(c) == 0 for c in A.tendrils(sc, 0.0))                           # 처음엔 아무것도 없다
+    coiled = A.extent(sc, A.STRIKE - 0.01)
+    assert (coiled > 0.1).all() and (coiled <= A.COIL).all()                     # 조준하는 동안 고개만 내밀고 꿈틀거린다
+    assert sc.t0.min() == sc.t0[0] == A.STRIKE                                   # 한가운데로 가는 가닥이 가장 먼저 덮친다
     assert A.extent(sc, A.IMPACT)[0] == pytest.approx(1.0) and (A.extent(sc, A.IMPACT)[1:] < 1).all()
-    full = A.cables(sc, sc.t0.max() + A.REACH + 0.01)
+    full = A.tendrils(sc, sc.t0.max() + A.REACH + 0.01)
     x, y, _ = A.victim_at(sc, 2.0)
-    for i, c in enumerate(A.cables(sc, 2.0)):
-        assert np.hypot(*(c[0] - CORE)) <= 30                                    # 코어에서 나와서
-        assert np.allclose(c[-1], sc.hits[i] + (x, y), atol=0.5)                 # 자비스의 꿰뚫린 자리에 닿아 있다
+    for i, c in enumerate(A.tendrils(sc, 2.0)):
+        assert np.hypot(*(c[0] - CORE)) <= A.ROOT + 1                            # 코어 둘레에서 돋아나
+        assert np.allclose(c[-1], sc.hits[i] + (x, y), atol=0.5)                 # 자비스의 꽂힌 자리에 닿아 있다
     assert all(len(c) >= 30 for c in full)
-    assert all(len(c) == 0 for c in A.cables(sc, A.RETRACT + A.RETRACT_TIME + 0.01))   # 끝나면 코어로 다 감겨 들어간다
+    assert all(len(c) == 0 for c in A.tendrils(sc, A.RETRACT + A.RETRACT_TIME + 0.01))   # 끝나면 코어로 다 감겨 들어간다
     assert A.DRAINED < A.END - 0.5                                               # 다 삼킨 뒤 마무리할 시간이 남는다
 
 
+def test_tendrils_writhe_but_stay_anchored_at_both_ends(shown):
+    sc = shown
+    still = A.tendrils(sc, 1.6, n=60, wriggle=False)
+    for t in (1.6, 1.75, 1.9):
+        alive = A.tendrils(sc, t, n=60)
+        ref = A.tendrils(sc, t, n=60, wriggle=False)
+        for a, b in zip(alive, ref):
+            off = np.linalg.norm(a - b, axis=1)
+            assert off[0] < 1e-6 and off[-1] < 1e-6                              # 뿌리와 끝은 제자리
+            assert 3 < off.max() < 40                                            # 그 사이는 물결친다 (너무 크지는 않게)
+    a, b = A.tendrils(sc, 1.6, n=60), A.tendrils(sc, 1.75, n=60)
+    assert all(np.linalg.norm(x - y, axis=1).max() > 2 for x, y in zip(a, b))    # 가만히 있지 않는다
+    assert len(still) == len(sc.t0)
+    flying = A.lash(sc, sc.t0[0] + A.REACH - 0.05)[0]
+    assert flying > A.lash(sc, 2.0)[0] > A.lash(sc, A.DRAIN + 0.5)[0] > 0.3      # 덮칠 때 가장 크게, 꽂히면 팽팽해진다
+
+
 @pytest.mark.parametrize("seed", range(6))
-def test_cables_close_in_like_a_hand_without_crossing(seed):
+def test_tendrils_close_in_like_a_hand_without_crossing(seed):
     sc = A.build((W, H), core=CORE, image=window_image(seed), rect=RECT, rng=np.random.default_rng(seed))
     x, y, _ = A.victim_at(sc, 2.0)
     middle = math.atan2(RECT[1] + RECT[3] / 2 - CORE[1], RECT[0] + RECT[2] / 2 - CORE[0])
@@ -65,18 +84,57 @@ def test_cables_close_in_like_a_hand_without_crossing(seed):
         a = np.arctan2(points[:, 1] - CORE[1], points[:, 0] - CORE[0]) - middle
         return (a + math.pi) % (2 * math.pi) - math.pi
 
-    lines = A.cables(sc, 2.0)
+    lines = A.tendrils(sc, 2.0, wriggle=False)            # 물결을 뺀 뼈대로 본다
     target = side(sc.hits + (x, y))
     order = np.argsort(target)
-    for part in (0.25, 0.5):                            # 케이블의 1/4 · 1/2 지점에서도 가닥들의 차례가 같다 — 서로 엇갈리지 않는다
+    for part in (0.25, 0.5):                            # 1/4 · 1/2 지점에서도 가닥들의 차례가 같다 — 서로 엇갈리지 않는다
         at = side(np.array([c[int(len(c) * part)] for c in lines]))
         assert (np.diff(at[order]) > 0).all()
     near = side(np.array([c[len(c) // 4] for c in lines]))
-    assert np.ptp(near) > np.ptp(target) + 1.0          # 손아귀처럼 넓게 벌어졌다가 오므라들며 꽂힌다
+    assert np.ptp(near) > np.ptp(target) + 0.8          # 손아귀처럼 넓게 벌어졌다가 오므라들며 꽂힌다
+    early = side(np.array([c[len(c) // 4] for c in A.tendrils(sc, sc.t0.max() + 0.02, wriggle=False) if len(c) > 8]))
+    assert np.ptp(early) > 0.5                          # 덮치기 시작할 때는 벌어져 있다
+
+
+def test_tendrils_fork_into_fingers_that_stab_nearby_just_after(shown, hidden):
+    sc = shown
+    m, b = len(sc.t0), len(sc.f_parent)
+    assert b == 2 * m and len(hidden.f_parent) == len(hidden.t0)                 # 큰 창은 가닥마다 둘, 작은 코어는 하나
+    assert len(sc.stabs) == m + b and np.array_equal(sc.stabs[:m], sc.hits)
+    assert ((sc.stabs >= 0) & (sc.stabs <= (RECT[2], RECT[3]))).all()            # 꽂히는 자리는 모두 자비스 안
+    late = sc.stab_time[m:] - sc.stab_time[sc.f_parent]
+    assert (late > 0.02).all() and (late < 0.25).all()                           # 촉수가 꽂힌 바로 뒤에 손가락이 꽂힌다
+    far = np.linalg.norm(sc.stabs[m:] - sc.hits[sc.f_parent], axis=1)
+    assert (far > 20).all() and (far < 130).all()                                # 꽂힌 자리 둘레의 다른 곳을
+    assert all(len(f) == 0 for f in A.fingers(sc, sc.t0[0] + 0.1))               # 갈라지는 지점을 지나기 전에는 없다
+    t = 2.0
+    sp = A.spines(sc, t)
+    assert sp.pts.shape == (m, 31, 2) and sp.nrm.shape == sp.pts.shape and sp.u.shape == (m, 31) and sp.on.all()
+    assert np.allclose(np.linalg.norm(sp.nrm, axis=2), 1) and np.allclose(sp.u[:, -1], 1)
+    x, y, _ = A.victim_at(sc, t)
+    for j, f in enumerate(A.fingers(sc, t, sp)):
+        spine = sp.pts[sc.f_parent[j]]
+        assert np.min(np.linalg.norm(spine - f[0], axis=1)) < 30                 # 촉수에서 갈라져 나와
+        assert np.allclose(f[-1], sc.stabs[m + j] + (x, y), atol=0.5)            # 제 자리에 꽂혀 있다
+    assert all(len(f) == 0 for f in A.fingers(sc, A.RETRACT + A.RETRACT_TIME))
+
+
+def test_sparks_fly_only_for_a_moment_after_each_stab(shown):
+    sc = shown
+    assert len(A.sparks(sc, sc.stab_time.min() - 0.01)) == 0
+    now = A.sparks(sc, sc.stab_time[0] + 0.05)
+    assert len(now) >= 5 and (now[:, 4] > 0).all() and (now[:, 4] <= 1).all()
+    x, y, _ = A.victim_at(sc, sc.stab_time[0] + 0.05)
+    assert np.linalg.norm(now[:7, 2:4] - (sc.stabs[0] + (x, y)), axis=1).max() < 60   # 꽂힌 자리에서 튀어 나간다
+    assert len(A.sparks(sc, sc.stab_time.max() + 0.5)) == 0                      # 금세 사그라든다
 
 
 def test_real_window_is_covered_long_before_the_kill_and_never_moves_far(shown):
     sc = shown
+    assert np.array_equal(sc.still[..., :3], window_image()) and (sc.still[..., 3] == 255).all()   # 찍은 그대로의 모습을 따로 둔다
+    big = np.zeros((1400, 800, 3), np.uint8)
+    hi_dpi = A.build((W, H), core=CORE, image=big, rect=(100, 10, 400, 700), rng=np.random.default_rng(0))
+    assert hi_dpi.still.shape == (1400, 800, 4) and max(hi_dpi.stages[0].shape[:2]) == A.MAX_SPRITE   # 단계 그림만 줄인다
     assert A.victim_at(sc, A.FREEZE - 0.01)[2] == 0.0                            # 처음에는 실제 창이 그대로 보인다
     assert A.victim_at(sc, A.FREEZE)[2] == 1.0 and A.FREEZE < A.IMPACT - 0.5     # 조준할 때부터 찍어 둔 그림이 창을 가린다
     assert A.infection(sc, A.IMPACT) == 0                                        # 꽂히기 전에는 물들지 않는다
@@ -116,16 +174,20 @@ def test_infection_spreads_from_the_wounds_and_ends_dark_red(shown):
     assert changed[0] == 0 and all(b >= a for a, b in zip(changed, changed[1:])) and changed[-1] > 0.95
     k = sc.stages[0].shape[1] / RECT[2]
     hx, hy = (sc.hits[0] * k).astype(int)
-    assert np.any(sc.stages[1][hy, hx, :3] != sc.stages[0][hy, hx, :3])           # 첫 가닥이 꽂힌 자리부터 물든다
+    around = (slice(max(0, hy - 6), hy + 7), slice(max(0, hx - 6), hx + 7))
+    assert np.any(sc.stages[1][around][..., :3] != sc.stages[0][around][..., :3])   # 첫 가닥이 꽂힌 자리부터 물든다
+    assert sc.veins > 200                                                        # 꽂힌 자리마다 핏줄이 뻗어 나간다
+    hot = lambda img: int(((img[..., 0] > 240) & (img[..., 1] > 190)).sum())     # 갓 뻗어 달아오른 핏줄
+    assert hot(sc.stages[3]) > hot(sc.stages[0]) + 50 and hot(sc.stages[-1]) < hot(sc.stages[3])   # 뻗을 때 밝고, 다 물들면 식는다
     last = sc.stages[-1][..., :3].astype(int)
     assert (last[..., 0] >= last[..., 1]).all() and (last[..., 0] >= last[..., 2]).all()
-    assert last.mean() < 90                                                      # 넓게 덮는 것은 어두운 붉은색뿐
+    assert last.mean() < 95                                                      # 어두운 화면은 어두운 붉은색으로 물든다
     ts = np.linspace(0, A.END, 200)
     prog = [A.infection(sc, float(t)) for t in ts]
     assert prog[0] == 0 and prog[-1] == 1 and all(b >= a for a, b in zip(prog, prog[1:]))
 
 
-def test_pieces_cover_the_window_ride_the_cables_and_are_all_absorbed(shown):
+def test_pieces_cover_the_window_ride_the_tendrils_and_are_all_absorbed(shown):
     sc = shown
     assert sc.cells[:, 2:].prod(axis=1).sum() == pytest.approx(RECT[2] * RECT[3])  # 조각을 모으면 창 전체
     assert 300 <= len(sc.cells) <= 700
@@ -133,15 +195,26 @@ def test_pieces_cover_the_window_ride_the_cables_and_are_all_absorbed(shown):
     assert (A.pieces(sc, A.DRAINED + 0.01)["phase"] == 3).all() and A.heat(sc, A.DRAINED + 0.01) == 1
     heat = [A.heat(sc, float(t)) for t in np.linspace(A.DRAIN, A.DRAINED, 40)]
     assert all(b >= a for a, b in zip(heat, heat[1:]))
-    near = np.linalg.norm(sc.cells[:, :2] + sc.cells[:, 2:] / 2 - sc.hits[sc.via], axis=1)
-    assert np.corrcoef(near, sc.leave)[0, 1] > 0.8                               # 꿰뚫린 자리에서 가까운 조각부터 떠난다
+    near = np.linalg.norm(sc.cells[:, :2] + sc.cells[:, 2:] / 2 - sc.stabs[sc.route], axis=1)
+    assert np.corrcoef(near, sc.leave)[0, 1] > 0.8                               # 꽂힌 자리에서 가까운 조각부터 떠난다
+    assert len(np.unique(sc.route)) > len(sc.t0)                                 # 손가락이 꽂힌 자리로도 빨려 든다
     t = A.DRAIN + 0.7
-    st = A.pieces(sc, t)
+    sp = A.spines(sc, t, n=200)
+    fg = A._fingers(sc, t, sp, n=60)
+    st = A.pieces(sc, t, sp, fg)
     riding = np.nonzero(st["phase"] == 2)[0]
     assert len(riding) > 20
-    lines = A.cables(sc, t, n=200)
-    for j in riding[:40]:
-        assert np.min(np.linalg.norm(lines[sc.via[j]] - st["pos"][j], axis=1)) < 8   # 자기 케이블 위에 있다
+    m = len(sc.t0)
+    for j in riding[:60]:
+        s = sc.route[j]
+        way = sp.pts[s] if s < m else np.vstack([fg.pts[s - m], sp.pts[sc.f_parent[s - m]]])
+        assert np.min(np.linalg.norm(way - st["pos"][j], axis=1)) < 6            # 자기 손가락 · 촉수 위에 있다
+    coarse = A.pieces(sc, t)                                                     # 따로 넘겨주지 않아도 같은 자리 (성긴 뼈대라 조금 다를 뿐)
+    assert np.array_equal(coarse["phase"], st["phase"])
+    assert np.abs(coarse["pos"] - st["pos"])[sc.route < m].max() < 6 and np.abs(coarse["pos"] - st["pos"]).max() < 30
+    rows, cols = sc.grid.max(axis=0) + 1                                         # 조각은 격자를 이룬다 (이웃한 조각을 이어 그리는 데 쓴다)
+    assert len(np.unique(sc.grid, axis=0)) == len(sc.cells) == rows * cols
+    assert np.array_equal(np.argsort(sc.cells[:, 0], kind="stable")[:rows], np.flatnonzero(sc.grid[:, 1] == 0))
     assert A.swell(A.SWELL) == 0 and A.swell(A.SWELL + A.SWELL_UP) == pytest.approx(1) and A.swell(A.END) == pytest.approx(0, abs=0.02)
 
 
@@ -150,7 +223,9 @@ def test_bounds_hold_the_whole_scene(shown, hidden):
         x, y, w, h = sc.bounds
         assert 0 <= x and 0 <= y and x + w <= W and y + h <= H
         for t in np.linspace(0, A.END, 30):
-            for c in A.cables(sc, float(t)):
+            for c in A.tendrils(sc, float(t)) + A.fingers(sc, float(t)):
+                if len(c) == 0:
+                    continue
                 inside = (c[:, 0] >= 0) & (c[:, 0] <= W) & (c[:, 1] >= 0) & (c[:, 1] <= H)
                 c = c[inside]                                                    # 화면 밖으로 휘어 나간 부분은 어차피 보이지 않는다
                 assert ((c[:, 0] >= x) & (c[:, 0] <= x + w) & (c[:, 1] >= y) & (c[:, 1] <= y + h)).all()
@@ -505,6 +580,41 @@ def test_wide_brightness_and_red_changes_stay_under_three_per_second(qapp, case)
     assert bright <= 3 and red <= 3, (case, bright, red)
 
 
+def test_fast_polygons_and_run_merged_pieces_draw_the_same_picture(qapp, shown):
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+    from jarvis import absorb_view as V
+    xy = np.random.default_rng(0).uniform(-50, 900, (37, 2))
+    assert V._poly_direct(xy) == V._poly_plain(xy) and len(V._poly_direct(xy[:0])) == 0   # numpy 좌표를 바로 써 넣어도 같은 다각형
+    assert V._poly is V._poly_direct                                             # 이 환경에서는 빠른 방법을 쓴다
+    assert [(l.x1(), l.y1(), l.x2(), l.y2()) for l in V._lines(xy[:4].reshape(2, 4))] == [tuple(r) for r in xy[:4].reshape(2, 4)]
+    a = V.Assets(shown)
+    t = A.DRAIN + 0.45                                                           # 조각이 반쯤 남았을 때
+    state = A.pieces(shown, t)
+    rest = np.flatnonzero(state["phase"] == 0)
+    assert 50 < len(rest) < len(shown.cells) - 50
+    vx, vy, va = A.victim_at(shown, t)
+
+    def canvas():
+        img = QImage(W, H, QImage.Format_ARGB32_Premultiplied)
+        img.fill(0)
+        return img
+
+    fast, plain = canvas(), canvas()
+    p = QPainter(fast)
+    V._victim(p, shown, a, t, vx, vy, va, state)                                 # 이웃한 조각을 이어서 한 번에
+    p.end()
+    p = QPainter(plain)
+    shaky = shown.leave[rest] - t < 0.16                                         # 떠나기 직전이라 떠는 조각은 나중에 (위에) 그린다
+    for j in list(rest[~shaky]) + list(rest[shaky]):                             # 조각 하나씩
+        x, y, cw, ch = shown.cells[j]
+        shake = 1.6 * math.sin(t * 90 + j * 1.7) if shown.leave[j] - t < 0.16 else 0.0
+        p.drawImage(QRectF(round(vx) + x + shake, round(vy) + y, cw, ch), a.stages[-1], a.src[j])
+    p.end()
+    assert shaky.any() and fast == plain
+    assert V.Assets(shown, 2.0).spot.width() == 2 * a.spot.width()               # 빛 그림은 화면 배율에 맞춰 만든다
+
+
 def test_view_covers_before_impact_and_always_hides(qapp, hidden):
     from PySide6.QtCore import QElapsedTimer, QPoint
     from jarvis.absorb_view import AbsorbView
@@ -524,9 +634,12 @@ def test_view_covers_before_impact_and_always_hides(qapp, hidden):
     assert seen == ["impact", "finished"] and not view.playing and not view.isVisible()
     view.stop()
     assert seen == ["impact", "finished"]               # 이미 끝났으면 아무 일도 없다
+    import gc
+    assert gc.isenabled()
     view.play(QPoint(0, 0), sc)
+    assert not gc.isenabled()                           # 재생하는 동안에는 쓰레기 수거를 멈춘다 (화면이 멈칫하지 않게)
     view.stop()                                         # 도중에 접어도 끝났다고 알린다
-    assert seen == ["impact", "finished", "finished"] and not view.isVisible()
+    assert seen == ["impact", "finished", "finished"] and not view.isVisible() and gc.isenabled()
 
 
 def test_crop_takes_the_window_out_of_a_screenshot(qapp):

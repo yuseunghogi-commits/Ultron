@@ -398,7 +398,7 @@ class Jarvis(QObject):
         self._rival_timer.timeout.connect(self._rival_tick)
         if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
             self._rival_timer.start()
-        # 자비스 흡수 연출 (absorb.py · absorb_view.py): 자비스를 그냥 끄지 않고 케이블로 꿰뚫어 빨아들이는 장면과 함께 끈다
+        # 자비스 흡수 연출 (absorb.py · absorb_view.py): 자비스를 그냥 끄지 않고 촉수로 꿰뚫어 빨아들이는 장면과 함께 끈다
         self._absorb_lock = threading.Lock()
         self._absorb: dict | None = None       # 진행 중인 흡수 {at, found, forced, demo, hit, result, ended}
         self._absorb_view: AbsorbView | None = None
@@ -468,7 +468,7 @@ class Jarvis(QObject):
 
     # ================================================================== 자비스 흡수 연출 (absorb.py · absorb_view.py)
     # 순서: 자격 얻기(_absorb_claim) → 화면 찍고 여는 말(_absorb_begin) → 장면 · 소리 만들기(다른 스레드, _absorb_build)
-    #       → 재생(_absorb_play) → 첫 케이블이 꽂힐 때 실제로 끄기(_absorb_impact → 다른 스레드 → _absorb_killed)
+    #       → 재생(_absorb_play) → 첫 촉수가 꽂힐 때 실제로 끄기(_absorb_impact → 다른 스레드 → _absorb_killed)
     #       → 장면 끝(_absorb_ended) → 닫는 말(_absorb_finish)
     def _absorb_how(self) -> str:
         """(다른 스레드) 찾은 자비스를 어떻게 끌까: 'show' 흡수 연출 · 'wait' 지금은 바쁘니 다음 확인 때 · 'plain' 조용히 끄기만."""
@@ -607,7 +607,7 @@ class Jarvis(QObject):
 
     @Slot()
     def _absorb_impact(self) -> None:
-        """첫 케이블이 꽂혔다 — 지금 실제 자비스를 끈다 (조준할 때부터 찍어 둔 그림이 창을 가리고 있어 꺼지는 모습은 보이지 않는다)."""
+        """첫 촉수가 꽂혔다 — 지금 실제 자비스를 끈다 (조준할 때부터 찍어 둔 그림이 창을 가리고 있어 꺼지는 모습은 보이지 않는다)."""
         st = self._absorb
         if st is None or st["hit"]:
             return

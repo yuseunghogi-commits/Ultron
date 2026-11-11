@@ -276,7 +276,7 @@ class PCTools:
                  "(e.g. '크롬', 'chrome.exe'). Unsaved work is lost; the user is asked to approve first. Prefer close_app for a normal close.",
                  {"name": s}, ["name"]),
             tool("stop_jarvis", "Attack and absorb the old J.A.R.V.I.S assistant app if it is running on this PC: plays a short "
-                 "on-screen scene of Ultron's cables piercing and absorbing JARVIS, and closes that app (only that app, found by "
+                 "on-screen scene of Ultron's tendrils piercing and absorbing JARVIS, and closes that app (only that app, found by "
                  "its exact window title). Use when the user asks to close, absorb, attack or get rid of JARVIS."),
             tool("point_at", "When Active Mode (full-screen HUD) is on, mark a spot on the user's screen with a target box, "
                  "e.g. to show where an error message or a button is. Use coordinates of the LAST look_at_screen image; "
