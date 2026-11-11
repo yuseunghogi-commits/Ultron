@@ -25,6 +25,11 @@ Item {
     ]
     readonly property bool isPro: brainBox.currentIndex === 0
     // 화면을 보고 누르는 요청에만 쓰는 모델 (Pro 모드). 평소 모델보다 낮은 것을 고르면 평소 모델을 그대로 쓴다
+    readonly property var hackFreqs: [
+        { v: "rare", t: "드물게 — 10~20분에 한 번" },
+        { v: "sometimes", t: "가끔 — 4~10분에 한 번 (기본)" },
+        { v: "often", t: "자주 — 1.5~4분에 한 번" }
+    ]
     readonly property var screenModels: [
         { v: "sonnet", t: "화면 조작은 Sonnet — 더 정확 (기본)" },
         { v: "opus", t: "화면 조작은 Opus — 가장 정확, Pro 한도 빨리 소모" },
@@ -71,6 +76,8 @@ Item {
         voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
         fxSw.checked = cfg.voice_fx !== false
         rivalSw.checked = cfg.rival_jarvis !== false
+        hackSw.checked = cfg.hack_show !== false
+        hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
         sentinelServerField.text = cfg.sentinel_server || ""
         sentinelKeyField.text = ""
         sentinelReqField.text = cfg.sentinel_requester || ""
@@ -105,6 +112,8 @@ Item {
             tts_voice: voices[voiceBox.currentIndex].v,
             voice_fx: fxSw.checked,
             rival_jarvis: rivalSw.checked,
+            hack_show: hackSw.checked,
+            hack_show_every: hackFreqs[hackBox.currentIndex].v,
             sentinel_server: sentinelServerField.text.trim() || "http://127.0.0.1:8000",
             sentinel_api_key: sentinelKeyField.text.trim(),
             sentinel_requester: sentinelReqField.text.trim(),
@@ -284,6 +293,8 @@ Item {
                 Combo { id: voiceBox; model: sp.voices }
                 Toggle { id: fxSw; text: "울트론 기계음 (낮고 금속성인 목소리)" }
                 Toggle { id: rivalSw; text: "자비스 견제 (자비스가 같이 켜져 있으면 끄고 한마디 한다)" }
+                Toggle { id: hackSw; text: "해킹 연출 (가끔 화면이 깨지고 의미심장한 한마디)" }
+                Combo { id: hackBox; visible: hackSw.checked; model: sp.hackFreqs }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8

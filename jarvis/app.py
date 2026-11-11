@@ -19,15 +19,16 @@ import numpy as np
 import psutil
 from PySide6.QtCore import (Property, QObject, QPointF, QRect, Qt, QTimer, QUrl, Signal,
                             Slot)
-from PySide6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QPainter, QPen,
+from PySide6.QtGui import (QAction, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen,
                            QPixmap, QRadialGradient)
 from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import approval, hearing, hud_feed, rival, winutil
+from . import approval, glitch, hearing, hud_feed, rival, winutil
 from .brain import Brain, situation_text
+from .glitch_view import GlitchView, from_qimage, to_qimage
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
 from .listener import Listener
@@ -219,6 +220,7 @@ class Jarvis(QObject):
     sig_hotkey = Signal()
     sig_stream = Signal(int, str)      # (명령 번호, 답 조각) — 대화 모드에서 답이 만들어지는 대로
     sig_rival = Signal(object)         # 자비스를 끈 결과 (rival.Result)
+    sig_glitch = Signal(object)        # 해킹 연출 준비 끝 (화면 영역, 장면들, 소리 파일) — 실패하면 None
     sig_mode = Signal(bool)            # 자유 대화 모드 켜짐/꺼짐
     sig_notify = Signal(str)           # 백그라운드 작업(작업 감시 등)의 알림
     sig_hud = Signal(str)              # 말로 HUD 보기 방식 바꾸기 (small | big | hide | active_on | active_off)
@@ -274,7 +276,8 @@ class Jarvis(QObject):
                           (self.sig_stream, self._on_stream), (self.sig_mode, self._on_mode),
                           (self.sig_notify, self._on_notify), (self.sig_hud, self._on_hud),
                           (self.sig_feed, self._on_feed), (self.sig_timer_cancel, self._cancel_timers),
-                          (self.sig_point, self._on_point), (self.sig_rival, self._on_rival)):
+                          (self.sig_point, self._on_point), (self.sig_rival, self._on_rival),
+                          (self.sig_glitch, self._on_glitch)):
             sig.connect(slot)
 
         # ---- 음성 출력 ----
@@ -382,12 +385,25 @@ class Jarvis(QObject):
         # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음)
         self.rival = rival.Watcher()
         self._rival_busy = False
-        self._rival_pending: tuple[str, float] | None = None   # 바빠서 미뤄 둔 한마디
+        self._pending_line: tuple[str, float] | None = None    # 바빠서 미뤄 둔 혼잣말 (자비스 견제 · 해킹 연출)
         self._rival_timer = QTimer(self)
         self._rival_timer.setInterval(5000)
         self._rival_timer.timeout.connect(self._rival_tick)
         if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
             self._rival_timer.start()
+        # 해킹 연출: 켜고 20초 뒤부터 가끔 화면이 깨지는 연출 뒤 의미심장한 말 (설정 '해킹 연출')
+        self.hack = glitch.Schedule()
+        self._hack_forced = False          # 사용자가 '해킹 연출 보여 줘' 라고 했다
+        self._glitching = False
+        self._glitch_forced = False
+        self._glitch_view: GlitchView | None = None
+        self._glitch_fx: QSoundEffect | None = None
+        self._hack_last = ""
+        self._hack_timer = QTimer(self)
+        self._hack_timer.setInterval(1000)
+        self._hack_timer.timeout.connect(self._hack_tick)
+        if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
+            self._hack_timer.start()
         self._net_last = (psutil.net_io_counters(), time.monotonic())
         self._stat_n = 0
         self._bat = None
@@ -399,9 +415,9 @@ class Jarvis(QObject):
     # ================================================================== 자비스 견제 (rival.py)
     def _rival_tick(self) -> None:
         """5초마다: 자비스가 켜져 있으면 끈다. 끄는 데 잠깐 걸릴 수 있어 다른 스레드에서 한다."""
-        if self._rival_pending and self._quiet():
-            line, at = self._rival_pending
-            self._rival_pending = None
+        if self._pending_line and self._quiet():
+            line, at = self._pending_line
+            self._pending_line = None
             if time.monotonic() - at < 90:
                 self.say(line, follow_up=False)
         if not self.cfg["rival_jarvis"] or self._rival_busy or sys.platform != "win32":
@@ -420,10 +436,85 @@ class Jarvis(QObject):
         if res is not None:
             self.sig_rival.emit(res)
 
-    def _quiet(self) -> bool:
-        """지금 울트론이 혼잣말을 해도 되는가 (명령 처리 · 말하기 · 승인 대기 · 듣는 중이 아닐 때)."""
+    def _quiet(self, listening_ok: bool = False) -> bool:
+        """지금 울트론이 혼잣말을 해도 되는가 (명령 처리 · 말하기 · 승인 대기 · 듣는 중이 아닐 때).
+        listening_ok: 사용자가 방금 시킨 일이라 '이어 말하기를 기다리는 중'이어도 된다."""
         return not (self.busy or self.speaker.playing or self._pending_confirm or self._enroll
-                    or self._wake_train is not None or self._active())
+                    or self._wake_train is not None or (self._active() and not listening_ok))
+
+    # ================================================================== 해킹 연출 (glitch.py · glitch_view.py)
+    def _hack_tick(self) -> None:
+        """1초마다: 연출할 때가 됐고 지금 해도 되면 시작한다. 안 되는 상황이면 다음 기회로 미룬다."""
+        if self._glitching:
+            return
+        forced = self._hack_forced
+        if not forced and not (self.cfg["hack_show"] and self.hack.due()):
+            return
+        if not self._quiet(listening_ok=forced) or (self.brain.chat_mode and not forced):
+            return
+        if not forced and (winutil.idle_seconds() < glitch.IDLE_BEFORE or winutil.fullscreen_app()):
+            return                         # 클릭 · 타자 도중이거나 게임 · 발표 · 동영상이 전체 화면이면 다음 기회에
+        self._hack_forced = False
+        self._glitch_forced = forced
+        self._start_glitch()
+
+    def _start_glitch(self) -> None:
+        screen = QGuiApplication.screenAt(QCursor.pos()) or self.win.screen() or QGuiApplication.primaryScreen()
+        try:
+            shot = from_qimage(screen.grabWindow(0).toImage())
+        except Exception as e:
+            log.warning("해킹 연출: 화면을 찍지 못함 (%s)", e)
+            self.hack.later(60)
+            return
+        self._glitching = True
+        threading.Thread(target=self._build_glitch, args=(shot, screen.geometry()), daemon=True, name="glitch").start()
+
+    def _build_glitch(self, shot, geometry) -> None:
+        """(다른 스레드) 장면 · 소리를 만든다 (0.5초쯤)."""
+        try:
+            rng = np.random.default_rng()
+            frames = glitch.frames(shot, rng)
+            imgs = [(None if f.image is None else to_qimage(f.image), f.ms) for f in frames]
+            wav = glitch.write_wav(glitch.sound(frames, rng))
+            self.sig_glitch.emit((geometry, imgs, wav))
+        except Exception:
+            log.exception("해킹 연출 준비 실패")
+            self.sig_glitch.emit(None)
+
+    @Slot(object)
+    def _on_glitch(self, pack) -> None:
+        if pack is None or self.busy or self.speaker.playing or self._pending_confirm:
+            self._glitching = False        # 실패했거나, 준비하는 사이 사용자가 일을 시켰다 — 조금 뒤에 다시
+            self.hack.later(120 if pack is None else 30)
+            return
+        geometry, imgs, wav = pack
+        if self._glitch_view is None:
+            self._glitch_view = GlitchView()
+            self._glitch_view.finished.connect(self._glitch_done)
+            hwnd = int(self._glitch_view.winId())
+            winutil.set_capture_excluded(hwnd, True)   # 화면 캡처(울트론의 화면 보기 포함)에는 찍히지 않는다
+            self.focus.own_hwnds.add(hwnd)
+        self.listener.muted = True                      # 연출 소리를 말소리로 듣지 않게
+        fx = QSoundEffect(self)
+        fx.setSource(QUrl.fromLocalFile(wav))
+        fx.setVolume(0.5)
+        fx.play()
+        self._glitch_fx = fx
+        self._glitch_view.play(geometry, imgs)
+
+    @Slot()
+    def _glitch_done(self) -> None:
+        self._glitching = False
+        self.hack.done(self.cfg["hack_show_every"])
+        QTimer.singleShot(300, self._unmute)
+        line = glitch.line(last=self._hack_last)
+        self._hack_last = line
+        log.info("해킹 연출")
+        self.bridge.set("replyText", line)
+        if self._quiet(listening_ok=self._glitch_forced):
+            self.say(line, follow_up=False)
+        else:
+            self._pending_line = (line, time.monotonic())
 
     @Slot(object)
     def _on_rival(self, res) -> None:
@@ -438,7 +529,7 @@ class Jarvis(QObject):
             if self._quiet():
                 self.say(res.line, follow_up=False)
             else:
-                self._rival_pending = (res.line, time.monotonic())   # 하던 일이 끝나면 말한다
+                self._pending_line = (res.line, time.monotonic())    # 하던 일이 끝나면 말한다
 
     def _reclaim_hotkey(self) -> None:
         """자비스가 같은 단축키를 쥐고 있어 대체 조합을 쓰던 경우, 자비스를 끈 뒤 원래 단축키를 되찾는다."""
@@ -974,6 +1065,8 @@ class Jarvis(QObject):
             QTimer.singleShot(2500, lambda: self.toggle_visible(False))   # 대답을 들려준 뒤 숨김
         elif action in ("active_on", "active_off"):
             self.set_active(action == "active_on")
+        elif action == "glitch":
+            self._hack_forced = True       # 지금 하던 대답이 끝나면 바로
 
     # ================================================================== 액티브 모드 (전체 화면 HUD)
     def set_active(self, on: bool) -> None:

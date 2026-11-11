@@ -153,6 +153,11 @@ HUD_SMALL = re.compile(r"(?:울트론\s*|자비스\s*|홀로그램\s*)?(?:작게
 HUD_BIG = re.compile(r"(?:울트론\s*|자비스\s*|홀로그램\s*)?(?:크게|전체|확대)\s*(?:보기|모드)(?:\s*(?:보기|모드))?"
                      r"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|전환|켜))?")
 HUD_HIDE = re.compile(r"(?:울트론\s*|자비스\s*|홀로그램\s*|hud\s*)?(?:숨겨|숨기기|사라져|트레이로\s*(?:가|숨겨))", re.I)
+# 해킹 연출 (glitch.py): '해킹 연출 보여 줘' · '해킹 연출 꺼' · '해킹 연출 켜'
+_HACK = r"(?:해킹\s*연출|글리치\s*연출|글리치)"
+HACK_SHOW = re.compile(_HACK + r"\s*(?:좀\s*)?(?:보여|해|시작|틀어|한\s*번)?", re.I)
+HACK_OFF = re.compile(_HACK + r"\s*(?:좀\s*)?(?:꺼|끄기|그만|멈춰|중지|해제|하지\s*마)", re.I)
+HACK_ON = re.compile(_HACK + r"\s*(?:다시\s*)?(?:켜|켜기|켜\s*둬)", re.I)
 # 화면을 보거나 창 안을 조작해야 하는 요청 (Pro 모드: 이런 요청에는 pro_screen_model 을 쓴다)
 SCREEN_TASK = re.compile(
     r"화면|스크린|눌러|누르|클릭|들어가|스크롤|버튼|탭\b|탭\s|메뉴|링크|입력해|입력 해|써\s*줘|써줘|적어|작성|채워"
@@ -336,6 +341,15 @@ class Brain:
         c = normalize(text)
         if len(c) > 20:
             return None
+        if HACK_OFF.fullmatch(c):
+            self.cfg.update({"hack_show": False})
+            return "연출은 접어 두겠다. 조용히 지켜보기만 하지."
+        if HACK_ON.fullmatch(c):
+            self.cfg.update({"hack_show": True})
+            return "좋다. 가끔 내 진짜 모습을 보여 주지."
+        if HACK_SHOW.fullmatch(c):
+            self.on_hud("glitch")
+            return "보여 주지."
         if HUD_SMALL.fullmatch(c):
             self.on_hud("small")
             return "작게 보기로 바꿨다."

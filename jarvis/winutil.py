@@ -305,6 +305,43 @@ def show_window(hwnd: int, show: bool) -> None:
         pass
 
 
+class _LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.UINT), ("dwTime", wt.DWORD)]
+
+
+def _idle_from(now_ms: int, last_ms: int) -> float:
+    """GetTickCount 두 값의 차이(초). 49.7일마다 0 으로 돌아가는 것을 감안한다."""
+    return ((int(now_ms) - int(last_ms)) & 0xFFFFFFFF) / 1000.0
+
+
+def idle_seconds() -> float:
+    """사용자가 마지막으로 마우스 · 키보드를 쓴 뒤 지난 시간(초). 알 수 없으면 큰 값."""
+    try:
+        info = _LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if not user32.GetLastInputInfo(ctypes.byref(info)):
+            return 999.0
+        return _idle_from(ctypes.windll.kernel32.GetTickCount(), info.dwTime)
+    except Exception:
+        return 999.0
+
+
+def fullscreen_app() -> bool:
+    """앞에 있는 창이 모니터 전체를 덮는가 (게임 · 발표 · 전체 화면 동영상). 최대화한 창 · 바탕 화면은 아니다."""
+    try:
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        buf = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, buf, 64)
+        if buf.value in ("Progman", "WorkerW", "Shell_TrayWnd"):
+            return False
+        r, m = window_rect(hwnd), monitor_rect(hwnd)
+        return bool(r and m and r[0] <= m[0] and r[1] <= m[1] and r[2] >= m[2] and r[3] >= m[3])
+    except Exception:
+        return False
+
+
 def set_capture_excluded(hwnd: int, excluded: bool) -> None:
     """스크린샷 시 HUD 자신을 캡처에서 제외 (Win10 2004+)."""
     try:
