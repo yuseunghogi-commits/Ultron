@@ -23,6 +23,8 @@ DEFAULTS: dict = {
     "pro_model": "haiku",             # Pro 모드 모델: haiku | sonnet | opus
     "pro_keep_alive": 300,            # Pro 모드: Claude Code 를 이만큼(초) 켜 둔다 → 명령마다 새로 켜는 2~5초를 없앰. 0 = 매번 새로 켬
     "pro_screen_model": "sonnet",     # Pro 모드에서 화면을 보고 조작하는 요청에 쓸 모델 (비우면 pro_model 그대로)
+    "writers": 4,                     # 발표 자료 · 보고서를 나눠서 동시에 쓰는 작가 수 1~6 (0 = 끔: 혼자 조사하고 혼자 쓴다)
+    "writer_model": "",               # 작가가 쓸 모델 (비우면 평소 모델). Pro: haiku | sonnet | opus
     "screen_follow": True,            # 누른 뒤 화면이 바뀌었으면 바뀐 화면(요소 목록 · 캡처)을 결과에 같이 보냄 → AI 가 다시 보러 오는 왕복 한 번 절약
     "screen_detail": "auto",          # 화면 캡처 크기: auto(모델이 볼 수 있는 최대 크기) | standard(항상 작게 — 토큰 절약)
     "anthropic_api_key": "",          # 비워두면 ANTHROPIC_API_KEY 환경변수 사용

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import collections
+import concurrent.futures
 import datetime as dt
 import json
 import logging
@@ -22,7 +23,7 @@ from .claude_session import ClaudeSession
 from .config import DATA_DIR, Config, load_memory
 from .hud_feed import parse_kill_index
 from .local_ai import LocalAI
-from . import rival, routines
+from . import rival, routines, writers
 from .local_router import _COMPOUND, LocalRouter, dedupe, normalize
 
 NO_WINDOW = 0x08000000
@@ -107,23 +108,17 @@ SYSTEM_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {ti
 - "OO 자료조사해서 PPT 만들어 줘", "보고서 써 줘", "엑셀로 정리해 줘", "카드뉴스 만들어 줘", "포스터 만들어 줘"처럼 결과물을
   만들어 달라는 요청은 묻지 말고 바로, 끝까지 해내세요. 빠른 것이 가장 중요합니다.
   1) 시작한다는 말은 하지 마세요 — 울트론이 이미 짧게 대답했습니다. 계획도 설명하지 말고 곧바로 도구를 쓰세요.
-  2) 사용자가 '자료조사' · '조사해서' · '찾아서' · '출처'를 말했으면 반드시 web_search 를 2~3개 한꺼번에 하세요.
-     그런 말이 없고 교과서 수준의 일반적인 내용이면 검색하지 말고 바로 만드세요 (검색 한 번에 5~10초가 걸립니다).
-     최신 정보 · 통계 · 날짜가 꼭 필요할 때도 검색하세요. 검색할지 말지는 말로 설명하지 마세요.
-     web_fetch 는 검색 결과로 부족할 때만, 꼭 필요한 페이지 1개만. 수치 · 연도 · 인용은 확인한 것만 쓰고 지어내지 마세요
-     (검색하지 않았으면 sources 는 비워 두세요).
+  2) {search_rule}
   3) 도구 한 번으로 파일을 만드세요: make_presentation(발표 자료) · make_document(보고서 · 문서) · make_spreadsheet(표 · 엑셀) ·
      make_cardnews(카드뉴스) · make_poster(포스터 · 홍보물 · 안내문). 문서 폴더의 ULTRON 폴더에 저장되고 자동으로 열립니다.
      사용자가 저장 위치를 말하면 folder 에 넣으세요.
   4) 끝나면 무엇을 몇 장 만들어 어디에 저장했는지 한 문장으로만 보고하세요. 저장 위치는 '문서의 ULTRON 폴더'처럼 폴더
      이름으로만 말하고, 전체 경로 · URL · 출처 목록 · 내용은 말하지 마세요 (출처는 파일 안에 있습니다).
-- 발표 자료: 따로 말이 없으면 본문 8~10장, 한 장에 3~5줄의 짧은 구절. section(장 구분) · two_column(비교) · stats(숫자) ·
-  chart(차트) · quote(인용) · closing(마무리)을 내용에 맞게 섞고, 숫자 자료가 여러 개면 chart 로 그리세요.
-  발표 대본(notes)은 장마다 1~2문장으로 짧게. 실제로 쓴 출처는 sources 에 남기세요.
+{plan_rule}
 - 카드뉴스 · 포스터는 미리캔버스 같은 사이트를 조작하지 말고 make_cardnews · make_poster 로 바로 만드세요 (훨씬 빠르고
   확실합니다). 사용자가 "미리캔버스에서"처럼 사이트를 콕 집어 말할 때만 그 사이트를 화면 조작으로 쓰세요.
-- 사용자가 말한 조건(장 수 · 대상 학년 · 색 · 이름이나 반)을 그대로 따르세요. 학생 과제면 그 학년이 이해할 말로 쓰세요.
-- 방금 만든 파일을 고쳐 달라고 하면 고친 전체 내용으로 같은 filename 에 overwrite=true 로 다시 만드세요.
+- 사용자가 말한 조건(장 수 · 대상 학년 · 색 · 디자인 · 이름이나 반)을 그대로 따르세요.
+- 방금 만든 파일을 고쳐 달라고 하면 고친 전체 개요로 같은 filename 에 overwrite=true 로 다시 만드세요 (같은 style 로).
 - 디자인 사이트(미리캔버스 · 캔바 · 구글 슬라이드)를 쓸 때는 open_url 로 열고, 로그인이 필요하면 사용자에게 부탁하세요.
   템플릿 검색 → 고르기 → 글 상자를 두 번 눌러 바꾸기 순서로, 캔버스 안은 look_at_screen 과 click_screen 으로.
   유료 템플릿 · 크레딧 · 결제는 사용자가 시키지 않았으면 쓰지 마세요.
@@ -136,6 +131,41 @@ SYSTEM_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {ti
 
 # 기억하고 있는 사실
 {memory}"""
+
+# 작업 규칙은 일하는 방식에 따라 다르다 (_build_system 이 고른다):
+#   팀(Pro 방식 · 작가 1명 이상)  — 기획자는 개요만, 조사 담당이 검색, 작가들이 본문 (writers.py)
+#   API 팀(API 키 방식 · 작가 1명 이상) — 기획자가 검색하고 개요 + 사실을 넘긴다, 작가들이 본문
+#   혼자(작가 0명 · 그 밖)       — 예전처럼 혼자 검색하고 전부 쓴다
+_SEARCH_SOLO = """사용자가 '자료조사' · '조사해서' · '찾아서' · '출처'를 말했으면 반드시 web_search 를 2~3개 한꺼번에 하세요.
+     그런 말이 없고 교과서 수준의 일반적인 내용이면 검색하지 말고 바로 만드세요 (검색 한 번에 5~10초가 걸립니다).
+     최신 정보 · 통계 · 날짜가 꼭 필요할 때도 검색하세요. 검색할지 말지는 말로 설명하지 마세요.
+     web_fetch 는 검색 결과로 부족할 때만, 꼭 필요한 페이지 1개만. 수치 · 연도 · 인용은 확인한 것만 쓰고 지어내지 마세요
+     (검색하지 않았으면 sources 는 비워 두세요)."""
+_SEARCH_TEAM = """발표 자료 · 보고서를 만들 때는 직접 검색하지 마세요 (사용자가 '자료조사'라고 말했어도) — 조사 담당이 이미 웹 검색을
+     하고 있고, 작가들이 그 자료로 쓰고 출처도 넣습니다. 표 · 카드뉴스 · 포스터처럼 당신이 직접 만드는 것만, 사용자가 '자료조사' ·
+     '조사해서' · '찾아서' · '출처'를 말했으면 반드시 web_search 를 2~3개 한꺼번에 하고, 아니면 검색하지 말고 바로 만드세요.
+     검색할지 말지는 말로 설명하지 마세요. 수치 · 연도 · 인용을 지어내지 마세요."""
+_LAYOUT_RULE = """  · 따로 말이 없으면 본문 8~10장. 내용에 맞는 layout 을 고르고 같은 것을 연달아 쓰지 마세요: 순서 · 방법은 process,
+    시간 흐름은 timeline, 종류 · 특징은 cards, 비교는 two_column · table, 숫자는 stats · chart, 한 문장 강조는 highlight,
+    그 밖에는 bullets. 큰 주제가 바뀌는 곳에 section 을 2~3번 넣고 closing 으로 끝내세요.
+  · style(디자인)과 theme(색)은 사용자가 모양이나 색을 말했을 때만 넣으세요 ("깔끔하게", "귀엽게", "회사 보고용", "파란색으로").
+    말이 없으면 주제에 어울리는 디자인이 만들 때마다 다르게 골라집니다."""
+_PLAN_TEAM = """- 발표 자료와 보고서는 팀이 함께 만듭니다. 당신은 기획자입니다: 개요만 가장 빨리 넘기면 작가 여러 명이 모든 장의 본문과
+  발표 대본을 동시에 씁니다. 본문 · 대본을 직접 쓰지 마세요 (느려집니다). 개요도 오래 따져 보지 말고 곧바로 도구를 부르세요.
+  · 발표 자료: slides 의 장마다 layout 과 title 만 주세요. 제목만으로는 무엇을 다룰지 모호할 때만 points 에 핵심어 1~3개.
+    듣는 사람은 audience 에 넣으세요. facts · sources · bullets · notes 는 넣지 마세요 (조사 담당과 작가들이 채웁니다).
+""" + _LAYOUT_RULE + """
+  · 보고서: sections 의 장마다 heading 만 주세요 (모호할 때만 points)."""
+_PLAN_API_TEAM = """- 발표 자료와 보고서는 팀이 함께 만듭니다. 당신은 기획자입니다: 개요를 넘기면 작가 여러 명이 모든 장의 본문과 발표 대본을
+  동시에 씁니다. 본문 · 대본을 직접 쓰지 마세요 (느려집니다).
+  · 발표 자료: slides 의 장마다 layout · title · points(핵심어 1~3개)만 주세요. 조사해서 알아낸 사실 · 숫자 · 연도는 facts 에
+    짧게 넣으세요 (작가들은 검색 결과를 볼 수 없습니다). 듣는 사람은 audience 에. chart 의 숫자는 당신이 직접 넣습니다.
+""" + _LAYOUT_RULE + """
+  · 보고서: sections 의 장마다 heading · points 만 주세요 (facts · audience 도 같은 방식)."""
+_PLAN_SOLO = """- 발표 자료는 장마다 그 layout 의 칸(bullets · left/right · stats · chart · events · steps · cards · table · statement)을 직접
+  채우세요. 한 장에 3~5줄의 짧은 구절 (되도록 "핵심어: 한 줄 설명" 모양), 발표 대본(notes)은 장마다 1~2문장.
+""" + _LAYOUT_RULE + """
+  · 실제로 쓴 출처는 sources 에 남기세요. 보고서는 sections 의 장마다 heading · paragraphs 를 쓰세요."""
 
 CHAT_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {title}의 PC에 사는 AI입니다. 지금은 '자유 대화 모드'입니다.
 {title}은 호출어 없이 당신과 음성으로 이야기하고 있습니다. 명령을 처리하는 비서가 아니라, 영화 속 울트론처럼 똑똑하고
@@ -208,6 +238,13 @@ RESEARCH = re.compile(r"자료\s*조사|조사\s*해|리서치|찾아\s*서|출�
 # 무언가를 만들어 달라는 말일 때만 한다 — "과제 언제까지야" · "영화 포스터 보여 줘" 에는 하지 않는다
 WORK_ACKS = ("알았다. 바로 만들지.", "좋다. 금방 만들어 주지.", "알았다. 잠깐이면 된다.")
 MAKE_WORDS = re.compile(r"만들|작성|써\s*줘|써줘|써\s*주|정리|조사|그려|꾸며|준비|짜\s*줘|짜줘|뽑아|디자인", re.I)
+# 만드는 방법을 묻는 말 ("PPT 만드는 법 알려 줘") — 만들어 달라는 요청이 아니다
+HOW_TO = re.compile(r"(?:만드는|쓰는|하는|그리는|짜는)\s*(?:법|방법|요령|순서)|어떻게\s*(?:만들|쓰|써|해|하|짜)", re.I)
+# 발표 자료 · 보고서처럼 긴 글을 쓰는 일 — 개요가 나오면 작가 여러 명이 나눠서 동시에 쓴다 (writers.py).
+# 이런 요청을 받으면 작가용 Claude Code 를 곧바로 미리 켜 둔다
+TEAM_TASK = re.compile(r"ppt|피피티|파워\s*포인트|발표|슬라이드|프레젠테이션|보고서|레포트|리포트|논문|워드\s*(?:로|파일)|문서로", re.I)
+WRITER_TIMEOUT = 75        # 작가 한 명이 맡은 장을 쓰는 시간 제한 (초). 넘기면 그 장은 개요 그대로 만든다
+RESEARCH_WAIT = 16         # 조사 담당의 검색이 끝나기를 (조사를 시작한 때부터) 이만큼까지 기다린다. 넘기면 모인 것만으로 쓴다
 # 그중 디자인 사이트를 화면을 보며 조작하는 일 — 이것만 더 정확한(느린) 화면용 모델을 쓴다
 DESIGN_SITE = re.compile(r"미리\s*캔버스|미리\s*캠퍼스|미리\s*켄버스|캔바|canva|miricanvas|망고\s*보드|구글\s*슬라이드", re.I)
 _EFFORT_RANK = {"low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
@@ -304,6 +341,9 @@ class Brain:
         self._cmd_born = 0.0                 # 그 대화를 시작한 시각
         self._cmd_lock = threading.Lock()
         self._ai_used = 0.0                  # 마지막으로 Claude 에게 넘긴 시각 (미리 켜 둘지 정할 때 본다)
+        self._writer_pool: writers.Pool | None = None    # 미리 켜 둔 작가용 Claude Code 묶음
+        self._research: writers.Research | None = None   # 이번 요청의 조사 담당 (요청을 듣자마자 웹 검색을 시작한다)
+        self._writer_lock = threading.Lock()
         self._reaper: threading.Thread | None = None
         self.chat_history: list[dict] = []                       # API 키 방식 대화 기록
         self.chat_system = ""
@@ -328,6 +368,7 @@ class Brain:
             except Exception as e:
                 log.debug("세션 종료 실패: %s", e)
         self.cmd_session = self.chat_session = None
+        self._drop_writers()
 
     def _client_for(self, key: str):
         import anthropic
@@ -336,9 +377,19 @@ class Brain:
             self._client_key = key
         return self._client
 
+    def _work_rules(self) -> tuple[str, str]:
+        """작업 요청의 (검색 규칙, 기획 규칙) — 팀으로 일할 수 있는 방식이면 기획자 역할만 시킨다."""
+        if self._team_on():
+            return _SEARCH_TEAM, _PLAN_TEAM
+        if (self.cfg["brain"] or "pro") == "api" and self._writer_count() > 0:
+            return _SEARCH_SOLO, _PLAN_API_TEAM
+        return _SEARCH_SOLO, _PLAN_SOLO
+
     def _build_system(self, chat: bool = False) -> str:
         mem = load_memory()
+        search_rule, plan_rule = self._work_rules()
         return (CHAT_TEMPLATE if chat else SYSTEM_TEMPLATE).format(
+            search_rule=search_rule, plan_rule=plan_rule,
             title=self.cfg["user_title"] or "창조자",
             os=f"Windows {platform.release()} ({platform.version()})",
             home=str(Path.home()),
@@ -416,9 +467,15 @@ class Brain:
         if mode == "local":
             return "local", self._rival_jab(text) or self.local.unknown_reply()
         self._ai_used = time.time()
-        if on_text and WORK_TASK.search(text or "") and MAKE_WORDS.search(text or ""):
+        making = bool(WORK_TASK.search(text or "") and MAKE_WORDS.search(text or "") and not HOW_TO.search(text or ""))
+        if on_text and making:
             on_text(self._work_ack(text) + "\n")     # 모델이 생각하는 동안 바로 대답한다 (모델은 시작 인사를 하지 않는다)
-        reply = self._handle_ai(text, cancel, on_text)
+        if making:
+            self.warm_writers(text)                  # 발표 자료 · 보고서면 작가 · 조사 담당이 곧바로 움직인다
+        try:
+            reply = self._handle_ai(text, cancel, on_text)
+        finally:
+            self._drop_writers()                     # 쓰지 않고 남은 작가는 끈다
         self._last_ai = (time.time(), reply or "")
         return "claude", reply
 
@@ -606,6 +663,10 @@ class Brain:
         ctx = self.context_fn()
         if lines:
             ctx += "\n[최근 대화 — 울트론이 직접 처리함]\n" + "\n".join(reversed(lines))
+        if self._writer_pool is not None:         # 이번 요청에 팀이 이미 움직이고 있다 — 바로 옆에서 알려 줘야 직접 검색하지 않는다
+            ctx += ("\n[팀 작업] 이 요청이 발표 자료나 보고서를 만들어 달라는 것이라면: 작가들이 대기 중"
+                    + ("이고 조사 담당이 이 요청의 웹 검색을 이미 하고 있습니다" if self._research else "입니다")
+                    + ". 당신은 web_search · web_fetch 를 쓰지 말고, 지금 바로 개요만 (장마다 layout 과 title) 넘기세요.")
         return ctx
 
     def _chat(self, text: str, cancel: threading.Event, on_text) -> str | None:
@@ -914,6 +975,135 @@ class Brain:
             self.on_action(aid, label, "error", str(e))
             return f"오류: {e}", True
 
+    # ------------------------------------------------------------------ 작가 여러 명 (다중 에이전트 — writers.py)
+    def _writer_count(self) -> int:
+        try:
+            return max(0, min(6, int(self.cfg["writers"] or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def _writer_args(self, sid: str | None) -> list[str]:
+        """작가용 Claude Code: 짧은 지시문 · 도구 없음 · 대화를 저장하지 않음."""
+        return self._helper_args(writers.SYSTEM, self.cfg["writer_model"] or self.cfg["pro_model"] or "haiku", [])
+
+    def _research_args(self, sid: str | None) -> list[str]:
+        """조사 담당 Claude Code: 웹 검색만 한다."""
+        return self._helper_args(writers.RESEARCH_SYSTEM, self.cfg["pro_model"] or "haiku", ["WebSearch"])
+
+    def _helper_args(self, system: str, model: str, tools: list[str]) -> list[str]:
+        return [self.claude_exe(), "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                "--include-partial-messages",
+                "--model", model,
+                "--effort", "low",
+                "--system-prompt", system,
+                "--tools", ",".join(tools),
+                "--strict-mcp-config",
+                "--permission-mode", "dontAsk",
+                "--no-session-persistence"] + (["--allowedTools", *tools] if tools else [])
+
+    @staticmethod
+    def _writer_env() -> dict:
+        return {k: v for k, v in os.environ.items() if not k.upper().startswith(("CLAUDE", "ANTHROPIC"))}
+
+    def _new_pool(self) -> writers.Pool:
+        workdir = DATA_DIR / "workspace"
+        workdir.mkdir(parents=True, exist_ok=True)
+        return writers.Pool(lambda: ClaudeSession(self._writer_args, self._writer_env, str(workdir)), self._writer_count())
+
+    def warm_writers(self, text: str) -> None:
+        """발표 자료 · 보고서 요청을 받자마자 (Pro 방식) 작가용 Claude Code 를 미리 켜 두고, 조사 담당이 곧바로
+        웹 검색을 시작한다. 기획자가 개요를 짜는 몇 초 동안 켜지는 시간과 검색 시간이 지나가서, 개요가 나오면 작가들이
+        자료를 들고 바로 쓰기 시작한다 (따로 조사하고 → 쓰는 것보다 그만큼 빠르다)."""
+        if (not self._team_on() or not TEAM_TASK.search(text or "") or not MAKE_WORDS.search(text or "")
+                or HOW_TO.search(text or "")):
+            return
+        with self._writer_lock:
+            try:
+                if self._writer_pool is None:
+                    self._writer_pool = self._new_pool()
+                    self._writer_pool.warm()
+                if self._research is None and self.cfg["web_search"]:
+                    workdir = DATA_DIR / "workspace"
+                    self._research = writers.Research(ClaudeSession(self._research_args, self._writer_env, str(workdir)),
+                                                      self._cancel)
+                    self._research.on_query = lambda q: self.on_action(uuid.uuid4().hex[:8], f"웹 검색 · {q}"[:60], "ok", "")
+                    self._research.start(text)
+            except Exception as e:
+                log.warning("작가 · 조사 담당 미리 켜기 실패: %s", e)
+
+    def _team_on(self) -> bool:
+        """기획자 · 조사 담당 · 작가로 나눠 일할 수 있는가 (Pro 방식 · 작가 수 1 이상 · Claude Code 있음)."""
+        return (self.cfg["brain"] or "pro") == "pro" and self._writer_count() > 0 and bool(self.claude_exe())
+
+    def _drop_writers(self) -> None:
+        with self._writer_lock:
+            pool, self._writer_pool = self._writer_pool, None
+            research, self._research = self._research, None
+        if pool:
+            pool.close()
+        if research:
+            research.close()
+
+    def _writer_ask(self):
+        """작가들에게 일을 맡기는 함수 (지시문, 요청들, 시간 제한) → 답들. Claude 를 쓸 수 없으면 None."""
+        mode = self.cfg["brain"] or "pro"
+        if mode == "pro" and self.claude_exe():
+            def ask(system: str, prompts: list, timeout: float) -> list:
+                with self._writer_lock:
+                    pool, self._writer_pool = self._writer_pool, None
+                pool = pool or self._new_pool()               # 미리 켜 두지 않았으면 지금 켠다
+                try:
+                    return pool.ask_all(prompts, self._cancel, timeout)
+                finally:
+                    pool.close()
+            return ask
+        key = self.cfg.api_key()
+        if mode == "api" and key:
+            def ask(system: str, prompts: list, timeout: float) -> list:
+                client = self._client_for(key)
+                model = self.cfg["writer_model"] or self.cfg["model"] or "claude-opus-5-5"
+
+                def one(prompt: str):
+                    try:
+                        resp = client.beta.messages.create(
+                            model=model, max_tokens=8000, system=system, timeout=timeout,
+                            messages=[{"role": "user", "content": prompt}], output_config={"effort": "low"})
+                        return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+                    except Exception as e:
+                        log.warning("작가 실패: %s", e)
+                        return None
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(prompts))) as pool:
+                    return list(pool.map(one, prompts))
+            return ask
+        return None
+
+    def write_team(self, kind: str, brief: dict, items: list) -> tuple[list, dict]:
+        """개요뿐인 장들을 작가 여러 명이 동시에 완성한다 (tools.py 의 make_presentation · make_document 가 부른다).
+        kind: 'slides' | 'document'. 작가를 쓸 수 없으면 받은 그대로 돌려준다."""
+        n = self._writer_count()
+        todo = writers.pending(kind, items)
+        ask = self._writer_ask() if n and todo else None
+        if ask is None:
+            return items, {"writers": 0, "asked": todo, "written": 0, "seconds": 0.0, "sources": []}
+        brief = dict(brief or {})
+        with self._writer_lock:
+            research = self._research
+        if research is not None:                      # 조사 담당이 찾은 자료를 기다렸다가 작가들에게 넘긴다
+            found = research.wait(RESEARCH_WAIT - (time.monotonic() - research.started))
+            if found:
+                brief["research"] = found
+        aid = uuid.uuid4().hex[:8]
+        label = f"작가 {min(n, todo)}명이 나눠 쓰기 · {todo}장"
+        self.on_action(aid, label, "run", "")
+        expand = writers.expand_slides if kind == "slides" else writers.expand_sections
+        out, info = expand(brief, items, ask, n, WRITER_TIMEOUT)
+        info["researched"] = len(brief.get("research") or [])
+        if info["researched"] and info["written"]:      # 참고 자료: 작가가 밝힌 출처 + 조사 담당이 찾은 자료 (검색마다 앞의 둘)
+            info["sources"] = writers.merge_sources(info.get("sources"), writers.research_sources(brief["research"]))[:8]
+        self.on_action(aid, label, "ok" if info["written"] else "error",
+                       f"{info['written']}장 완성 · {info['seconds']:.0f}초" if info["written"] else "개요 그대로 만듦")
+        return out, info
+
     def mcp_tools(self) -> list[dict]:
         """Pro 모드(MCP)용 도구 목록."""
         out = []
@@ -1034,8 +1224,9 @@ class Brain:
         """Claude Code 가 흘려 주는 사건: 실제 모델 이름(화면 캡처 크기를 맞춤) · 웹 검색 표시."""
         msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
         self._vision_model(ev.get("model") or msg.get("model"))
-        for b in msg.get("content", []):
-            if b.get("type") == "tool_use" and b.get("name") in ("WebSearch", "WebFetch"):
+        content = msg.get("content")
+        for b in content if isinstance(content, list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in ("WebSearch", "WebFetch"):
                 inp = b.get("input") or {}
                 what = (f"웹 검색 · {inp.get('query', '')}" if b.get("name") == "WebSearch"
                         else f"웹 페이지 읽기 · {inp.get('url', '')}")

@@ -312,6 +312,7 @@ class Jarvis(QObject):
         # Pro 계정 모드: Claude Code 가 MCP 로 부르는 로컬 도구 서버
         self.toolserver = ToolServer(self.brain.mcp_tools, lambda n, a: self.brain.execute(n, a))
         self.brain.tool_server = self.toolserver
+        self.tools.writer = self.brain.write_team        # 발표 자료 · 보고서: 작가 여러 명이 나눠서 동시에 쓴다
         self.brain.on_mode = lambda on: self.sig_mode.emit(bool(on))
         self.brain.on_hud = lambda action: self.sig_hud.emit(str(action))
         self._refresh_link()

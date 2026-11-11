@@ -128,6 +128,7 @@ class PCTools:
         self.vision_model = ""              # 지금 화면을 보고 있는 모델 이름 → 보낼 이미지 크기 한도를 정한다
         self.sentinel = sentinel.Sentinel(cfg)   # Sentinel 웹 보안 분석기 연결
         self._sentinel_last = ""            # 이번 실행에서 마지막으로 요청한 검사 번호 (보고서 열기용)
+        self.writer = None                  # 작가 여러 명에게 나눠 맡기는 함수 (app 이 brain.write_team 을 넣는다)
         threading.Thread(target=self._index_apps, daemon=True, name="app-index").start()
 
     # ------------------------------------------------------------------ 앱 인덱스
@@ -308,33 +309,45 @@ class PCTools:
             tool("remember", "Save a fact about the user to long-term memory (e.g. preferences, names). Use when the user asks you to remember something.",
                  {"fact": s}, ["fact"]),
             tool("make_presentation",
-                 "Create a PowerPoint (.pptx) presentation and open it. Use for PPT / 발표 자료 / 슬라이드 requests; research the "
-                 "topic first with web_search / web_fetch when it needs facts. Write in Korean unless asked otherwise: short "
-                 "phrases, 3-5 bullets per slide, and a 2-4 sentence talk track in notes for every slide. Mix layouts so it is "
-                 "not all bullet lists. A cover, a 목차 slide and a 참고 자료 slide (from sources) are added automatically; long "
-                 "lists are split across slides. Saved to the user's Documents\\ULTRON folder unless folder is given.",
+                 "Create a PowerPoint (.pptx) presentation and open it. Use for PPT / 발표 자료 / 슬라이드 requests. Give "
+                 "the slides in order; how much of each slide you write yourself (just layout + title, or the full text) "
+                 "is set by the 작업 rules in your instructions — slides without text are written by a team of writer "
+                 "agents in parallel. A cover, a 목차 slide and a 참고 자료 slide (from sources) are added automatically. "
+                 "Saved to the user's Documents\\ULTRON folder unless folder is given.",
                  {"title": {"type": "string", "description": "presentation title (cover)"},
-                  "subtitle": {"type": "string", "description": "cover subtitle, e.g. '3학년 2반 홍길동 · 2026.11.11' or a one-line summary"},
+                  "subtitle": {"type": "string", "description": "cover subtitle, e.g. '3학년 2반 홍길동' or a one-line summary"},
+                  "audience": {"type": "string", "description": "who listens, e.g. '중학교 2학년', '회사 임원' — sets the wording"},
+                  "style": {"type": "string", "enum": ["clean", "bold", "side", "tech", "editorial", "pastel", "corporate"],
+                            "description": "visual design — only when the user asked for a look; otherwise omit and a "
+                                           "fitting design is picked, different each time. clean 깔끔 · bold 큰 글자와 강한 색 · "
+                                           "side 왼쪽 제목 칸 (모던) · tech 어두운 바탕과 빛 · editorial 명조와 얇은 선 (매거진) · "
+                                           "pastel 둥글고 밝은 색 (귀엽게) · corporate 진한 띠 (회사 · 공식 보고)"},
+                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green", "purple", "teal", "rose",
+                                                       "mono", "midnight", "forest"],
+                            "description": "colors — only when the user asked for a color; otherwise omit (the style picks)"},
+                  "facts": {"type": "array", "items": {"type": "string"},
+                            "description": "facts for the writers (numbers, years, names) — only what you researched yourself"},
                   "slides": {"type": "array", "description": "content slides in order (cover, 목차 and 참고 자료 are added for you)",
                              "items": {"type": "object", "properties": {
                                  "layout": {"type": "string",
-                                            "enum": ["bullets", "section", "two_column", "stats", "chart", "quote", "closing"],
-                                            "description": "bullets (default) · section (big numbered chapter divider) · two_column "
-                                                           "(compare two sides) · stats (2-4 key numbers) · chart (a real chart "
-                                                           "from data; bullets go beside it) · quote · closing (last slide)"},
+                                            "enum": ["bullets", "section", "two_column", "stats", "chart", "timeline", "process",
+                                                     "cards", "table", "highlight", "quote", "closing"],
+                                            "description": "section (chapter divider) · bullets · two_column (compare two "
+                                                           "sides) · stats (2-4 key numbers) · chart · timeline (dated events) "
+                                                           "· process (steps in order) · cards (3-4 parallel items) · table "
+                                                           "(comparison grid) · highlight (one big sentence) · quote (a real "
+                                                           "quote) · closing (last slide)"},
                                  "title": {"type": "string"},
+                                 "points": {"type": "array", "items": {"type": "string"},
+                                            "description": "outline only: 1-3 keywords the writers must cover on this slide"},
                                  "bullets": {"type": "array", "items": {"type": "string"},
-                                             "description": "bullet lines; start a line with '- ' to make it a sub-point of the line "
-                                                            "above. For section/closing: optional short lines under the title"},
-                                 "left": {"type": "object", "description": "two_column: {heading, bullets}",
-                                          "properties": {"heading": {"type": "string"}, "bullets": {"type": "array", "items": {"type": "string"}}}},
-                                 "right": {"type": "object", "description": "two_column: {heading, bullets}",
-                                           "properties": {"heading": {"type": "string"}, "bullets": {"type": "array", "items": {"type": "string"}}}},
-                                 "stats": {"type": "array", "description": "stats: 2-4 items",
-                                           "items": {"type": "object", "properties": {"value": {"type": "string", "description": "e.g. '73%'"},
-                                                                                      "label": {"type": "string"}},
-                                                     "required": ["value", "label"]}},
-                                 "chart": {"type": "object", "description": "chart layout: data for a real, editable chart",
+                                             "description": "final text lines; '핵심어: 설명' is shown with the keyword in bold, a "
+                                                            "line starting with '- ' is a sub-point"},
+                                 "left": {"type": "object", "description": "two_column: {heading, bullets}"},
+                                 "right": {"type": "object", "description": "two_column: {heading, bullets}"},
+                                 "stats": {"type": "array", "description": "stats: 2-4 of {value: '73%', label}",
+                                           "items": {"type": "object"}},
+                                 "chart": {"type": "object", "description": "chart: the data for a real, editable chart",
                                            "properties": {
                                                "type": {"type": "string", "enum": ["column", "bar", "line", "pie"]},
                                                "categories": {"type": "array", "items": {"type": "string"}},
@@ -342,12 +355,18 @@ class PCTools:
                                                    "name": {"type": "string"},
                                                    "values": {"type": "array", "items": {"type": "number"}}}}},
                                                "unit": {"type": "string", "description": "e.g. '%', '℃', '명'"}}},
+                                 "events": {"type": "array", "description": "timeline: 3-5 of {when, title, text}",
+                                            "items": {"type": "object"}},
+                                 "steps": {"type": "array", "description": "process: 3-5 of {title, text}", "items": {"type": "object"}},
+                                 "cards": {"type": "array", "description": "cards: 3-4 of {title, text}", "items": {"type": "object"}},
+                                 "table": {"type": "object", "description": "table: {columns: [...], rows: [[...]]}, at most 5 x 6"},
+                                 "statement": {"type": "string", "description": "highlight: the one big sentence"},
+                                 "detail": {"type": "string", "description": "highlight: one supporting line"},
                                  "quote": {"type": "string"},
                                  "by": {"type": "string", "description": "who said the quote"},
-                                 "notes": {"type": "string", "description": "speaker notes: what to say on this slide (1-2 short sentences)"}},
+                                 "notes": {"type": "string", "description": "speaker notes: what to say on this slide (1-2 sentences)"}},
                                  "required": ["title"]}},
-                  "sources": {"type": "array", "items": {"type": "string"}, "description": "references actually used: 'title — URL'"},
-                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green"], "description": "colors; default light"},
+                  "sources": {"type": "array", "items": {"type": "string"}, "description": "references you used yourself: 'title — URL'"},
                   "agenda": {"type": "boolean", "description": "add a 목차 slide (default: when there are 4+ content slides)"},
                   "filename": {"type": "string", "description": "file name without extension (default: the title)"},
                   "folder": {"type": "string", "description": "'바탕화면', '문서', '다운로드' or a full path (default Documents\\ULTRON)"},
@@ -355,14 +374,20 @@ class PCTools:
                   "open": {"type": "boolean", "description": "open the file after saving (default true)"}},
                  ["title", "slides"]),
             tool("make_document",
-                 "Create a Word (.docx) report or document and open it. Use for 보고서 / 레포트 / 조사 정리 / 문서로 정리 requests "
-                 "(research first when it needs facts). Each section has a heading, paragraphs, optional bullets and an optional "
-                 "table. A 참고 자료 list is added from sources and pages are numbered.",
+                 "Create a Word (.docx) report or document and open it. Use for 보고서 / 레포트 / 조사 정리 / 문서로 정리 requests. "
+                 "Give the sections in order; how much you write yourself (just headings, or the full text) is set by the "
+                 "작업 rules in your instructions — sections without text are written by writer agents in parallel. A 참고 자료 "
+                 "list is added from sources and pages are numbered.",
                  {"title": s,
                   "subtitle": {"type": "string", "description": "e.g. '과목 · 학번 이름 · 날짜'"},
+                  "audience": {"type": "string", "description": "who reads it, e.g. '고등학교 과제', '팀장 보고'"},
+                  "facts": {"type": "array", "items": {"type": "string"},
+                            "description": "facts for the writers — only what you researched yourself"},
                   "sections": {"type": "array", "items": {"type": "object", "properties": {
                       "heading": {"type": "string"},
                       "level": {"type": "integer", "enum": [1, 2], "description": "2 for a sub-heading"},
+                      "points": {"type": "array", "items": {"type": "string"},
+                                 "description": "outline only: what this section must cover"},
                       "paragraphs": {"type": "array", "items": {"type": "string"}},
                       "bullets": {"type": "array", "items": {"type": "string"}},
                       "table": {"type": "object", "properties": {
@@ -406,7 +431,8 @@ class PCTools:
                                 "required": ["title"]}},
                   "closing": {"type": "string", "description": "closing card: first line is the big message, later lines small text"},
                   "sources": {"type": "array", "items": {"type": "string"}},
-                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green"]},
+                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green", "purple", "teal", "rose",
+                                                       "mono", "midnight", "forest"]},
                   "filename": s, "folder": s, "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["title", "cards"]),
             tool("make_poster",
@@ -422,7 +448,8 @@ class PCTools:
                                    "bullets": {"type": "array", "items": {"type": "string"}}}}},
                   "footer": {"type": "string", "description": "e.g. organizer · date · place"},
                   "sources": {"type": "array", "items": {"type": "string"}},
-                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green"]},
+                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green", "purple", "teal", "rose",
+                                                       "mono", "midnight", "forest"]},
                   "size": {"type": "string", "enum": ["a4", "a3"]},
                   "filename": s, "folder": s, "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["title", "sections"]),
@@ -1396,30 +1423,67 @@ class PCTools:
         log.info("작업 결과물 저장: %s %s", path, info)
         return path, info, note
 
+    def _team(self, kind: str, brief: dict, items: list) -> tuple[list, list, str]:
+        """본문이 없는 장을 작가 여러 명에게 나눠 맡긴다 (울트론이 Claude 에 연결돼 있을 때) → (장들, 작가가 쓴 출처, 덧붙일 말).
+        작가를 쓸 수 없거나 실패하면 받은 그대로 만든다."""
+        writer = getattr(self, "writer", None)
+        if writer is None or not isinstance(items, list):
+            return items, [], ""
+        try:
+            out, info = writer(kind, brief, items)
+        except Exception as e:
+            log.warning("작가에게 맡기지 못함: %s", e)
+            return items, [], ""
+        if not info.get("written"):
+            if info.get("asked") and info.get("writers"):       # 한 장도 못 썼다 (연결 문제 등) — 빈 파일을 만들지 않는다
+                raise ToolError("작가들이 응답하지 않았습니다. 이번에는 장마다 본문(bullets · steps · events · cards · table …)과 "
+                                "notes 를 직접 채워서 같은 도구를 다시 부르세요.")
+            return out, [], ""
+        found = f" 조사 담당이 찾은 자료 {info['researched']}건을 바탕으로," if info.get("researched") else ""
+        note = f"{found} 작가 {info['writers']}명이 나눠 썼다 ({info['seconds']:.0f}초)."
+        missing = set(info.get("missing") or [])
+        if missing:                                             # 끝내 못 쓴 장: 개요(points)라도 있으면 그대로 넣고, 제목뿐이면 뺀다
+            kept = [it for i, it in enumerate(out, 1) if i not in missing or (isinstance(it, dict) and it.get("points"))]
+            note += f" {len(missing)}장은 쓰지 못해 " + ("개요만 넣었다." if len(kept) == len(out) else "뺐다.")
+            out = kept
+        return out, info.get("sources") or [], note
+
     def t_make_presentation(self, title: str, slides: list, subtitle: str = "", sources: list | None = None,
-                            theme: str = "light", agenda: bool | None = None, filename: str = "", folder: str = "",
-                            overwrite: bool = False, open: bool = True) -> str:
-        from . import office
+                            theme: str = "", agenda: bool | None = None, filename: str = "", folder: str = "",
+                            overwrite: bool = False, open: bool = True, style: str = "", audience: str = "",
+                            facts: list | None = None, **_extra) -> str:
+        from . import office, writers                 # (_extra: 모델이 덧붙인 모르는 칸은 무시한다 — 그 때문에 다시 부르게 하지 않는다)
+        slides, found, team = self._team("slides", {"title": title, "subtitle": subtitle, "audience": audience,
+                                                    "facts": facts}, slides)
+        refs = writers.merge_sources(sources, found)
+        look = office.pick_style(style, str(title), str(audience or subtitle or ""), getattr(self, "_last_style", ""))
+        self._last_style = look                       # 다음 발표 자료는 다른 디자인으로
+        color = office.pick_theme(theme, look, str(title))
         path, info, note = self._make_file(
-            lambda p: office.build_presentation(p, title, slides, subtitle, sources, theme, agenda),
+            lambda p: office.build_presentation(p, title, slides, subtitle, refs, color, agenda, look),
             filename or title, ".pptx", folder, overwrite, open)
         talk = f", 발표 대본 {info['notes']}장" if info["notes"] else ""
         split = f", 글이 넘친 {info['split']}곳은 다음 장으로 나눔" if info["split"] else ""
-        return (f"발표 자료를 만들었다 — 표지 포함 {info['slides']}장{talk}{split}. 저장한 곳: {self._where(path)} "
-                f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
+        cited = f", 출처 {len(refs)}건" if refs else ""
+        return (f"발표 자료를 만들었다 — 표지 포함 {info['slides']}장{talk}{cited}{split}, 디자인은 '{office.STYLE_NAMES[look]}' "
+                f"스타일.{team} 저장한 곳: {self._where(path)} (파일 이름 {path.name}).{note} [전체 경로: {path}]")
 
     def t_make_document(self, title: str, sections: list, subtitle: str = "", sources: list | None = None,
-                        filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True) -> str:
-        from . import office
+                        filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True,
+                        audience: str = "", facts: list | None = None, **_extra) -> str:
+        from . import office, writers
+        sections, found, team = self._team("document", {"title": title, "subtitle": subtitle, "audience": audience,
+                                                        "facts": facts}, sections)
+        refs = writers.merge_sources(sources, found)
         path, info, note = self._make_file(
-            lambda p: office.build_document(p, title, sections, subtitle, sources),
+            lambda p: office.build_document(p, title, sections, subtitle, refs),
             filename or title, ".docx", folder, overwrite, open)
         tables = f", 표 {info['tables']}개" if info["tables"] else ""
-        return (f"문서를 만들었다 — 장 {info['sections']}개{tables}. 저장한 곳: {self._where(path)} "
+        return (f"문서를 만들었다 — 장 {info['sections']}개{tables}.{team} 저장한 곳: {self._where(path)} "
                 f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
 
     def t_make_spreadsheet(self, sheets: list, filename: str = "", folder: str = "", overwrite: bool = False,
-                           open: bool = True) -> str:
+                           open: bool = True, **_extra) -> str:
         from . import office
         first = sheets[0] if isinstance(sheets, list) and sheets and isinstance(sheets[0], dict) else {}
         name = filename or first.get("title") or first.get("name") or "표"
@@ -1430,7 +1494,7 @@ class PCTools:
 
     def t_make_cardnews(self, title: str, cards: list, subtitle: str = "", closing: str = "", sources: list | None = None,
                         theme: str = "light", filename: str = "", folder: str = "", overwrite: bool = False,
-                        open: bool = True) -> str:
+                        open: bool = True, **_extra) -> str:
         from . import design
         path, info, note = self._make_file(
             lambda p: design.build_cardnews(p, title, cards, subtitle, closing, sources, theme),
@@ -1440,7 +1504,7 @@ class PCTools:
 
     def t_make_poster(self, title: str, sections: list | None = None, subtitle: str = "", highlight: str = "",
                       footer: str = "", sources: list | None = None, theme: str = "light", size: str = "a4",
-                      filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True) -> str:
+                      filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True, **_extra) -> str:
         from . import design
         path, info, note = self._make_file(
             lambda p: design.build_poster(p, title, sections or [], subtitle, highlight, footer, sources, theme, size),

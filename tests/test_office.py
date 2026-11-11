@@ -39,7 +39,7 @@ def test_presentation_has_cover_agenda_every_layout_notes_and_sources(tmp_path):
                                      sources=["자료 하나 — https://a.example.kr", "자료 둘"])
     prs = pptx.Presentation(str(path))
     slides = list(prs.slides)
-    assert info == {"slides": len(slides), "notes": 3, "split": 0}
+    assert info == {"slides": len(slides), "notes": 3, "split": 0, "style": "clean", "theme": "light"}
     assert len(slides) == 1 + 1 + len(SLIDES) + 1                              # 표지 + 목차 + 본문 + 참고 자료
     assert prs.slide_width / prs.slide_height == pytest.approx(16 / 9, rel=0.01)
     assert "기후 변화와 우리" in texts(slides[0]) and "3학년 2반" in texts(slides[0])
@@ -207,7 +207,8 @@ def test_chart_slides_are_real_editable_charts_with_korean_fonts(tmp_path):
     assert list(pie.plots[0].series[0].values) == [62.0, 30.0, 8.0] and pie.plots[0].data_labels.number_format == 'General"%"'
     assert col.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED and list(col.plots[0].series[0].values) == [120.0, 95.0]
     fallback = prs.slides[4]
-    assert not any(sh.has_chart for sh in fallback.shapes) and "가: 많음" in texts(fallback)    # 그릴 수 없으면 목록으로
+    listed = texts(fallback).split("\n")
+    assert not any(sh.has_chart for sh in fallback.shapes) and "가" in listed and "많음" in listed    # 그릴 수 없으면 목록으로
     for ch in (line, pie, col):
         runs = list(ch._chartSpace.iter(qn("a:defRPr"))) + list(ch._chartSpace.iter(qn("a:rPr")))
         assert runs

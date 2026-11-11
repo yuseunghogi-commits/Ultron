@@ -90,8 +90,22 @@ def _em(text: str) -> float:
 
 
 def _lines(text: str, size: float, width_in: float) -> int:
+    """이 너비에서 몇 줄이 되는가. 파워포인트는 한글도 띄어쓰기 단위로 줄을 바꾸므로 낱말 단위로 채워 본다
+    (글자 수만 세면 좁은 칸에서 줄 수를 적게 어림해 글이 겹친다). 한 줄보다 긴 낱말은 글자 단위로 끊는다."""
     per_line = max(1.0, width_in * 72 / size)
-    return max(1, math.ceil(_em(text) / per_line))
+    lines, used = 1, 0.0
+    for word in str(text).split(" "):
+        w = _em(word)
+        if not w:
+            continue
+        if used and used + 0.3 + w > per_line:           # 이 낱말은 다음 줄로
+            lines, used = lines + 1, 0.0
+        if w > per_line:                                  # 한 줄보다 긴 낱말
+            extra = math.ceil(w / per_line) - 1
+            lines, used = lines + extra, w - extra * per_line
+        else:
+            used += (0.3 if used else 0.0) + w
+    return lines
 
 
 # ---------------------------------------------------------------- 발표 자료 (PowerPoint)
@@ -114,10 +128,140 @@ THEMES = {
     "warm": Theme("FFF8F1", "FCEBDA", "3A2417", "4B3425", "8B705E", "E5702F", "F7CFAE", "FFFFFF"),
     "green": Theme("F4FAF6", "E1F0E6", "16392A", "23402F", "5C786A", "2E9D63", "BFE3CD", "FFFFFF"),
 }
-LAYOUTS = ("bullets", "section", "two_column", "stats", "chart", "quote", "closing")
+THEMES.update({
+    "purple": Theme("FFFFFF", "F5F1FF", "24173F", "32284A", "756C8F", "7C4DFF", "DCCFFF", "FFFFFF"),
+    "teal": Theme("F7FCFC", "E3F4F4", "0E3B43", "1F4A52", "5F8087", "0E9AA7", "B9E6EA", "FFFFFF"),
+    "rose": Theme("FFF9FA", "FDEBEF", "43202B", "55323D", "8E6B75", "E0527A", "F9CBD8", "FFFFFF"),
+    "mono": Theme("FFFFFF", "F3F3F3", "111111", "2B2B2B", "767676", "FFC400", "FFE89A", "111111"),
+    "midnight": Theme("12122B", "1D1D42", "FFFFFF", "DAD9F0", "9C9BC2", "9D7BFF", "3A3470", "12122B"),
+    "forest": Theme("10231B", "1A3327", "F3FAF5", "D5E7DC", "93AD9F", "6FCF97", "254D3A", "10231B"),
+})
+LAYOUTS = ("bullets", "section", "two_column", "stats", "chart", "timeline", "process", "cards", "table", "highlight",
+           "quote", "closing")
 CHARTS = ("column", "bar", "line", "pie")
+# 디자인 스타일 (deck.py 가 그린다) — 표지 · 제목 자리 · 카드 · 장식이 서로 완전히 다르다
+STYLES = ("clean", "bold", "side", "tech", "editorial", "pastel", "corporate")
+STYLE_NAMES = {"clean": "깔끔", "bold": "강렬", "side": "사이드바", "tech": "테크", "editorial": "매거진", "pastel": "파스텔",
+               "corporate": "비즈니스"}
+_STYLE_WORDS = {"깔끔": "clean", "미니멀": "clean", "심플": "clean", "단순": "clean", "강렬": "bold", "볼드": "bold",
+                "임팩트": "bold", "화려": "bold", "눈에 띄": "bold", "사이드바": "side", "모던": "side", "세련": "side",
+                "테크": "tech", "기술": "tech", "미래": "tech", "사이버": "tech", "매거진": "editorial", "잡지": "editorial",
+                "고급": "editorial", "클래식": "editorial", "차분": "editorial", "파스텔": "pastel", "귀여": "pastel",
+                "귀엽": "pastel", "아기자기": "pastel", "발랄": "pastel", "비즈니스": "corporate", "회사": "corporate",
+                "보고": "corporate", "공식": "corporate", "격식": "corporate"}
+# 스타일마다 잘 어울리는 색 (색을 말하지 않았을 때 이 가운데서 고른다)
+STYLE_THEMES = {"clean": ("light", "green", "purple", "teal", "rose", "warm"),
+                "bold": ("light", "purple", "rose", "teal", "warm", "mono", "dark"),
+                "side": ("light", "teal", "purple", "green", "mono", "navy"),
+                "tech": ("navy", "midnight", "dark", "forest"),
+                "editorial": ("warm", "mono", "light", "forest", "teal"),
+                "pastel": ("rose", "warm", "green", "purple", "light", "teal"),
+                "corporate": ("light", "teal", "mono", "green", "navy")}
 W, H, M = 13.333, 7.5, 0.8            # 슬라이드 크기 · 좌우 여백 (인치)
 BODY_SIZES = (26, 24, 22, 20, 18, 16)
+
+
+_NUMBERED = re.compile(r"^\s*(?:제?\s*\d{1,2}\s*[부장]\s*[·:.\-–—]?|part\s*\d{1,2}\s*[:.\-–—]?|chapter\s*\d{1,2}\s*[:.\-–—]?|\d{1,2}\s*[.)])\s*", re.I)
+
+
+def unnumbered(title: str) -> str:
+    """'1. 원인' · '2부 · 영향' · 'Part 3: 대책' → '원인' · '영향' · '대책' (제목만 남으면 그대로 둔다)."""
+    t = _NUMBERED.sub("", title or "", count=1).strip()
+    return t or (title or "").strip()
+
+
+def _seed(text: str) -> int:
+    import hashlib
+    return int(hashlib.md5((text or "").encode("utf-8")).hexdigest()[:8], 16)
+
+
+# 주제 · 듣는 사람에 어울리는 스타일 (앞에서부터 먼저 맞는 것). 어느 것에도 안 맞으면 무난한 다섯 가지 가운데서 고른다
+_STYLE_POOLS = (
+    (re.compile(r"초등|유치|어린이|저학년|아이들"), ("pastel", "bold", "clean")),
+    (re.compile(r"회사|임원|팀장|부장|대표|보고|비즈니스|사업|실적|매출|전략|기획안|제안서|투자", re.I), ("corporate", "side", "clean", "bold")),
+    (re.compile(r"인공\s*지능|\bAI\b|로봇|우주|반도체|컴퓨터|코딩|프로그래밍|데이터|블록체인|메타버스|디지털|양자|드론|자율\s*주행|소프트웨어|"
+                r"사이버|해킹|보안|게임|\bIT\b", re.I), ("tech", "side", "bold", "clean")),
+    (re.compile(r"전쟁|역사|문학|철학|조선|고려|삼국|독립|민주|인권|헌법|근대|세계사|한국사|소설|작가|예술|미술|고전|사상|종교|인물"),
+     ("editorial", "clean", "side", "corporate")),
+    (re.compile(r"여행|음식|요리|동물|반려|취미|우리\s*반|학급|친구|가족|놀이|축제|동아리|소개|꿈|장래"), ("pastel", "bold", "clean", "side")),
+)
+_STYLE_DEFAULT = ("clean", "bold", "side", "editorial", "corporate")
+
+
+def pick_style(style: str, title: str, audience: str = "", avoid: str = "") -> str:
+    """디자인 스타일을 정한다. 이름(영어 · 한국어)을 주면 그것으로. 없으면 주제 · 듣는 사람에 어울리는 것들 가운데
+    제목에 따라 고르되, 바로 앞에 쓴 스타일(avoid)은 피한다 — 만들 때마다 같은 모양이 나오지 않게."""
+    s = (style or "").strip().lower()
+    if s in STYLES:
+        return s
+    for word, name in _STYLE_WORDS.items():
+        if word in s:
+            return name
+    about = f"{title} {audience}"
+    pool = next((names for pattern, names in _STYLE_POOLS if pattern.search(about)), _STYLE_DEFAULT)
+    k = _seed(title) % len(pool)
+    for name in pool[k:] + pool[:k]:
+        if name != avoid:
+            return name
+    return pool[k]
+
+
+def pick_theme(theme: str, style: str, title: str) -> str:
+    """색 테마를 정한다. 이름을 주면 그것으로, 없으면 그 스타일에 어울리는 색 가운데 제목에 따라 고른다."""
+    t = (theme or "").strip().lower()
+    if t in THEMES:
+        return t
+    choices = STYLE_THEMES.get(style, ("light",))
+    return choices[(_seed(title) // 7) % len(choices)]
+
+
+def _items(v) -> list:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [line for line in v.splitlines() if line.strip()]
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    return [v]
+
+
+_SPLIT = r"\s*[:：]\s+|\s+[—–-]\s+|\s*\|\s*"
+_LEAD = r"^(?:[-–—•●▪◦·*]|\d+[.)])\s+"
+
+
+def pairs(v) -> list[dict]:
+    """[{title, text}] 로 읽는다 (단계 · 카드): dict 그대로 · '제목: 설명' · '제목 — 설명' · 글자만."""
+    out = []
+    for x in _items(v):
+        if isinstance(x, dict):
+            title = _text(x.get("title") or x.get("heading") or x.get("name") or x.get("label"))
+            text = _text(x.get("text") or x.get("desc") or x.get("description") or x.get("detail"))
+            if not text and x.get("bullets"):
+                text = " · ".join(_text(b) for b in _strings(x.get("bullets")))
+        else:
+            parts = re.split(_SPLIT, re.sub(_LEAD, "", str(x).strip()), maxsplit=1)
+            title, text = (_text(parts[0]), _text(parts[1]) if len(parts) > 1 else "")
+        if title or text:
+            out.append({"title": title or text, "text": text if title else ""})
+    return out
+
+
+def events(v) -> list[dict]:
+    """[{when, title, text}] 로 읽는다 (연표): dict 그대로 · '1950: 전쟁 발발 — 설명' · '1950 | 전쟁 발발'."""
+    out = []
+    for x in _items(v):
+        if isinstance(x, dict):
+            when = _text(x.get("when") or x.get("date") or x.get("year") or x.get("time"))
+            title = _text(x.get("title") or x.get("event") or x.get("name"))
+            text = _text(x.get("text") or x.get("desc") or x.get("description") or x.get("detail"))
+        else:
+            parts = [_text(p) for p in re.split(_SPLIT, re.sub(_LEAD, "", str(x).strip()), maxsplit=2)]
+            when, title, text = (parts + ["", ""])[:3]
+            if not title:
+                when, title = "", when
+        if when or title:
+            out.append({"when": when, "title": title, "text": text})
+    return out
 
 
 def number(v) -> float | None:
@@ -223,374 +367,10 @@ def split_items(items: list[tuple[str, int]], width_in: float, height_in: float,
         n += 1
 
 
-class _Deck:
-    def __init__(self, theme: Theme, title: str) -> None:
-        from pptx import Presentation
-        from pptx.util import Inches
-        self.t, self.title = theme, title
-        self.prs = Presentation()
-        self.prs.slide_width, self.prs.slide_height = Inches(W), Inches(H)
-        self.blank = self.prs.slide_layouts[6]
-        self.count = 0
-        self.notes = 0
-
-    # ---- 기본 도구
-    def rgb(self, hex_: str):
-        from pptx.dml.color import RGBColor
-        return RGBColor.from_string(hex_)
-
-    def slide(self, notes: str = ""):
-        s = self.prs.slides.add_slide(self.blank)
-        bg = s.background.fill
-        bg.solid()
-        bg.fore_color.rgb = self.rgb(self.t.bg)
-        self.count += 1
-        if _text(notes):
-            s.notes_slide.notes_text_frame.text = str(notes).strip()
-            self.notes += 1
-        return s
-
-    def box(self, s, x, y, w, h, color: str, shape: str = "rect", radius: float = 0.08):
-        from pptx.enum.shapes import MSO_SHAPE
-        from pptx.util import Inches
-        kind = {"rect": MSO_SHAPE.RECTANGLE, "round": MSO_SHAPE.ROUNDED_RECTANGLE, "oval": MSO_SHAPE.OVAL}[shape]
-        sh = s.shapes.add_shape(kind, Inches(x), Inches(y), Inches(w), Inches(h))
-        sh.fill.solid()
-        sh.fill.fore_color.rgb = self.rgb(color)
-        sh.line.fill.background()
-        sh.shadow.inherit = False
-        if shape == "round":
-            sh.adjustments[0] = radius
-        return sh
-
-    def _font(self, run, size: float, color: str, bold: bool = False) -> None:
-        from pptx.oxml.ns import qn
-        from pptx.util import Pt
-        f = run.font
-        f.size, f.bold, f.name = Pt(size), bold, FONT
-        f.color.rgb = self.rgb(color)
-        rpr = run._r.get_or_add_rPr()
-        latin = rpr.find(qn("a:latin"))
-        prev = latin
-        for tag in ("a:ea", "a:cs"):          # 한글 글꼴은 '동아시아 글꼴' 칸에 넣어야 적용된다 (순서: latin → ea → cs)
-            el = rpr.find(qn(tag))
-            if el is None:
-                el = rpr.makeelement(qn(tag), {})
-                prev.addnext(el)
-            el.set("typeface", FONT)
-            prev = el
-
-    def text(self, s, x, y, w, h, lines, size: float, color: str, bold: bool = False, align: str = "left",
-             anchor: str = "top", spacing: float = 1.15):
-        """글 상자 (lines: 문단들). 줄 바꿈 · 여백 · 정렬을 맞춘다."""
-        from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
-        from pptx.util import Inches, Pt
-        tb = s.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
-        tf = tb.text_frame
-        tf.word_wrap = True
-        tf.auto_size = MSO_AUTO_SIZE.NONE
-        tf.margin_left = tf.margin_right = Inches(0.04)
-        tf.margin_top = tf.margin_bottom = Inches(0.02)
-        tf.vertical_anchor = {"top": MSO_ANCHOR.TOP, "middle": MSO_ANCHOR.MIDDLE, "bottom": MSO_ANCHOR.BOTTOM}[anchor]
-        for i, line in enumerate([lines] if isinstance(lines, str) else lines):
-            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[align]
-            p.line_spacing = spacing
-            if i:
-                p.space_before = Pt(size * 0.3)
-            self._font(p.add_run(), size, color, bold)
-            p.runs[0].text = str(line)
-        return tb
-
-    def bullets(self, s, x, y, w, h, items: list[tuple[str, int]], size: float, color: str | None = None,
-                gap: float = 0.55):
-        """글머리 기호 목록 (강조색 동그라미 · 하위 항목은 짧은 줄)."""
-        from pptx.enum.text import MSO_AUTO_SIZE
-        from pptx.oxml.ns import qn
-        from pptx.util import Inches, Pt
-        tb = s.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
-        tf = tb.text_frame
-        tf.word_wrap = True
-        tf.auto_size = MSO_AUTO_SIZE.NONE                    # 크기는 fit_size 로 미리 맞춘다 (프로그램마다 줄이는 방식이 달라서)
-        tf.margin_left = tf.margin_right = Inches(0.04)
-        for i, (line, level) in enumerate(items):
-            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            sz = size * (0.86 if level else 1.0)
-            p.line_spacing = 1.12
-            p.space_before = Pt(0 if i == 0 else sz * gap)
-            ppr = p._p.get_or_add_pPr()
-            ppr.set("marL", str(int(Inches(0.42 + 0.4 * level))))
-            ppr.set("indent", str(int(-Inches(0.32))))
-            for tag, attrs in (("a:buClr", None), ("a:buSzPct", {"val": "100000"}), ("a:buFont", {"typeface": "Arial"}),
-                               ("a:buChar", {"char": "–" if level else "●"})):
-                el = ppr.makeelement(qn(tag), attrs or {})
-                if tag == "a:buClr":
-                    clr = el.makeelement(qn("a:srgbClr"), {"val": self.t.muted if level else self.t.accent})
-                    el.append(clr)
-                ppr.append(el)
-            self._font(p.add_run(), sz, color or (self.t.muted if level else self.t.text))
-            p.runs[0].text = line
-        return tb
-
-    def header(self, s, title: str) -> None:
-        size = 30 if _em(title) <= 26 else 26 if _em(title) <= 36 else 22
-        self.text(s, M, 0.48, W - 2 * M, 0.95, title, size, self.t.title, bold=True, anchor="bottom")
-        self.box(s, M, 1.5, 0.9, 0.07, self.t.accent)
-
-    def footer(self, s) -> None:
-        self.text(s, M, H - 0.5, 8, 0.3, self.title, 10, self.t.muted)
-        self.text(s, W - M - 1.5, H - 0.5, 1.5, 0.3, str(self.count), 10, self.t.muted, align="right")
-
-    # ---- 장 종류
-    def cover(self, title: str, subtitle: str) -> None:
-        s = self.slide()
-        t = self.t
-        self.box(s, W - 4.6, -1.6, 6.2, 6.2, t.surface, "oval")       # 장식 원
-        self.box(s, W - 2.3, 3.9, 3.4, 3.4, t.soft, "oval")
-        self.box(s, M, 2.35, 0.14, 2.2, t.accent)
-        size = 54 if _em(title) <= 12 else 46 if _em(title) <= 18 else 38 if _em(title) <= 26 else 32 if _em(title) <= 36 else 28
-        self.text(s, M + 0.45, 2.1, W - 2 * M - 3.2, 1.9, title, size, t.title, bold=True, anchor="bottom", spacing=1.05)
-        if subtitle:
-            self.text(s, M + 0.45, 4.1, W - 2 * M - 3.2, 0.9, subtitle, 18, t.muted)
-
-    def agenda(self, titles: list[str]) -> None:
-        s = self.slide()
-        self.header(s, "목차")
-        titles = titles[:12]
-        cols = 1 if len(titles) <= 6 else 2
-        per = math.ceil(len(titles) / cols)
-        col_w = (W - 2 * M) / cols
-        big = len(titles) <= 4
-        step, num, size = (1.05, 34, 28) if big else (0.78, 26, 22 if cols == 1 else 18)
-        top = 2.05 + (max(0, 4 - len(titles)) * 0.35 if big else 0)
-        for c in range(cols):
-            for r, name in enumerate(titles[c * per:(c + 1) * per]):
-                n = c * per + r + 1
-                y = top + r * step
-                self.text(s, M + c * col_w, y, 1.3, step - 0.1, f"{n:02d}", num, self.t.accent, bold=True)
-                self.text(s, M + c * col_w + (1.35 if big else 1.0), y + (0.08 if big else 0.04),
-                          col_w - 1.5, step - 0.1, name, size, self.t.text)
-        self.footer(s)
-
-    def bullet_slide(self, title: str, items: list[tuple[str, int]], notes: str) -> None:
-        width, height = W - 2 * M, H - 2.0 - 0.75
-        size = fit_size(items, width, height) or BODY_SIZES[-1]
-        s = self.slide(notes)
-        self.header(s, title)
-        if items:
-            self.bullets(s, M, 1.95, width, height, items, size, gap=roomy_gap(items, size, width, height))
-        self.footer(s)
-
-    def section(self, number: int, title: str, items: list[tuple[str, int]], notes: str) -> None:
-        s = self.slide(notes)
-        t = self.t
-        self.box(s, 0, 0, 4.4, H, t.accent)
-        self.text(s, 0.6, 2.3, 3.4, 1.6, f"{number:02d}", 88, t.on_accent, bold=True, anchor="middle")
-        size = 40 if _em(title) <= 14 else 34 if _em(title) <= 22 else 28
-        self.text(s, 5.0, 2.4, W - 5.0 - M, 1.5, title, size, t.title, bold=True, anchor="bottom")
-        if items:
-            self.text(s, 5.0, 4.05, W - 5.0 - M, 2.0, [line for line, _ in items[:3]], 18, t.muted)
-
-    def two_column(self, title: str, left: dict, right: dict, notes: str) -> None:
-        s = self.slide(notes)
-        self.header(s, title)
-        gap = 0.4
-        cw = (W - 2 * M - gap) / 2
-        top, ch = 1.95, H - 1.95 - 0.8
-        cards = [(left or {}), (right or {})]
-        parsed = [parse_bullets(c.get("bullets")) for c in cards]
-        size = min(fit_size(p, cw - 0.6, ch - 1.2, (24, 22, 20, 18, 16, 14)) or 14 for p in parsed) if any(parsed) else 18
-        for i, (card, items) in enumerate(zip(cards, parsed)):
-            x = M + i * (cw + gap)
-            self.box(s, x, top, cw, ch, self.t.surface, "round", 0.05)
-            self.box(s, x, top, cw, 0.09, self.t.accent if i == 0 else self.t.muted)
-            self.text(s, x + 0.3, top + 0.25, cw - 0.6, 0.7, _text(card.get("heading")) or ("A" if i == 0 else "B"),
-                      22, self.t.accent if i == 0 else self.t.title, bold=True)
-            if items:
-                spread = min(roomy_gap(p, size, cw - 0.6, ch - 1.2) for p in parsed if p)   # (gap 은 카드 사이 간격)
-                self.bullets(s, x + 0.3, top + 1.0, cw - 0.6, ch - 1.2, items, size, gap=spread)
-        self.footer(s)
-
-    def stats(self, title: str, stats: list[dict], notes: str) -> None:
-        s = self.slide(notes)
-        self.header(s, title)
-        stats = [st for st in stats if _text(st.get("value")) or _text(st.get("label"))][:4] or [{"value": "-", "label": ""}]
-        n, gap = len(stats), 0.35
-        cw = (W - 2 * M - gap * (n - 1)) / n
-        top, ch = 2.2, 3.9
-        for i, st in enumerate(stats):
-            x = M + i * (cw + gap)
-            self.box(s, x, top, cw, ch, self.t.surface, "round", 0.06)
-            value = _text(st.get("value"))
-            vsize = 54 if _em(value) <= 4 else 44 if _em(value) <= 6 else 34 if _em(value) <= 9 else 26
-            self.text(s, x + 0.2, top + 0.45, cw - 0.4, 1.5, value, vsize, self.t.accent, bold=True, align="center",
-                      anchor="middle")
-            self.box(s, x + cw / 2 - 0.35, top + 2.05, 0.7, 0.05, self.t.soft)
-            label = _text(st.get("label"))
-            lsize = 20 if _lines(label, 20, cw - 0.5) <= 2 else 17 if _lines(label, 17, cw - 0.5) <= 3 else 14
-            self.text(s, x + 0.25, top + 2.25, cw - 0.5, 1.5, label, lsize, self.t.text, align="center")
-        self.footer(s)
-
-    def chart(self, title: str, spec: dict, items: list[tuple[str, int]], notes: str) -> bool:
-        """진짜 차트 (파워포인트에서 바로 고칠 수 있음). 데이터가 차트로 그릴 수 없으면 False (→ 목록 장으로)."""
-        from pptx.chart.data import CategoryChartData
-        from pptx.enum.chart import (XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_MARKER_STYLE,
-                                     XL_TICK_LABEL_POSITION)
-        from pptx.oxml.ns import qn
-        from pptx.util import Inches, Pt
-        kind = str(spec.get("type") or "column").strip().lower()
-        kind = {"막대": "column", "가로막대": "bar", "꺾은선": "line", "선": "line", "원": "pie", "파이": "pie"}.get(kind, kind)
-        if kind not in CHARTS:
-            kind = "column"
-        cats = [_text(c) for c in _listish(spec.get("categories"))][:24]
-        series = []
-        for i, ser in enumerate([x for x in _listish(spec.get("series")) if isinstance(x, dict)][:6]):
-            vals = [number(v) for v in _listish(ser.get("values"))][:len(cats)]
-            if any(v is not None for v in vals):
-                series.append((_text(ser.get("name")) or f"값 {i + 1}", vals + [None] * (len(cats) - len(vals))))
-        if not cats or not series:
-            return False
-        if kind == "pie":
-            series = series[:1]
-        data = CategoryChartData()
-        data.categories = cats
-        for name, vals in series:
-            data.add_series(name, vals)
-        s = self.slide(notes)
-        self.header(s, title)
-        width = (W - 2 * M) * (0.64 if items else 1.0)
-        top, height = 1.85, H - 1.85 - 0.75
-        xl = {"column": XL_CHART_TYPE.COLUMN_CLUSTERED, "bar": XL_CHART_TYPE.BAR_CLUSTERED,
-              "line": XL_CHART_TYPE.LINE_MARKERS, "pie": XL_CHART_TYPE.PIE}[kind]
-        ch = s.shapes.add_chart(xl, Inches(M), Inches(top), Inches(width), Inches(height), data).chart
-        t, colors = self.t, palette(self.t)
-        ch.has_title = False                    # 장 제목이 위에 있다
-        ch.font.size, ch.font.name = Pt(14), FONT
-        ch.font.color.rgb = self.rgb(t.text)
-        unit = _text(spec.get("unit")).replace('"', "")
-        plot = ch.plots[0]
-        plot.has_data_labels = True
-        dl = plot.data_labels
-        fmt = f'General"{unit}"' if unit else "General"
-        dl.number_format, dl.number_format_is_linked = fmt, False
-        dl.font.size = Pt(13)
-        dl.font.color.rgb = self.rgb(t.text)
-        if kind == "pie":
-            dl.position = XL_LABEL_POSITION.OUTSIDE_END
-            for i, pt in enumerate(plot.series[0].points):
-                pt.format.fill.solid()
-                pt.format.fill.fore_color.rgb = self.rgb(colors[i % len(colors)] if i < len(colors) else
-                                                         _hexmix(colors[i % len(colors)], t.bg, 0.3))
-        else:
-            dl.position = XL_LABEL_POSITION.ABOVE if kind == "line" else XL_LABEL_POSITION.OUTSIDE_END
-            if kind != "line":
-                plot.gap_width = 70
-            mean = [sum(v for v in vals if v is not None) / max(1, sum(v is not None for v in vals)) for _, vals in series]
-            high, low = mean.index(max(mean)), mean.index(min(mean))
-            for i, ser in enumerate(plot.series):
-                c = self.rgb(colors[i % len(colors)])
-                if kind == "line":
-                    ser.smooth = False
-                    ser.format.line.color.rgb = c
-                    ser.format.line.width = Pt(3)
-                    ser.marker.style, ser.marker.size = XL_MARKER_STYLE.CIRCLE, 8
-                    ser.marker.format.fill.solid()
-                    ser.marker.format.fill.fore_color.rgb = c
-                    ser.marker.format.line.color.rgb = c
-                    if len(series) > 1:                 # 선이 여러 개: 위쪽 선은 숫자를 위에, 아래쪽 선은 아래에 (겹치지 않게)
-                        sl = ser.data_labels
-                        sl.show_value = i in (high, low)       # 가운데 선들의 숫자는 감춘다 (눈금으로 읽는다)
-                        sl.number_format, sl.number_format_is_linked = fmt, False
-                        sl.font.size = Pt(13)
-                        sl.font.color.rgb = self.rgb(t.text)
-                        sl.position = XL_LABEL_POSITION.ABOVE if i == high else XL_LABEL_POSITION.BELOW
-                else:
-                    ser.format.fill.solid()
-                    ser.format.fill.fore_color.rgb = c
-            for axis in (ch.category_axis, ch.value_axis):
-                axis.tick_labels.font.size = Pt(13)
-                axis.tick_labels.font.color.rgb = self.rgb(t.muted)
-                axis.format.line.color.rgb = self.rgb(t.soft)
-            ch.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW   # 음수가 있어도 이름은 맨 아래에
-            if kind == "bar":                               # 가로 막대: 첫 항목이 맨 위에 (위에서 아래로 읽게), 눈금은 아래 그대로
-                ch.category_axis.reverse_order = True
-                crosses = ch.value_axis._element.find(qn("c:crosses"))
-                if crosses is not None:
-                    crosses.set("val", "max")              # 숫자 축이 마지막 항목(맨 아래) 쪽에서 만나게
-            ch.value_axis.has_major_gridlines = True
-            ch.value_axis.major_gridlines.format.line.color.rgb = self.rgb(t.soft)
-            ch.value_axis.format.line.fill.background()
-        ch.has_legend = kind == "pie" or len(series) > 1
-        if ch.has_legend:
-            ch.legend.position = XL_LEGEND_POSITION.RIGHT if kind == "pie" else XL_LEGEND_POSITION.BOTTOM
-            ch.legend.include_in_layout = False
-            ch.legend.font.size = Pt(13)
-            ch.legend.font.color.rgb = self.rgb(t.text)
-        self._chart_fonts(ch)
-        if items:
-            bx = M + width + 0.35
-            bw = W - M - bx
-            size = fit_size(items, bw, height - 0.3, (22, 20, 18, 16, 14)) or 14
-            self.bullets(s, bx, top + 0.3, bw, height - 0.3, items, size)
-        self.footer(s)
-        return True
-
-    def _chart_fonts(self, ch) -> None:
-        """차트 안의 모든 글자에 한글 글꼴(동아시아 글꼴 칸)을 넣는다 — 순서: latin → ea → cs."""
-        from pptx.oxml.ns import qn
-        after = {qn(t) for t in ("a:cs", "a:sym", "a:hlinkClick", "a:hlinkMouseOver", "a:rtl", "a:extLst")}
-        for rpr in list(ch._chartSpace.iter(qn("a:defRPr"))) + list(ch._chartSpace.iter(qn("a:rPr"))):
-            latin = rpr.find(qn("a:latin"))
-            if latin is None:
-                latin = rpr.makeelement(qn("a:latin"), {})
-                nxt = next((c for c in rpr if c.tag in after or c.tag == qn("a:ea")), None)
-                nxt.addprevious(latin) if nxt is not None else rpr.append(latin)
-            latin.set("typeface", FONT)
-            ea = rpr.find(qn("a:ea"))
-            if ea is None:
-                ea = rpr.makeelement(qn("a:ea"), {})
-                latin.addnext(ea)
-            ea.set("typeface", FONT)
-
-    def quote(self, title: str, quote: str, by: str, notes: str) -> None:
-        s = self.slide(notes)
-        t = self.t
-        self.box(s, M, 1.2, 0.12, 4.6, t.accent)
-        self.text(s, M + 0.5, 0.75, 2, 1.4, "“", 110, t.soft, bold=True)
-        size = 32 if _em(quote) <= 60 else 26 if _em(quote) <= 100 else 22 if _em(quote) <= 150 else 18
-        self.text(s, M + 0.6, 1.9, W - 2 * M - 1.0, 3.3, quote, size, t.title, anchor="middle", spacing=1.25)
-        if _text(by):
-            self.text(s, M + 0.6, 5.35, W - 2 * M - 1.0, 0.6, f"— {_text(by)}", 18, t.muted, align="right")
-        self.footer(s)
-
-    def closing(self, title: str, items: list[tuple[str, int]], notes: str) -> None:
-        s = self.slide(notes)
-        t = self.t
-        self.box(s, -1.8, H - 3.2, 5.2, 5.2, t.surface, "oval")
-        self.box(s, W - 3.0, -1.4, 4.2, 4.2, t.soft, "oval")
-        size = 54 if _em(title) <= 10 else 42 if _em(title) <= 18 else 34
-        self.text(s, M, 2.5, W - 2 * M, 1.5, title or "감사합니다", size, t.title, bold=True, align="center", anchor="middle")
-        if items:
-            self.text(s, M, 4.15, W - 2 * M, 1.6, [line for line, _ in items[:3]], 20, t.muted, align="center")
-
-    def sources(self, refs: list[str]) -> None:
-        width, height = W - 2 * M, H - 2.0 - 0.75
-        items = [(r, 0) for r in refs]
-        parts = split_items(items, width, height, 14)
-        start = 0
-        for k, part in enumerate(parts):
-            s = self.slide()
-            self.header(s, "참고 자료" if k == 0 else "참고 자료 (계속)")
-            size = fit_size(part, width, height, (18, 16, 15, 14, 13, 12)) or 12
-            lines = [f"{start + i + 1}. {line}" for i, (line, _) in enumerate(part)]
-            start += len(part)
-            self.text(s, M, 1.95, width, height, lines, size, self.t.text, spacing=1.1)
-            self.footer(s)
-
-
 def build_presentation(path: Path, title: str, slides: list, subtitle: str = "", sources=None,
-                       theme: str = "light", agenda: bool | None = None) -> dict:
-    """발표 자료를 만든다 → {'slides': 장 수, 'notes': 대본을 넣은 장 수, 'split': 넘쳐서 나눈 장 수}."""
+                       theme: str = "light", agenda: bool | None = None, style: str = "clean") -> dict:
+    """발표 자료를 만든다 → {'slides': 장 수, 'notes': 대본을 넣은 장 수, 'split': 넘쳐서 나눈 장 수, 'style', 'theme'}."""
+    from .deck import Deck
     title = _text(title)
     if not title:
         raise ValueError("발표 제목(title)이 필요합니다.")
@@ -598,37 +378,56 @@ def build_presentation(path: Path, title: str, slides: list, subtitle: str = "",
         raise ValueError("슬라이드(slides)가 하나 이상 필요합니다.")
     if len(slides) > MAX_SLIDES:
         raise ValueError(f"슬라이드가 너무 많습니다 ({len(slides)}장). {MAX_SLIDES}장 이하로 나눠 만드세요.")
-    th = THEMES.get((theme or "light").strip().lower(), THEMES["light"])
-    deck = _Deck(th, title)
+    theme = (theme or "light").strip().lower()
+    theme = theme if theme in THEMES else "light"
+    style = (style or "clean").strip().lower()
+    style = style if style in STYLES else "clean"
+    deck = Deck(THEMES[theme], title, style)
     deck.cover(title, _text(subtitle))
     clean = []
     for i, raw in enumerate(slides, 1):
         if not isinstance(raw, dict):
             raw = {"title": str(raw)}
-        layout = (raw.get("layout") or "bullets").strip().lower().replace("-", "_")
+        layout = str(raw.get("layout") or "bullets").strip().lower().replace("-", "_")
         if layout not in LAYOUTS:
             layout = "bullets"
-        clean.append((layout, _text(raw.get("title")) or f"{i}", raw))
+        name = _text(raw.get("title")) or f"{i}"
+        clean.append((layout, unnumbered(name) if layout == "section" else name, raw))
     if agenda is None:
         agenda = sum(1 for lay, _, _ in clean if lay not in ("closing", "quote")) >= 4
     if agenda:
-        sections = [name for lay, name, _ in clean if lay == "section"]
-        deck.agenda(sections or [name for lay, name, _ in clean if lay not in ("closing", "quote")])
+        sections = [name for lay, name, _ in clean if lay == "section"]            # 장 구분이 둘 이상이면 그 제목들로
+        deck.agenda(sections if len(sections) >= 2 else [name for lay, name, _ in clean if lay not in ("closing", "quote")])
     split = 0
     part = 0
-    width, height = W - 2 * M, H - 2.0 - 0.75
+    width, height = deck.body
+
+    def listed(name, items, notes):
+        """목록 장 (넘치면 여러 장으로 나눈다) → 더 만든 장 수."""
+        if items and fit_size(items, width, height) is None:
+            parts = split_items(items, width, height, 18)
+            for k, chunk in enumerate(parts):
+                deck.bullet_slide(name if k == 0 else f"{name} (계속)", chunk, notes if k == 0 else "")
+            return len(parts) - 1
+        deck.bullet_slide(name, items, notes)
+        return 0
+
     for layout, name, raw in clean:
         notes = str(raw.get("notes") or "")
-        items = parse_bullets(raw.get("bullets"))
+        outline = raw.get("bullets") or raw.get("points")          # points: 개요만 받은 경우 (작가가 쓰지 못했을 때도 그린다)
+        items = parse_bullets(outline)
         if layout == "section":
             part += 1
             deck.section(part, name, items, notes)
         elif layout == "two_column":
             side = [x if isinstance(x, dict) else {"heading": "", "bullets": _strings(x)} for x in (raw.get("left"), raw.get("right"))]
+            if not any(side[k].get("bullets") or side[k].get("points") for k in (0, 1)) and items:
+                half = (len(items) + 1) // 2                     # 개요만 있으면 반씩 나눠 두 칸에
+                side = [{"heading": "", "bullets": [t for t, _ in items[:half]]}, {"heading": "", "bullets": [t for t, _ in items[half:]]}]
             deck.two_column(name, side[0] or {}, side[1] or {}, notes)
         elif layout == "stats":
             stats = [x if isinstance(x, dict) else dict(zip(("value", "label"), (re.split(r"\s*\|\s*|\s+[—–-]\s+|\s*:\s+", str(x), maxsplit=1) + [""])[:2]))
-                     for x in (raw.get("stats") or [])]
+                     for x in (raw.get("stats") or _strings(outline))]
             deck.stats(name, stats, notes)
         elif layout == "chart":
             spec = raw.get("chart") if isinstance(raw.get("chart"), dict) else raw
@@ -636,25 +435,40 @@ def build_presentation(path: Path, title: str, slides: list, subtitle: str = "",
                 rows = [(f"{_text(c)}: {', '.join(_text(v) for v in vals)}", 0)
                         for c, *vals in zip(_listish(spec.get("categories")), *[_listish(x.get("values")) for x in
                                                                                _listish(spec.get("series")) if isinstance(x, dict)])]
-                deck.bullet_slide(name, items + rows or [("(차트 데이터 없음)", 0)], notes)
+                split += listed(name, items + rows or [("(차트 데이터 없음)", 0)], notes)
+        elif layout == "timeline":
+            ev = events(raw.get("events") or outline)
+            if len(ev) >= 2:
+                deck.timeline(name, ev, notes)
+            else:
+                split += listed(name, items, notes)
+        elif layout in ("process", "cards"):
+            got = pairs(raw.get("steps" if layout == "process" else "cards") or outline)
+            if len(got) >= 2:
+                (deck.process if layout == "process" else deck.cards)(name, got, notes)
+            else:
+                split += listed(name, items, notes)
+        elif layout == "table":
+            spec = raw.get("table") if isinstance(raw.get("table"), dict) else raw
+            if not deck.table(name, spec, notes):
+                split += listed(name, items, notes)
+        elif layout == "highlight":
+            statement = _text(raw.get("statement")) or (items[0][0] if items else name)
+            detail = _text(raw.get("detail")) or (items[1][0] if len(items) > 1 and not _text(raw.get("statement")) else "")
+            deck.highlight(name, statement, detail, notes)
         elif layout == "quote":
-            deck.quote(name, _text(raw.get("quote")) or name, _text(raw.get("by")), notes)
+            deck.quote(name, _text(raw.get("quote")) or (items[0][0] if items else name), _text(raw.get("by")), notes)
         elif layout == "closing":
             deck.closing(name, items, notes)
-        elif items and fit_size(items, width, height) is None:          # 넘친다 → 여러 장으로
-            parts = split_items(items, width, height, 18)
-            split += len(parts) - 1
-            for k, part in enumerate(parts):
-                deck.bullet_slide(name if k == 0 else f"{name} (계속)", part, notes if k == 0 else "")
         else:
-            deck.bullet_slide(name, items, notes)
+            split += listed(name, items, notes)
     refs = [pretty_ref(_text(r)) for r in _strings(sources)]
     if refs:
         deck.sources(refs)
     deck.prs.core_properties.title = title
     deck.prs.core_properties.author = "U.L.T.R.O.N"
     deck.prs.save(str(path))
-    return {"slides": deck.count, "notes": deck.notes, "split": split}
+    return {"slides": deck.count, "notes": deck.notes, "split": split, "style": style, "theme": theme}
 
 
 # ---------------------------------------------------------------- 보고서 (Word)
@@ -731,7 +545,8 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
         for para in _strings(sec.get("paragraphs")):
             p = doc.add_paragraph(para.strip())
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        for line, lvl in parse_bullets(sec.get("bullets")):
+        outline = sec.get("points") if not (sec.get("paragraphs") or sec.get("bullets")) else None   # 개요만 받은 장
+        for line, lvl in parse_bullets(sec.get("bullets") or outline):
             p = doc.add_paragraph(line, style="List Bullet")
             if lvl:
                 p.paragraph_format.left_indent = Cm(1.6)

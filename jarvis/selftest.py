@@ -141,17 +141,35 @@ def main() -> int:
 
         from . import design, office
         chart = {"categories": ["가", "나"], "series": [{"name": "값", "values": [1, 2]}]}
+        slides = [{"title": "점검", "bullets": ["핵심어: 설명", "둘째"]}, {"layout": "chart", "title": "차트", "chart": chart},
+                  {"layout": "process", "title": "단계", "steps": [{"title": "하나", "text": "설명"}, {"title": "둘", "text": "설명"}]},
+                  {"layout": "timeline", "title": "연표", "events": [{"when": "2025", "title": "가"}, {"when": "2026", "title": "나"}]},
+                  {"layout": "table", "title": "표", "table": {"columns": ["가", "나"], "rows": [["1", "2"]]}}]
         with tempfile.TemporaryDirectory() as d:
-            office.build_presentation(Path(d) / "t.pptx", "점검", [{"title": "점검", "bullets": ["하나"]},
-                                                                {"layout": "chart", "title": "차트", "chart": chart}])
+            for style in office.STYLES:               # 디자인 스타일 7가지를 모두 그려 본다
+                office.build_presentation(Path(d) / f"{style}.pptx", "점검", slides, style=style,
+                                          theme=office.pick_theme("", style, "점검"))
             office.build_document(Path(d) / "t.docx", "점검", [{"heading": "점검", "paragraphs": ["하나"]}])
             office.build_spreadsheet(Path(d) / "t.xlsx", [{"name": "점검", "columns": ["a", "b"], "rows": [["가", 1]],
                                                            "chart": {"type": "column"}}])
             design.build_cardnews(Path(d) / "card", "점검", [{"title": "점검", "bullets": ["하나"]}])
             design.build_poster(Path(d) / "p.png", "점검", [{"heading": "점검", "bullets": ["하나"]}])
-        return "PPT(차트 포함) · Word · Excel · 카드뉴스 · 포스터를 만들 수 있음"
+        return f"PPT(디자인 {len(office.STYLES)}가지 · 차트 · 표) · Word · Excel · 카드뉴스 · 포스터를 만들 수 있음"
 
     check("작업 결과물 만들기 (python-pptx · python-docx · XlsxWriter · Pillow · 맑은 고딕)", office_files)
+
+    def team():
+        from .brain import Brain
+        from .config import Config
+        cfg = Config()
+        if (cfg["brain"] or "pro") != "pro":
+            return "Pro 계정 방식이 아님 — 건너뜀 (API 키 방식에서는 작가를 API 로 부릅니다)"
+        if not Brain.claude_exe():
+            raise RuntimeError("Claude Code 를 찾지 못함 — 작가 · 조사 담당을 켤 수 없습니다 (혼자 쓰는 방식으로 동작)")
+        n = max(0, min(6, int(cfg["writers"] or 0)))
+        return f"기획자 1 · 조사 담당 1 · 작가 {n}명이 동시에 일합니다" if n else "작가 수가 0 — 혼자 조사하고 혼자 씁니다"
+
+    check("발표 자료 · 보고서를 나눠 쓰는 팀 (Claude Code)", team)
 
     # ---- 오프라인 음성 인식 ----
     def stt():
