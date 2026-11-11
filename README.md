@@ -511,3 +511,11 @@ python -m jarvis.selftest
 python -m pip install pytest
 python -m pytest            # 로컬 명령·로컬 AI 변환·음성 인식 규칙·호출어·화면 좌표 계산 테스트 (Windows 가 아니어도 대부분 돌아갑니다)
 ```
+
+## 저작권
+
+ⓒ 2026 U.L.T.R.O.N 제작자. All rights reserved. — 자세한 내용은 [`NOTICE`](NOTICE) 참고.
+
+개인 프로젝트입니다. 제작자의 허락 없는 복제 · 수정 · 재배포 · 상업적 이용을 허용하지 않습니다.
+라이선스가 없는 shic0418/JARVIS 를 기반으로 하며, 원본 부분의 권리는 원저작자에게 있습니다.
+
