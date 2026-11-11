@@ -14,7 +14,7 @@
 
 ## 휴대폰판 — PC 없이 혼자 도는 울트론
 
-`mobile/` 폴더에 휴대폰에서 혼자 도는 울트론이 있습니다. 홈 화면에 추가하는 웹 앱(PWA)으로, 같은 엠블럼 · 말투 · 자비스 견제 ·
+`mobile/` 폴더에 휴대폰에서 혼자 도는 울트론이 있습니다. Android 설치형 앱(APK — [최신 받기](https://github.com/yuseunghogi-commits/ultron/releases/download/android-latest/ULTRON.apk))과 웹 앱(PWA)으로, 같은 엠블럼 · 말투 · 자비스 견제 ·
 해킹 연출에 음성 대화, 웹 검색, 타이머, 기억, 보고서 문서, 전화 · 문자 · 지도 버튼을 넣었습니다. Anthropic API 키가 필요합니다.
 설치와 올리는 방법은 [mobile/README.md](mobile/README.md) 를 보세요.
 
