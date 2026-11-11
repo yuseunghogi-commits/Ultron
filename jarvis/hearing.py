@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import re
 from dataclasses import dataclass
 from typing import Iterable
@@ -57,6 +58,12 @@ def _tail(text: str, end: int, chars: str) -> int:
     return end
 
 
+@functools.lru_cache(maxsize=64)
+def _word_re(word: str) -> re.Pattern:
+    """설정된 호출어 한 개를 찾는 식 (글자 사이 띄어쓰기 허용). 발화마다 여러 번 불리므로 만들어 둔 것을 다시 쓴다."""
+    return re.compile(r"\s*".join(re.escape(ch) for ch in word.replace(" ", "")), re.I)
+
+
 def find_wake(text: str, words: Iterable[str], crowded: bool = False, learned: Iterable[str] = ()) -> Wake | None:
     """글 안의 호출어 위치. 설정된 호출어(글자 사이 띄어쓰기 허용)를 먼저 찾고, 없으면 뭉개진 모양을 찾는다.
     crowded=True (주변 대화 상태에서 잘라 낸 발화) 면 문장 가운데에 있는 뭉개진 모양도 받는다.
@@ -64,8 +71,7 @@ def find_wake(text: str, words: Iterable[str], crowded: bool = False, learned: I
     text = text or ""
     words = [w for w in (words or []) if w]
     for w in sorted(words, key=len, reverse=True):
-        pat = r"\s*".join(re.escape(ch) for ch in w.replace(" ", ""))
-        m = re.search(pat, text, re.I)
+        m = _word_re(w).search(text)
         if m:
             return Wake(m.start(), _tail(text, m.end(), "아야"), True)
     lead = len(text) - len(text.lstrip(_EDGE))

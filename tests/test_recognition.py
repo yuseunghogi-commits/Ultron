@@ -6,7 +6,7 @@ import pytest
 
 import jarvis.brain as bm
 from jarvis.config import DEFAULTS
-from jarvis.local_router import LocalRouter, find_site, normalize
+from jarvis.local_router import find_site, normalize
 from jarvis.voiceid import SpeakerGate, Voice
 
 

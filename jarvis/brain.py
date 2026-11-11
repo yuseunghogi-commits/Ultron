@@ -579,7 +579,7 @@ class Brain:
             if (self.cfg["brain"] or "pro") == "pro":
                 try:
                     return self._claude_code(text, cancel, on_text)
-                except Exception as e:
+                except Exception:
                     log.exception("Claude Code 실행 실패")
                     return self._offline(text, no_key=False) if not cancel.is_set() else None
             key = self.cfg.api_key()

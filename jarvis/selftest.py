@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 import sys
 import time
 import traceback
@@ -54,7 +55,7 @@ def main() -> int:
     say(f"점검할 창: {winutil.window_title(hwnd)!r}")
 
     # ---- 화면 영역 · 캡처 ----
-    primary = check("주 모니터 영역", lambda: winutil.monitor_rect(0))
+    check("주 모니터 영역", lambda: winutil.monitor_rect(0))
     mon = check("이 창이 있는 모니터 영역", lambda: winutil.monitor_rect(hwnd))
     win = check("창 영역", lambda: winutil.window_rect(hwnd))
     say(f"       모니터 개수 {user32.GetSystemMetrics(80)} · 가상 화면 "
@@ -84,7 +85,6 @@ def main() -> int:
         return f"({x}, {y}) 로 옮기고 되돌림"
 
     if mon:
-        import ctypes.wintypes  # noqa: F401
         check("마우스 좌표", cursor)
 
     def changes():

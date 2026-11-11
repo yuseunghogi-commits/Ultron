@@ -126,7 +126,7 @@ def server_base(value: str) -> str:
 
 def clean_text(value: object, limit: int = 90) -> str:
     """검사 결과 속 글 정리: 제어문자 · 줄바꿈을 없애고 길이를 자른다 (화면 · 음성 · Claude 에게 넘길 데이터)."""
-    s = re.sub(r"[\x00-\x1f\x7f​-‏ -‮⁦-⁩]+", " ", str(value or ""))
+    s = re.sub("[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2066-\u2069]+", " ", str(value or ""))
     s = re.sub(r"\s+", " ", s).strip()
     return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
 

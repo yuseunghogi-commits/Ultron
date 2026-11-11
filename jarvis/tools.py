@@ -769,7 +769,9 @@ class PCTools:
             out = self.screen.read(hwnd, query or "")
         except OSError as e:
             raise ToolError(f"창 내용을 읽지 못했습니다: {e}")
-        if query:      # 찾는 것이 스크롤해야 보이는 곳에 있으면 알려 준다 → 스크롤하며 찾아다닐 필요가 없다
+        q = uia._norm(query or "")
+        # 찾는 것이 보이는 곳에 없을 때만 화면 밖을 한 번 더 뒤진다 (창 전체를 다시 읽는 일이라 크롬에서는 1초쯤 걸린다)
+        if q and not any(q in uia._norm(it.name) for it in self.screen.items):
             names = list(dict.fromkeys(it.name for it in self.screen.find_hidden(hwnd, query)))[:5]
             if names:
                 out += ("\n화면 밖(스크롤해야 보이는 곳)에 있는 요소: " + ", ".join(f"'{n[:40]}'" for n in names)
