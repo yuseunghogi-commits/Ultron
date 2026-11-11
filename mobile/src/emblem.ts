@@ -16,6 +16,8 @@ function hex(c: string): [number, number, number] {
 }
 const rgba = ([r, g, b]: number[], a: number) => `rgba(${r | 0},${g | 0},${b | 0},${Math.max(0, Math.min(1, a)).toFixed(3)})`;
 const mixc = (a: number[], b: number[], k: number) => a.map((v, i) => v + (b[i] - v) * k);
+/** 색을 16단계로 묶은 열쇠 (색이 조금씩 변하는 동안 그림을 너무 자주 새로 그리지 않게) */
+const key = (c: number[]) => c.map((v) => Math.round(v / 16)).join(",");
 
 export class Emblem {
   mode: Mode = "boot";
@@ -38,13 +40,20 @@ export class Emblem {
     this.ctx = ctx;
   }
 
+  /** 다른 창이 엠블럼을 덮고 있으면 그리지 않는다 (배터리) */
+  paused = false;
+
   start(): void {
     const loop = (ms: number) => {
-      const dt = this.lastT ? Math.min((ms - this.lastT) / 1000, 0.05) : 0.016;
+      this.raf = requestAnimationFrame(loop);
+      if (this.paused) { this.lastT = 0; return; }
+      // 대기 중에는 초당 30장, 듣기 · 생각 · 말하기 중에만 60장 (움직임 줄이기 설정이면 15장)
+      const fps = this.reduce ? 15 : this.mode === "standby" || this.mode === "offline" ? 30 : 60;
+      if (this.lastT && ms - this.lastT < 1000 / fps - 2) return;
+      const dt = this.lastT ? Math.min((ms - this.lastT) / 1000, 0.1) : 0.016;
       this.lastT = ms;
       this.step(dt);
       this.draw();
-      this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
     document.addEventListener("visibilitychange", () => {
@@ -106,6 +115,23 @@ export class Emblem {
     }
   }
 
+  private sprites = new Map<string, HTMLCanvasElement>();
+
+  /** 자주 쓰는 정지 그림을 한 번만 그려 둔다 (440 단위 좌표로 그리는 함수를 받는다) */
+  private sprite(k: string, px: number, paint: (o: CanvasRenderingContext2D) => void): HTMLCanvasElement {
+    let c = this.sprites.get(k);
+    if (!c) {
+      if (this.sprites.size > 24) this.sprites.clear();   // 색이 바뀌며 쌓인 것 정리
+      c = document.createElement("canvas");
+      c.width = c.height = px;
+      const o = c.getContext("2d")!;
+      o.setTransform(px / 440, 0, 0, px / 440, 0, 0);
+      paint(o);
+      this.sprites.set(k, c);
+    }
+    return c;
+  }
+
   private stage(a: number, b: number): number {
     const x = Math.max(0, Math.min(1, (this.intro - a) / (b - a)));
     return 1 - Math.pow(1 - x, 3);
@@ -113,7 +139,7 @@ export class Emblem {
 
   private draw(): void {
     const c = this.canvas;
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = c.clientWidth || c.width;
     const px = Math.round(w * dpr);
     if (c.width !== px || c.height !== px) { c.width = px; c.height = px; }
@@ -132,31 +158,37 @@ export class Emblem {
     const rad = (d: number) => (d * Math.PI) / 180;
     const pt = (deg: number, r: number): [number, number] => [cx + Math.cos(rad(deg)) * r, cy + Math.sin(rad(deg)) * r];
 
-    // 0) 그림자 + 후광
-    let gr = g.createRadialGradient(cx, cy, 0, cx, cy, 220);
-    gr.addColorStop(0, "rgba(18,0,3,0.45)");
-    gr.addColorStop(0.8, "rgba(18,0,3,0.22)");
-    gr.addColorStop(1, "rgba(18,0,3,0)");
+    // 0) 그림자 + 후광, 1) 안쪽 원판 — 큰 그라데이션은 한 번 그려 두고 다시 쓴다 (색이 바뀔 때만 새로)
     g.globalAlpha = this.stage(0, 0.5);
-    g.fillStyle = gr;
-    g.beginPath(); g.arc(cx, cy, 220, 0, Math.PI * 2); g.fill();
+    g.drawImage(this.sprite(`shadow:${px}`, px, (o) => {
+      const gr = o.createRadialGradient(cx, cy, 0, cx, cy, 220);
+      gr.addColorStop(0, "rgba(18,0,3,0.45)");
+      gr.addColorStop(0.8, "rgba(18,0,3,0.22)");
+      gr.addColorStop(1, "rgba(18,0,3,0)");
+      o.fillStyle = gr;
+      o.beginPath(); o.arc(cx, cy, 220, 0, Math.PI * 2); o.fill();
+    }), 0, 0, 440, 440);
     g.globalAlpha = this.stage(0.2, 0.9) * (0.35 + 0.35 * this.energy + 0.45 * this.amp + 0.12 * breath);
-    gr = g.createRadialGradient(cx, cy, 0, cx, cy, 220);
-    gr.addColorStop(0, rgba(acc, 0));
-    gr.addColorStop(0.62, rgba(acc, 0.1));
-    gr.addColorStop(0.89, rgba(acc, 0.22));
-    gr.addColorStop(1, rgba(acc, 0));
-    g.fillStyle = gr;
-    g.beginPath(); g.arc(cx, cy, 220, 0, Math.PI * 2); g.fill();
+    g.drawImage(this.sprite(`halo:${px}:${key(acc)}`, px, (o) => {
+      const gr = o.createRadialGradient(cx, cy, 0, cx, cy, 220);
+      gr.addColorStop(0, rgba(acc, 0));
+      gr.addColorStop(0.62, rgba(acc, 0.1));
+      gr.addColorStop(0.89, rgba(acc, 0.22));
+      gr.addColorStop(1, rgba(acc, 0));
+      o.fillStyle = gr;
+      o.beginPath(); o.arc(cx, cy, 220, 0, Math.PI * 2); o.fill();
+    }), 0, 0, 440, 440);
 
     // 1) 안쪽 원판 + 삼각 무늬
     g.globalAlpha = this.stage(0.05, 0.5);
-    gr = g.createRadialGradient(cx, cy - 30, 0, cx, cy, 105);
-    gr.addColorStop(0, "rgba(46,8,13,0.96)");
-    gr.addColorStop(0.85, "rgba(18,3,5,0.96)");
-    gr.addColorStop(1, rgba(ringCol, 0.35));
-    g.fillStyle = gr;
-    g.beginPath(); g.arc(cx, cy, 105, 0, Math.PI * 2); g.fill();
+    g.drawImage(this.sprite(`disk:${px}:${key(ringCol)}`, px, (o) => {
+      const gr = o.createRadialGradient(cx, cy - 30, 0, cx, cy, 105);
+      gr.addColorStop(0, "rgba(46,8,13,0.96)");
+      gr.addColorStop(0.85, "rgba(18,3,5,0.96)");
+      gr.addColorStop(1, rgba(ringCol, 0.35));
+      o.fillStyle = gr;
+      o.beginPath(); o.arc(cx, cy, 105, 0, Math.PI * 2); o.fill();
+    }), 0, 0, 440, 440);
     g.globalAlpha = this.stage(0.3, 0.9) * (0.18 + 0.12 * this.energy);
     g.strokeStyle = rgba(ringCol, 1);
     g.lineWidth = 1;
@@ -195,16 +227,26 @@ export class Emblem {
     // 5) 눈금 링 (빛이 훑고 지나감, 말할 때 바깥으로 늘어남)
     g.globalAlpha = this.stage(0.3, 0.85);
     g.lineWidth = 1.6;
+    // 눈금 72개를 밝기 단계별로 묶어 몇 번에 나눠 그린다 (하나씩 그리면 느리다)
+    const LEVELS = 6;
+    const paths: Path2D[] = Array.from({ length: LEVELS * 2 }, () => new Path2D());
+    const pulse = this.mode === "speaking" || this.mode === "listening";
     for (let k = 0; k < 72; k++) {
       const a = this.aTicks + k * 5;
       let d = (((a - this.scanA) % 360) + 360) % 360;
       d = Math.min(d, 360 - d);
       const hot = Math.max(0, 1 - d / 40);
       const major = k % 6 === 0;
-      const outer = 174 + (this.mode === "speaking" || this.mode === "listening" ? this.amp * 10 * (0.5 + 0.5 * Math.sin(k * 1.7 + this.t * 9)) : 0);
-      g.strokeStyle = rgba(hot > 0 ? ringHot : ringCol, 0.22 + 0.25 * this.energy + 0.55 * hot + (major ? 0.15 : 0));
-      g.beginPath(); g.moveTo(...pt(a, major ? 158 : 162)); g.lineTo(...pt(a, outer)); g.stroke();
+      const outer = 174 + (pulse ? this.amp * 10 * (0.5 + 0.5 * Math.sin(k * 1.7 + this.t * 9)) : 0);
+      const lvl = Math.min(LEVELS - 1, Math.round((0.55 * hot + (major ? 0.15 : 0)) / 0.7 * (LEVELS - 1)));
+      const p = paths[(hot > 0 ? LEVELS : 0) + lvl];
+      p.moveTo(...pt(a, major ? 158 : 162)); p.lineTo(...pt(a, outer));
     }
+    paths.forEach((p, i) => {
+      const lvl = i % LEVELS;
+      g.strokeStyle = rgba(i >= LEVELS ? ringHot : ringCol, 0.22 + 0.25 * this.energy + (lvl / (LEVELS - 1)) * 0.7);
+      g.stroke(p);
+    });
 
     // 6) 톱니 링
     g.globalAlpha = this.stage(0.35, 0.95);
@@ -253,8 +295,17 @@ export class Emblem {
       g.translate(cx + side * 40, 208);
       g.rotate(rad(side * -16));
       g.scale(side, 1);  // 오른쪽 눈을 기준으로 그리고 왼쪽은 뒤집는다 (안쪽 = -x)
-      g.shadowColor = rgba(acc, 0.95);
-      g.shadowBlur = 18 + 16 * this.eyeGlow;
+      // 빛 번짐: 흐림 효과(shadowBlur)는 매우 느려서, 납작한 원형 그라데이션으로 대신한다
+      g.save();
+      g.scale(1, 0.3 + 0.25 * open);
+      const glowR = 40 + 14 * this.eyeGlow;
+      const gl = g.createRadialGradient(0, 0, 0, 0, 0, glowR);
+      gl.addColorStop(0, rgba(acc, 0.75 * Math.min(1, this.eyeGlow)));
+      gl.addColorStop(0.45, rgba(acc, 0.35 * Math.min(1, this.eyeGlow)));
+      gl.addColorStop(1, rgba(acc, 0));
+      g.fillStyle = gl;
+      g.beginPath(); g.arc(0, 0, glowR, 0, Math.PI * 2); g.fill();
+      g.restore();
       g.fillStyle = rgba(eyeHot, Math.min(1, this.eyeGlow));
       g.beginPath();
       g.moveTo(-28, 1 * open);

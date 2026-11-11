@@ -1,6 +1,6 @@
 // 울트론 모바일 — 화면과 흐름을 잇는 곳
 import "./style.css";
-import { Brain, BrainError } from "./brain";
+import { Brain, BrainError, preloadSdk } from "./brain";
 import { Emblem, type Mode } from "./emblem";
 import {
   clockText, dateText, findWake, forSpeech, localCommand, sayDuration, splitSentences, stripWake,
@@ -12,11 +12,13 @@ import {
   saveSettings, saveTimers, uid, type Doc, type ExportFormat, type ModelId, type Settings, type Timer,
 } from "./store";
 import type { ActionCard, ToolHost } from "./tools";
-import { FORMAT_LABEL, buildFile, downloadFile, formatsFor } from "./office/export";
-import { deckMarkdown, sheetsMarkdown } from "./office/outline";
+import { FORMAT_LABEL, buildFiles, downloadFiles, formatsFor, renderImages, warm, type BuiltFile } from "./office/export";
+import { cardnewsMarkdown, deckMarkdown, posterMarkdown, sheetsMarkdown } from "./office/outline";
+import type { NewDoc } from "./work";
+import { attachmentBlocks, readAttachment, type Attachment } from "./attach";
 import { Speaker, canListen, koreanVoices, listenForever, listenOnce } from "./voice";
 import {
-  cancelTimerNotice, isNative, nativeCopy, openNativeFile, saveNativeFile, shareNativeFile, nativeKeepAwake, nativeShare, nativeVibrate, onBackButton, onResume, scheduleTimerNotice,
+  cancelTimerNotice, isNative, nativeCopy, openNativeFile, saveNativeFile, shareNativeFiles, nativeKeepAwake, nativeShare, nativeVibrate, onBackButton, onResume, scheduleTimerNotice,
 } from "./native";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -81,8 +83,12 @@ const CARD_ICON: Record<ActionCard["kind"], string> = {
   map: '<path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/>',
   share: '<circle cx="6" cy="12" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="18" cy="18" r="2.3"/><path d="m8 11 8-4M8 13l8 4"/>',
   doc: '<path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
+  calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  mail: '<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="m4 7 8 6 8-6"/>',
 };
-const CARD_VERB: Record<ActionCard["kind"], string> = { call: "걸기", sms: "문자 앱 열기", link: "열기", map: "지도 열기", share: "공유", doc: "문서 보기" };
+const CARD_VERB: Record<ActionCard["kind"], string> = {
+  call: "걸기", sms: "문자 앱 열기", link: "열기", map: "지도 열기", share: "공유", doc: "문서 보기", calendar: "일정 추가", mail: "메일 쓰기",
+};
 
 function addCard(c: ActionCard): void {
   const el = document.createElement("div");
@@ -228,11 +234,21 @@ function pauseHandsFree(): void {
 async function handle(raw: string, viaVoice: boolean): Promise<void> {
   lastViaVoice = viaVoice;
   const { rest } = stripWake(raw);
-  const text = rest || raw.trim();
+  const files = takeAttachments();
+  const text = rest || raw.trim() || (files.length ? "이걸 보고 정리해 줘." : "");
   if (!text) return;
-  addLine("user", text);
+  const line = addLine("user", text);
+  if (files.length) {
+    const thumbs = document.createElement("div");
+    thumbs.className = "thumbs";
+    for (const f of files) {
+      if (f.preview) { const im = document.createElement("img"); im.src = f.preview; im.alt = f.name; thumbs.appendChild(im); }
+      else { const s = document.createElement("small"); s.textContent = `📄 ${f.name}`; thumbs.appendChild(s); }
+    }
+    line.prepend(thumbs);
+  }
 
-  const local = localCommand(text, chatMode);
+  const local = files.length ? null : localCommand(text, chatMode);
   if (local) {
     switch (local.kind) {
       case "chat_on": setChat(true); say(pickLine(CHAT_ON_LINES)); return;
@@ -272,6 +288,7 @@ async function handle(raw: string, viaVoice: boolean): Promise<void> {
   };
   try {
     const answer = await brain.turn(text, settings, chatMode, memory, host, {
+      attachments: attachmentBlocks(files),
       signal: abort.signal,
       onStatus: (s) => { if (state === "thinking") $("status").textContent = s || STATUS.thinking; },
       onText: (d) => {
@@ -344,20 +361,17 @@ const host: ToolHost = {
     if (!timers.length) return "남은 타이머가 없다.";
     return timers.map((t) => `${t.label}: ${sayDuration(Math.max(0, (t.due - Date.now()) / 1000))} 남음`).join("\n");
   },
-  makeDoc(n) {
-    const content =
-      n.kind === "slides" && n.slides ? deckMarkdown({ title: n.title, subtitle: n.subtitle, slides: n.slides })
-      : n.kind === "sheet" && n.sheets ? sheetsMarkdown(n.title, n.sheets)
-      : n.content ?? "";
-    const d: Doc = {
-      id: uid(), title: n.title, content, created: Date.now(), kind: n.kind,
-      subtitle: n.subtitle, style: n.style, slides: n.slides, sheets: n.sheets, want: n.want,
-    };
-    docs = [...docs, d];
-    saveDocs(docs);
-    return d.id;
-  },
   card: addCard,
+  work: {
+    makeDoc,
+    docCard(id, title, detail, want) {
+      addCard({ kind: "doc", title, detail, docId: id, want });
+      const d = docs.find((x) => x.id === id);
+      if (d) prebuild(d);
+    },
+    progress(text) { if (state === "thinking") $("status").textContent = text; },
+    team: brain.team(() => settings, () => abort?.signal),
+  },
   async deviceStatus() {
     const parts: string[] = [];
     const nav = navigator as Navigator & { getBattery?: () => Promise<{ level: number; charging: boolean }> };
@@ -502,6 +516,18 @@ function openDoc(id: string): void {
   const body = $("docBody");
   body.innerHTML = "";
   if (d.kind === "slides" && d.slides) body.append(renderSlides(d));
+  else if (d.kind === "cardnews" || d.kind === "poster") {
+    const wrap = document.createElement("div");
+    wrap.className = `images ${d.kind}`;
+    body.append(wrap);
+    void renderImages(d).then((cs) => {
+      if (openDocId !== d.id) return;
+      for (const c of cs) {
+        c.className = "preview";
+        wrap.appendChild(c);
+      }
+    });
+  }
   else body.innerHTML = renderMarkdown(d.content);
   // 파일로 만들기 버튼
   const files = $("docFiles");
@@ -549,6 +575,44 @@ function renderSlides(d: Doc): HTMLElement {
 }
 
 /** 문서를 파일로: 브라우저는 내려받기, 설치형 앱은 저장한 뒤 열 앱 고르기 */
+/** 결과물 저장 (같은 doc_id 로 다시 오면 고친 판으로 바꾼다) */
+function makeDoc(n: NewDoc): { id: string; revised: boolean } {
+  const content =
+    n.kind === "slides" && n.slides ? deckMarkdown({ title: n.title, subtitle: n.subtitle, slides: n.slides })
+    : n.kind === "sheet" && n.sheets ? sheetsMarkdown(n.title, n.sheets)
+    : n.kind === "cardnews" && n.cards ? cardnewsMarkdown(n.title, n.subtitle, n.cards, n.closing, n.sources)
+    : n.kind === "poster" && n.sections ? posterMarkdown(n.title, n.subtitle, n.highlight, n.sections, n.footer, n.sources)
+    : n.content ?? "";
+  const old = n.docId ? docs.find((x) => x.id === n.docId) : undefined;
+  const { docId: _ignored, ...rest } = n;
+  const d: Doc = { ...rest, id: old?.id ?? uid(), content, created: Date.now(), rev: old ? (old.rev ?? 0) + 1 : 0 };
+  docs = old ? docs.map((x) => (x.id === old.id ? d : x)) : [...docs, d];
+  saveDocs(docs);
+  return { id: d.id, revised: !!old };
+}
+
+// 파일은 카드가 뜨자마자 미리 만들어 둔다 — 버튼을 누르면 바로 저장되게
+const built = new Map<string, Promise<BuiltFile[]>>();
+const builtKey = (d: Doc, f: ExportFormat) => `${d.id}:${d.rev ?? 0}:${f}`;
+function getFiles(d: Doc, f: Exclude<ExportFormat, "pdf">): Promise<BuiltFile[]> {
+  const k = builtKey(d, f);
+  let p = built.get(k);
+  if (!p) {
+    p = buildFiles(d, f);
+    p.catch(() => built.delete(k));
+    built.set(k, p);
+    if (built.size > 12) built.delete(built.keys().next().value!);
+  }
+  return p;
+}
+function prebuild(d: Doc): void {
+  warm(d.kind);
+  const f = d.want && d.want !== "pdf" ? d.want : formatsFor(d)[0];
+  if (f === "pdf") return;
+  const idle = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  (idle ? (cb: () => void) => idle(cb, { timeout: 1500 }) : (cb: () => void) => setTimeout(cb, 300))(() => void getFiles(d, f).catch(() => {}));
+}
+
 async function exportDoc(id: string, format: ExportFormat): Promise<void> {
   const d = docs.find((x) => x.id === id);
   if (!d) { toast("그 문서는 지워졌다."); return; }
@@ -560,14 +624,17 @@ async function exportDoc(id: string, format: ExportFormat): Promise<void> {
   }
   toast("파일 만드는 중…", 8000);
   try {
-    const f = await buildFile(d, format);
+    const files = await getFiles(d, format);
     if (isNative) {
-      const saved = await saveNativeFile(f.name, f.data);
-      toast(saved.where ? `저장했다 — ${saved.where}` : "파일을 만들었다.", 4000);
-      await openNativeFile(saved.uri, f.mime, d.title);
+      // 여러 장(카드뉴스)은 제목 폴더에 모아 저장하고 한꺼번에 보낸다
+      const folder = files.length > 1 ? fileFolder(d.title) : "";
+      const saved = await Promise.all(files.map((f) => saveNativeFile(f.name, f.data, folder)));
+      toast(saved[0].where ? `저장했다 — ${saved[0].where}${folder ? ` › ${folder}` : ""}` : "파일을 만들었다.", 4000);
+      if (files.length > 1) await shareNativeFiles(saved.map((x) => x.uri), d.title);
+      else await openNativeFile(saved[0].uri, files[0].mime, d.title);
     } else {
-      downloadFile(f);
-      toast(`${f.name} 을 내려받았다.`, 4000);
+      const name = await downloadFiles(files, `${fileFolder(d.title)}.zip`);
+      toast(`${name} 을 내려받았다.`, 4000);
     }
   } catch (e) {
     console.warn("[ultron] export", e);
@@ -575,14 +642,22 @@ async function exportDoc(id: string, format: ExportFormat): Promise<void> {
   }
 }
 
+function fileFolder(title: string): string {
+  return title.replace(/[\\/:*?"<>|\n\r\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40) || "울트론";
+}
+
 // ---------------------------------------------------------------- 시트 (설정 · 기록 · 문서)
 function openSheet(id: string): void {
   $(id).hidden = false;
   document.body.classList.add("sheet-open");
+  emblem.paused = true;   // 가려진 엠블럼은 그리지 않는다
 }
 function closeSheet(el: HTMLElement): void {
   el.hidden = true;
-  if (!document.querySelector(".sheet:not([hidden])")) document.body.classList.remove("sheet-open");
+  if (!document.querySelector(".sheet:not([hidden])")) {
+    document.body.classList.remove("sheet-open");
+    emblem.paused = false;
+  }
 }
 document.querySelectorAll<HTMLElement>(".sheet").forEach((sheet) => {
   sheet.addEventListener("click", (e) => {
@@ -600,6 +675,7 @@ function fillSettingsForm(): void {
   model.innerHTML = "";
   for (const [id, label] of Object.entries(MODEL_LABELS)) model.add(new Option(label, id, false, id === settings.model));
   ($("sEffort") as HTMLSelectElement).value = settings.effort;
+  ($("sFast") as HTMLInputElement).checked = settings.fast;
   ($("sTitle") as HTMLInputElement).value = settings.title;
   ($("sCity") as HTMLInputElement).value = settings.city;
   ($("sSpeak") as HTMLInputElement).checked = settings.speak;
@@ -628,6 +704,7 @@ function readSettingsForm(): void {
     apiKey: v("sKey").trim(),
     model: v("sModel") as ModelId,
     effort: v("sEffort") as Settings["effort"],
+    fast: c("sFast"),
     title: v("sTitle").trim() || "창조자",
     city: v("sCity").trim() || "서울",
     speak: c("sSpeak"),
@@ -729,13 +806,48 @@ $("mic").addEventListener("click", () => {
   if (state === "thinking") return;
   listen();
 });
+// ---------------------------------------------------------------- 첨부
+let pending: Attachment[] = [];
+function takeAttachments(): Attachment[] {
+  const out = pending;
+  pending = [];
+  renderAttachRow();
+  return out;
+}
+function renderAttachRow(): void {
+  const row = $("attachRow");
+  row.innerHTML = "";
+  row.hidden = !pending.length;
+  pending.forEach((a, i) => {
+    const chip = document.createElement("div");
+    chip.className = "attach-chip";
+    if (a.preview) { const im = document.createElement("img"); im.src = a.preview; im.alt = ""; chip.appendChild(im); }
+    const s = document.createElement("span");
+    s.textContent = a.kind === "pdf" ? `PDF · ${a.name}` : a.name;
+    chip.appendChild(s);
+    chip.appendChild(delButton(() => { pending.splice(i, 1); renderAttachRow(); }));
+    row.appendChild(chip);
+  });
+}
+$("attach").addEventListener("click", () => ($("file") as HTMLInputElement).click());
+$("file").addEventListener("change", async () => {
+  const input = $("file") as HTMLInputElement;
+  const list = [...(input.files ?? [])].slice(0, 5 - pending.length);
+  input.value = "";
+  for (const f of list) {
+    try { pending.push(await readAttachment(f)); } catch (e) { toast(String((e as Error).message ?? e)); }
+  }
+  renderAttachRow();
+  if (pending.length) toast("무엇을 할지 말하거나 적어라.");
+});
+
 $("inputForm").addEventListener("submit", (e) => {
   e.preventDefault();
   speaker.unlock();
   unlockAudio();
   const input = $("text") as HTMLInputElement;
   const text = input.value.trim();
-  if (!text || state === "thinking") return;
+  if ((!text && !pending.length) || state === "thinking") return;
   input.value = "";
   if (state === "boot") setState("standby");
   if (state === "speaking") speaker.stop();
@@ -763,9 +875,10 @@ $("docSendFile").addEventListener("click", async () => {
   const f = formatsFor(d)[0];
   if (f === "pdf") return;
   try {
-    const built = await buildFile(d, f);
-    const saved = await saveNativeFile(built.name, built.data);
-    await shareNativeFile(saved.uri, d.title);
+    const files = await getFiles(d, f);
+    const folder = files.length > 1 ? fileFolder(d.title) : "";
+    const saved = await Promise.all(files.map((x) => saveNativeFile(x.name, x.data, folder)));
+    await shareNativeFiles(saved.map((x) => x.uri), d.title);
   } catch { toast("파일을 보내지 못했다."); }
 });
 
@@ -823,6 +936,11 @@ function boot(): void {
     try { localStorage.setItem("ultron.setupSeen", "1"); } catch { /* 무시 */ }
     ($("setupTitle") as HTMLInputElement).value = settings.title;
     openSheet("setup");
+  }
+  // 두뇌(SDK)는 화면이 다 뜬 뒤 한가할 때 미리 불러 둔다
+  if (settings.apiKey) {
+    const idle = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+    (idle ? (cb: () => void) => idle(cb, { timeout: 3000 }) : (cb: () => void) => setTimeout(cb, 1500))(() => void preloadSdk().catch(() => {}));
   }
   if (isNative) setupNative();
   else if ("serviceWorker" in navigator && import.meta.env.PROD) {

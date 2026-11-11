@@ -45,7 +45,12 @@
 
     <section id="feed" class="feed" aria-live="polite"></section>
 
+    <div id="attachRow" class="attach-row" hidden></div>
     <form id="inputForm" class="input" autocomplete="off">
+      <button id="attach" class="send" type="button" aria-label="사진 · PDF 첨부">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20 11.5-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8" /></svg>
+      </button>
+      <input id="file" type="file" accept="image/*,application/pdf" multiple hidden />
       <input id="text" type="text" enterkeyhint="send" placeholder="울트론에게 말하기…" aria-label="울트론에게 보낼 말" />
       <button id="send" class="send" type="submit" aria-label="보내기">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
@@ -78,6 +83,7 @@
       <h3>AI</h3>
       <label>API 키<input id="sKey" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" /></label>
       <label>모델<select id="sModel"></select></label>
+      <label class="check"><input id="sFast" type="checkbox" /> 빠른 모드 — 답 · 결과물이 2배쯤 빨라짐 (Opus 5.5 전용, 요금 2배)</label>
       <label>생각 깊이<select id="sEffort">
         <option value="low">빠르게 (기본)</option>
         <option value="medium">보통</option>

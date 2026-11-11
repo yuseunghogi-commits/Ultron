@@ -9,6 +9,7 @@ export interface Settings {
   city: string;           // 기본 도시 (날씨 · 검색 지역)
   model: ModelId;
   effort: Effort;
+  fast: boolean;          // 빠른 모드 (Opus 5.5, 요금 2배)
   voiceName: string;      // 비우면 한국어 목소리 중 자동 선택
   pitch: number;          // 0.1 ~ 2 (낮을수록 굵게)
   rate: number;           // 0.5 ~ 2
@@ -26,6 +27,7 @@ export const DEFAULTS: Settings = {
   city: "서울",
   model: "claude-opus-5-5",
   effort: "low",
+  fast: false,
   voiceName: "",
   pitch: 0.6,
   rate: 1.0,
@@ -95,10 +97,21 @@ export function saveMemory(m: string[]): void {
 }
 
 // ---------------------------------------------------------------- 문서 (작업 결과물)
-export type DocKind = "doc" | "slides" | "sheet";
-export type ExportFormat = "hwpx" | "docx" | "pptx" | "xlsx" | "csv" | "pdf";
+export const THEME_NAMES = ["light", "dark", "navy", "warm", "green", "purple", "teal", "rose", "mono", "midnight", "forest", "ultron"];
 
-export interface DeckSlide { title: string; bullets: string[]; notes?: string }
+export type DocKind = "doc" | "slides" | "sheet" | "cardnews" | "poster";
+export type ExportFormat = "hwpx" | "docx" | "pptx" | "xlsx" | "csv" | "pdf" | "png";
+
+export interface Chart { type: "bar" | "line" | "pie"; title?: string; labels: string[]; series: { name: string; values: number[] }[] }
+export interface DeckSlide {
+  title: string;
+  bullets: string[];
+  notes?: string;
+  chart?: Chart;
+  table?: { columns: string[]; rows: (string | number)[][] };
+}
+export interface CardData { title: string; bullets: string[]; highlight?: string }
+export interface PosterSection { heading?: string; bullets: string[] }
 export interface SheetData { name: string; columns: string[]; rows: (string | number)[][] }
 
 export interface Doc {
@@ -107,10 +120,17 @@ export interface Doc {
   content: string;          // 마크다운 (발표 자료 · 표는 앱에서 보여 줄 개요)
   created: number;
   kind?: DocKind;           // 없으면 "doc"
-  subtitle?: string;        // 발표 자료 표지 부제
-  style?: "light" | "dark"; // 발표 자료 디자인
+  subtitle?: string;        // 표지 부제
+  style?: string;           // 색 테마 (light · dark · navy · warm · green · purple · teal · rose · mono · midnight · forest · ultron)
   slides?: DeckSlide[];
   sheets?: SheetData[];
+  cards?: CardData[];       // 카드뉴스
+  closing?: string;
+  sections?: PosterSection[];   // 포스터
+  highlight?: string;
+  footer?: string;
+  sources?: string[];
+  rev?: number;             // 고친 횟수
   want?: ExportFormat;      // 사용자가 처음에 달라고 한 파일 형식
 }
 export function loadDocs(): Doc[] {

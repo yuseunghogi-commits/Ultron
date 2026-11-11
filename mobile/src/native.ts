@@ -168,13 +168,14 @@ function toBase64(data: Uint8Array): string {
 export interface SavedFile { uri: string; where: string }
 
 /** 휴대폰의 '문서/ULTRON' 폴더에 저장한다. 안 되면 앱 임시 폴더에. */
-export async function saveNativeFile(name: string, data: Uint8Array): Promise<SavedFile> {
+export async function saveNativeFile(name: string, data: Uint8Array, folder = ""): Promise<SavedFile> {
   const b64 = toBase64(data);
+  const sub = folder ? `${folder}/` : "";
   try {
-    const r = await Filesystem.writeFile({ path: `ULTRON/${name}`, data: b64, directory: Directory.Documents, recursive: true });
+    const r = await Filesystem.writeFile({ path: `ULTRON/${sub}${name}`, data: b64, directory: Directory.Documents, recursive: true });
     return { uri: r.uri, where: "내 파일 › 문서 › ULTRON" };
   } catch {
-    const r = await Filesystem.writeFile({ path: `export/${name}`, data: b64, directory: Directory.Cache, recursive: true });
+    const r = await Filesystem.writeFile({ path: `export/${sub}${name}`, data: b64, directory: Directory.Cache, recursive: true });
     return { uri: r.uri, where: "" };
   }
 }
@@ -191,7 +192,11 @@ export async function openNativeFile(uri: string, mime: string, title: string): 
 }
 
 export async function shareNativeFile(uri: string, title: string): Promise<void> {
-  try { await Share.share({ title, files: [uri], dialogTitle: title }); } catch { /* 취소 */ }
+  await shareNativeFiles([uri], title);
+}
+
+export async function shareNativeFiles(uris: string[], title: string): Promise<void> {
+  try { await Share.share({ title, files: uris, dialogTitle: title }); } catch { /* 취소 */ }
 }
 
 // ---------------------------------------------------------------- 그 밖에
