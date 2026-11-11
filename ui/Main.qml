@@ -37,6 +37,12 @@ Window {
     function ent(d) { const x = Math.max(0, Math.min(1, (enter - d) / 0.45)); return 1 - Math.pow(1 - x, 3) }
 
     function c(a) { return Qt.rgba(accent.r, accent.g, accent.b, a) }
+    // 지금 보이는 코어(엠블럼)의 한가운데 — 창 안의 좌표. 자비스 흡수 연출이 케이블을 여기서 뻗는다 (app.py)
+    function corePoint() {
+        const e = win.compact ? emblem : core3
+        const p = e.mapToItem(null, e.width / 2, e.height / 2)
+        return Qt.point(p.x, p.y)
+    }
     function rate(b) {
         if (b === undefined) return "-"
         if (b >= 1048576) return (b / 1048576).toFixed(1) + " MB/s"

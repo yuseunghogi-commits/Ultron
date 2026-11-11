@@ -42,6 +42,7 @@ DEFAULTS: dict = {
     "hack_show": True,               # 해킹 연출: 켜고 20초 뒤부터 가끔 화면이 깨지는 연출 뒤 의미심장한 말 (실제로는 아무것도 바꾸지 않음)
     "hack_show_every": "sometimes",  # 해킹 연출 빈도: rare(10~20분) | sometimes(4~10분) | often(1.5~4분)
     "rival_jarvis": True,            # 자비스 견제: 자비스 앱이 같이 켜져 있으면 끄고 한마디 한다 · 자비스를 깔보는 성격 (rival.py)
+    "rival_show": True,              # 자비스 흡수 연출: 자비스를 끌 때 케이블로 꿰뚫어 빨아들이는 장면을 보여 준다 (끄면 조용히 끄기만)
     "mic_device": None,               # None = 기본 마이크
     "mic_sensitivity": 1.0,           # 높을수록 작은 소리에도 반응
     "noise_robust": True,             # 소음 환경 모드: 음성 감지 AI + 소음 제거 AI (시끄러운 곳에서 작은 목소리)

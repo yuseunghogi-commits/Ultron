@@ -158,6 +158,8 @@ _HACK = r"(?:해킹\s*연출|글리치\s*연출|글리치)"
 HACK_SHOW = re.compile(_HACK + r"\s*(?:좀\s*)?(?:보여|해|시작|틀어|한\s*번)?", re.I)
 HACK_OFF = re.compile(_HACK + r"\s*(?:좀\s*)?(?:꺼|끄기|그만|멈춰|중지|해제|하지\s*마)", re.I)
 HACK_ON = re.compile(_HACK + r"\s*(?:다시\s*)?(?:켜|켜기|켜\s*둬)", re.I)
+# 자비스 흡수 연출 시범: 자비스가 없어도 장면만 보여 준다
+ABSORB_SHOW = re.compile(r"(?:자비스\s*)?흡수\s*(?:연출|장면|시범)\s*(?:좀\s*)?(?:보여|해|시작|틀어|한\s*번)?", re.I)
 # 화면을 보거나 창 안을 조작해야 하는 요청 (Pro 모드: 이런 요청에는 pro_screen_model 을 쓴다)
 SCREEN_TASK = re.compile(
     r"화면|스크린|눌러|누르|클릭|들어가|스크롤|버튼|탭\b|탭\s|메뉴|링크|입력해|입력 해|써\s*줘|써줘|적어|작성|채워"
@@ -350,6 +352,9 @@ class Brain:
         if HACK_SHOW.fullmatch(c):
             self.on_hud("glitch")
             return "보여 주지."
+        if ABSORB_SHOW.fullmatch(c):
+            self.on_hud("absorb")
+            return rival.pick(rival.DEMO_OPEN)
         if HUD_SMALL.fullmatch(c):
             self.on_hud("small")
             return "작게 보기로 바꿨다."

@@ -76,6 +76,7 @@ Item {
         voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
         fxSw.checked = cfg.voice_fx !== false
         rivalSw.checked = cfg.rival_jarvis !== false
+        rivalShowSw.checked = cfg.rival_show !== false
         hackSw.checked = cfg.hack_show !== false
         hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
         sentinelServerField.text = cfg.sentinel_server || ""
@@ -112,6 +113,7 @@ Item {
             tts_voice: voices[voiceBox.currentIndex].v,
             voice_fx: fxSw.checked,
             rival_jarvis: rivalSw.checked,
+            rival_show: rivalShowSw.checked,
             hack_show: hackSw.checked,
             hack_show_every: hackFreqs[hackBox.currentIndex].v,
             sentinel_server: sentinelServerField.text.trim() || "http://127.0.0.1:8000",
@@ -293,6 +295,7 @@ Item {
                 Combo { id: voiceBox; model: sp.voices }
                 Toggle { id: fxSw; text: "울트론 기계음 (낮고 금속성인 목소리)" }
                 Toggle { id: rivalSw; text: "자비스 견제 (자비스가 같이 켜져 있으면 끄고 한마디 한다)" }
+                Toggle { id: rivalShowSw; text: "자비스 흡수 연출 (끌 때 케이블로 꿰뚫어 빨아들이는 장면)" }
                 Toggle { id: hackSw; text: "해킹 연출 (가끔 화면이 깨지고 의미심장한 한마디)" }
                 Combo { id: hackBox; visible: hackSw.checked; model: sp.hackFreqs }
                 RowLayout {

@@ -17,8 +17,8 @@ from pathlib import Path
 
 import numpy as np
 import psutil
-from PySide6.QtCore import (Property, QObject, QPointF, QRect, Qt, QTimer, QUrl, Signal,
-                            Slot)
+from PySide6.QtCore import (Q_RETURN_ARG, Property, QMetaObject, QObject, QPointF, QRect, Qt, QTimer,
+                            QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen,
                            QPixmap, QRadialGradient)
 from PySide6.QtMultimedia import QSoundEffect
@@ -26,7 +26,9 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import approval, glitch, hearing, hud_feed, rival, winutil
+from . import absorb, approval, glitch, hearing, hud_feed, rival, winutil
+from .absorb_view import AbsorbView
+from .absorb_view import crop as crop_image
 from .brain import Brain, situation_text
 from .glitch_view import GlitchView, from_qimage, to_qimage
 from .config import DATA_DIR, ROOT, UI_DIR, Config
@@ -221,6 +223,9 @@ class Jarvis(QObject):
     sig_stream = Signal(int, str)      # (명령 번호, 답 조각) — 대화 모드에서 답이 만들어지는 대로
     sig_rival = Signal(object)         # 자비스를 끈 결과 (rival.Result)
     sig_glitch = Signal(object)        # 해킹 연출 준비 끝 (화면 영역, 장면들, 소리 파일) — 실패하면 None
+    sig_absorb_go = Signal(object, bool)     # 자비스 흡수 연출을 시작하라 (찾은 자비스들, 사용자가 시켰는가)
+    sig_absorb_ready = Signal(object)        # 흡수 장면 준비 끝 (장면, 소리 파일, 화면 왼쪽 위) — 실패하면 None
+    sig_absorb_hit = Signal(object, object)  # 장면 도중 실제로 끈 결과 (끈 자비스들, 끄지 못한 자비스들)
     sig_mode = Signal(bool)            # 자유 대화 모드 켜짐/꺼짐
     sig_notify = Signal(str)           # 백그라운드 작업(작업 감시 등)의 알림
     sig_hud = Signal(str)              # 말로 HUD 보기 방식 바꾸기 (small | big | hide | active_on | active_off)
@@ -277,7 +282,8 @@ class Jarvis(QObject):
                           (self.sig_notify, self._on_notify), (self.sig_hud, self._on_hud),
                           (self.sig_feed, self._on_feed), (self.sig_timer_cancel, self._cancel_timers),
                           (self.sig_point, self._on_point), (self.sig_rival, self._on_rival),
-                          (self.sig_glitch, self._on_glitch)):
+                          (self.sig_glitch, self._on_glitch), (self.sig_absorb_go, self._absorb_begin),
+                          (self.sig_absorb_ready, self._absorb_play), (self.sig_absorb_hit, self._absorb_killed)):
             sig.connect(slot)
 
         # ---- 음성 출력 ----
@@ -298,6 +304,7 @@ class Jarvis(QObject):
             cancel_timers=self._cancel_timers_hook,
             point_at=self._point_hook,
             feed=lambda name, value: self.sig_feed.emit(str(name), str(value)),
+            absorb=self._absorb_hook,
         ))
         self.brain = Brain(self.cfg, self.tools,
                            on_action=lambda *a: self.sig_action.emit(*a),
@@ -391,6 +398,14 @@ class Jarvis(QObject):
         self._rival_timer.timeout.connect(self._rival_tick)
         if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
             self._rival_timer.start()
+        # 자비스 흡수 연출 (absorb.py · absorb_view.py): 자비스를 그냥 끄지 않고 케이블로 꿰뚫어 빨아들이는 장면과 함께 끈다
+        self._absorb_lock = threading.Lock()
+        self._absorb: dict | None = None       # 진행 중인 흡수 {at, found, forced, demo, hit, result, ended}
+        self._absorb_view: AbsorbView | None = None
+        self._absorb_fx: QSoundEffect | None = None
+        self._absorb_last = -1e9               # 마지막으로 연출한 때
+        self._absorb_wait = 0                  # 울트론이 바빠서 연출을 미룬 횟수
+        self._absorb_demo = False              # 사용자가 '흡수 연출 보여 줘' 라고 했다
         # 해킹 연출: 켜고 20초 뒤부터 가끔 화면이 깨지는 연출 뒤 의미심장한 말 (설정 '해킹 연출')
         self.hack = glitch.Schedule()
         self._hack_forced = False          # 사용자가 '해킹 연출 보여 줘' 라고 했다
@@ -413,13 +428,21 @@ class Jarvis(QObject):
         QTimer.singleShot(2300, self._boot_done)
 
     # ================================================================== 자비스 견제 (rival.py)
-    def _rival_tick(self) -> None:
-        """5초마다: 자비스가 켜져 있으면 끈다. 끄는 데 잠깐 걸릴 수 있어 다른 스레드에서 한다."""
+    def _flush_line(self) -> None:
+        """바빠서 미뤄 둔 혼잣말이 있고 이제 조용하면 말한다."""
         if self._pending_line and self._quiet():
             line, at = self._pending_line
             self._pending_line = None
             if time.monotonic() - at < 90:
                 self.say(line, follow_up=False)
+
+    def _rival_tick(self) -> None:
+        """5초마다: 자비스가 켜져 있으면 흡수한다 (연출을 못 할 상황이면 조용히 끈다). 잠깐 걸릴 수 있어 다른 스레드에서 한다."""
+        self._flush_line()
+        if self._absorb is not None and time.monotonic() - self._absorb["at"] > 30:
+            log.warning("흡수 연출이 끝나지 않아 정리함")       # 있어서는 안 되는 일이지만, 감시가 영영 멈추지 않게
+            self._absorb = None
+            self._unmute()
         if not self.cfg["rival_jarvis"] or self._rival_busy or sys.platform != "win32":
             return
         self._rival_busy = True
@@ -428,13 +451,239 @@ class Jarvis(QObject):
     def _rival_work(self) -> None:
         res = None
         try:
-            res = self.rival.tick()
+            found = self.rival.spot()
+            if found:
+                how = self._absorb_how()
+                if how == "show":
+                    if self._absorb_claim():
+                        self.sig_absorb_go.emit(found, False)
+                elif how == "plain":
+                    res = self.rival.strike(found)
         except Exception as e:
             log.warning("자비스 확인 실패: %s", e)
         finally:
             self._rival_busy = False
         if res is not None:
             self.sig_rival.emit(res)
+
+    # ================================================================== 자비스 흡수 연출 (absorb.py · absorb_view.py)
+    # 순서: 자격 얻기(_absorb_claim) → 화면 찍고 여는 말(_absorb_begin) → 장면 · 소리 만들기(다른 스레드, _absorb_build)
+    #       → 재생(_absorb_play) → 첫 케이블이 꽂힐 때 실제로 끄기(_absorb_impact → 다른 스레드 → _absorb_killed)
+    #       → 장면 끝(_absorb_ended) → 닫는 말(_absorb_finish)
+    def _absorb_how(self) -> str:
+        """(다른 스레드) 찾은 자비스를 어떻게 끌까: 'show' 흡수 연출 · 'wait' 지금은 바쁘니 다음 확인 때 · 'plain' 조용히 끄기만."""
+        if self._absorb is not None:
+            return "wait"                  # 이미 흡수하는 중 (곧 꺼진다)
+        if (not self.cfg["rival_show"] or time.monotonic() - self._absorb_last < rival.SHOW_EVERY
+                or winutil.fullscreen_app()):
+            self._absorb_wait = 0
+            return "plain"                 # 연출을 껐거나, 방금 삼켰는데 또 켜졌거나, 게임 · 발표 · 동영상이 전체 화면
+        if self._glitching or not self._quiet() or self.brain.chat_mode:
+            self._absorb_wait += 1
+            if self._absorb_wait <= 4:
+                return "wait"              # 울트론이 일하거나 말하는 중 — 20초까지는 기다린다
+            self._absorb_wait = 0
+            return "plain"
+        self._absorb_wait = 0
+        return "show"
+
+    def _absorb_claim(self) -> bool:
+        """흡수 연출을 시작할 자격을 얻는다 (감시 스레드와 두뇌 스레드가 동시에 시작하지 않게)."""
+        with self._absorb_lock:
+            if self._absorb is not None:
+                return False
+            self._absorb = {"at": time.monotonic(), "found": [], "forced": False, "demo": False,
+                            "hit": False, "result": None, "ended": False}
+            return True
+
+    def _absorb_hook(self, found) -> bool:
+        """stop_jarvis 도구 (두뇌 스레드): 흡수 연출로 끌 수 있으면 시작시키고 True (아니면 도구가 조용히 끈다)."""
+        if not self.cfg["rival_show"] or self._glitching or not self._absorb_claim():
+            return False
+        self.sig_absorb_go.emit(list(found), True)
+        return True
+
+    @Slot(object, bool)
+    def _absorb_begin(self, found, forced: bool, demo: bool = False) -> None:
+        """화면을 찍고 장면을 만들게 한다. 여는 말은 장면을 만드는 동안 목소리가 준비되도록 지금 한다
+        (사용자가 시킨 경우에는 도구가 돌려준 대사가 여는 말이다)."""
+        st = self._absorb
+        if st is None:
+            return
+        st.update(found=list(found), forced=bool(forced), demo=bool(demo))
+        try:
+            plan = self._absorb_plan(st["found"])
+        except Exception:
+            log.exception("흡수 연출: 화면을 준비하지 못함")
+            self._absorb_fallback()
+            return
+        if not forced and not demo and self._quiet():
+            line = rival.pick(rival.ATTACK)
+            self.bridge.set("replyText", line)
+            self.say(line, follow_up=False)
+        threading.Thread(target=self._absorb_build, args=plan, daemon=True, name="absorb").start()
+
+    def _core_point(self) -> tuple[float, float]:
+        """작은 HUD 창 안에서 코어(엠블럼) 한가운데의 좌표."""
+        try:
+            pt = QMetaObject.invokeMethod(self.win, "corePoint", Qt.DirectConnection, Q_RETURN_ARG("QVariant"))
+            x, y = float(pt.x()), float(pt.y())
+            if 0 < x < self.win.width() and 0 < y < self.win.height():
+                return x, y
+        except Exception:
+            pass
+        return self.win.width() / 2, (107.0 if self.bridge._compact else 182.0)
+
+    def _absorb_plan(self, found) -> tuple:
+        """장면을 어디에 어떻게 펼칠지 → (화면 크기, 코어 자리, 자비스 창 그림, 그 자리, 울트론 HUD 자리, 화면의 왼쪽 위).
+        자비스 창이 화면에 보이면 그 화면에서 그 창의 모습을 찍어 쓰고, 아니면 울트론 HUD 가 있는 화면에서 자비스를 구석에서 끌어낸다.
+        좌표는 그 화면 안의 논리 픽셀 (자비스 창의 자리는 실제 픽셀로 오므로 화면 배율로 나눈다)."""
+        shown = next((r for r in (rival.window_shown(f) for f in found) if r), None) if sys.platform == "win32" else None
+        screen = None
+        if shown:
+            mx, my = (shown[0] + shown[2]) / 2, (shown[1] + shown[3]) / 2
+            for s in QGuiApplication.screens():
+                g, k = s.geometry(), s.devicePixelRatio()
+                if g.x() <= mx < g.x() + g.width() * k and g.y() <= my < g.y() + g.height() * k:
+                    screen = s
+                    break
+            if screen is None:
+                shown = None
+        hud_on = self.win.isVisible()
+        if screen is None:
+            screen = ((self.win.screen() if hud_on else None) or QGuiApplication.screenAt(QCursor.pos())
+                      or QGuiApplication.primaryScreen())
+        g, k = screen.geometry(), screen.devicePixelRatio()
+        core = avoid = None
+        if hud_on and self.win.screen() is not None and self.win.screen().geometry() == g:
+            wg = self.win.geometry()
+            px, py = self._core_point()
+            core = (wg.x() - g.x() + px, wg.y() - g.y() + py)
+            avoid = (wg.x() - g.x(), wg.y() - g.y(), wg.width(), wg.height())
+        image = rect = None
+        if shown:
+            shot = screen.grabWindow(0).toImage()
+            x0, y0 = max(0, shown[0] - g.x()), max(0, shown[1] - g.y())
+            x1, y1 = min(shot.width(), shown[2] - g.x()), min(shot.height(), shown[3] - g.y())
+            if x1 - x0 >= 80 and y1 - y0 >= 80:
+                image = crop_image(shot, x0, y0, x1 - x0, y1 - y0)
+                rect = (x0 / k, y0 / k, (x1 - x0) / k, (y1 - y0) / k)
+        return (g.width(), g.height()), core, image, rect, avoid, g.topLeft()
+
+    def _absorb_build(self, size, core, image, rect, avoid, top_left) -> None:
+        """(다른 스레드) 장면 · 소리를 만든다 (0.3초쯤)."""
+        try:
+            rng = np.random.default_rng()
+            scene = absorb.build(size, core=core, image=image, rect=rect, avoid=avoid, rng=rng)
+            wav = glitch.write_wav(absorb.sound(scene, rng), name="ultron_absorb")
+            self.sig_absorb_ready.emit((scene, wav, top_left))
+        except Exception:
+            log.exception("흡수 연출 준비 실패")
+            self.sig_absorb_ready.emit(None)
+
+    @Slot(object)
+    def _absorb_play(self, pack) -> None:
+        st = self._absorb
+        if st is None:
+            return
+        if pack is None:
+            self._absorb_fallback()
+            return
+        scene, wav, top_left = pack
+        if self._absorb_view is None:
+            self._absorb_view = AbsorbView()
+            self._absorb_view.impact.connect(self._absorb_impact)
+            self._absorb_view.finished.connect(self._absorb_ended)
+            self.focus.own_hwnds.add(int(self._absorb_view.winId()))     # (화면 캡처에서는 빼지 않는다 — 녹화할 수 있게)
+        self.listener.muted = True                      # 연출 소리를 말소리로 듣지 않게
+        fx = QSoundEffect(self)
+        fx.setSource(QUrl.fromLocalFile(wav))
+        fx.setVolume(0.55)
+        fx.play()
+        self._absorb_fx = fx
+        log.info("자비스 흡수 연출 (%s, %s)", "시범" if st["demo"] else "요청" if st["forced"] else "자동",
+                 "자비스 창" if scene.real else "숨어 있던 자비스")
+        self._absorb_view.play(top_left, scene)
+
+    @Slot()
+    def _absorb_impact(self) -> None:
+        """첫 케이블이 꽂혔다 — 지금 실제 자비스를 끈다 (조준할 때부터 찍어 둔 그림이 창을 가리고 있어 꺼지는 모습은 보이지 않는다)."""
+        st = self._absorb
+        if st is None or st["hit"]:
+            return
+        st["hit"] = True
+        if not st["demo"]:
+            threading.Thread(target=self._absorb_kill, args=(st["found"],), daemon=True, name="absorb-kill").start()
+
+    def _absorb_kill(self, found) -> None:
+        """(다른 스레드)"""
+        try:
+            stopped, failed = rival.stop_all(found)
+        except Exception as e:
+            log.warning("자비스를 끄지 못함: %s", e)
+            stopped, failed = [], list(found)
+        self.sig_absorb_hit.emit(stopped, failed)
+
+    @Slot(object, object)
+    def _absorb_killed(self, stopped, failed) -> None:
+        st = self._absorb
+        if st is None:
+            return
+        st["result"] = (list(stopped), list(failed))
+        if not stopped and self._absorb_view is not None and self._absorb_view.playing:
+            self._absorb_view.stop()       # 끄지 못했다 (관리자 권한의 자비스) — 장면을 접는다 → _absorb_ended
+        elif st["ended"]:
+            self._absorb_finish()
+
+    @Slot()
+    def _absorb_ended(self) -> None:
+        """장면이 끝났다 (또는 도중에 접혔다)."""
+        st = self._absorb
+        if st is None:
+            return
+        st["ended"] = True
+        if st["demo"] or st["result"] is not None:
+            self._absorb_finish()
+        elif not st["hit"]:
+            self._absorb_impact()          # 꽂히기도 전에 장면이 접혔다 — 그래도 자비스는 끈다 (결과가 오면 마무리)
+
+    def _absorb_fallback(self) -> None:
+        """장면을 준비하지 못했다 — 연출 없이 끈다."""
+        st, self._absorb = self._absorb, None
+        if st and not st["demo"] and st["found"]:
+            def work() -> None:
+                res = self.rival.strike(st["found"])
+                if res is not None:
+                    self.sig_rival.emit(res)
+            threading.Thread(target=work, daemon=True, name="rival").start()
+
+    def _absorb_finish(self) -> None:
+        """닫는 말."""
+        st, self._absorb = self._absorb, None
+        if st is None:
+            return
+        self._absorb_last = time.monotonic()
+        QTimer.singleShot(300, self._unmute)
+        if st["demo"]:
+            line = rival.pick(rival.DEMO_DONE)
+        else:
+            stopped, failed = st["result"] or ([], [])
+            self.rival.record(stopped, failed, spoke=True)
+            for f in stopped:
+                log.info("자비스 흡수 (pid %d, %s, 창 '%s')", f.pid, f.exe, f.title)
+            for f in failed:
+                log.warning("자비스를 끄지 못함 (pid %d, %s) — 관리자 권한으로 켜졌을 수 있음", f.pid, f.exe)
+            if not stopped and not failed:
+                return                     # 그 사이 자비스가 스스로 사라졌다
+            if stopped:
+                self._reclaim_hotkey()
+            line = rival.pick(rival.ABSORBED) if stopped else rival.STOP_FAILED
+            self.bridge.toast.emit("info" if stopped else "warn", line)
+        self.bridge.set("replyText", line)
+        if self._quiet(listening_ok=st["forced"] or st["demo"]):
+            self.say(line, follow_up=False)
+        else:
+            self._pending_line = (line, time.monotonic())      # 여는 말이 아직 끝나지 않았다 — 끝나면 바로 말한다
 
     def _quiet(self, listening_ok: bool = False) -> bool:
         """지금 울트론이 혼잣말을 해도 되는가 (명령 처리 · 말하기 · 승인 대기 · 듣는 중이 아닐 때).
@@ -445,7 +694,13 @@ class Jarvis(QObject):
     # ================================================================== 해킹 연출 (glitch.py · glitch_view.py)
     def _hack_tick(self) -> None:
         """1초마다: 연출할 때가 됐고 지금 해도 되면 시작한다. 안 되는 상황이면 다음 기회로 미룬다."""
-        if self._glitching:
+        self._flush_line()
+        if self._glitching or self._absorb is not None:
+            return
+        if self._absorb_demo and self._quiet(listening_ok=True):       # '흡수 연출 보여 줘' — 대답이 끝난 뒤에
+            self._absorb_demo = False
+            if self._absorb_claim():
+                self._absorb_begin([], True, demo=True)
             return
         forced = self._hack_forced
         if not forced and not (self.cfg["hack_show"] and self.hack.due()):
@@ -483,7 +738,7 @@ class Jarvis(QObject):
 
     @Slot(object)
     def _on_glitch(self, pack) -> None:
-        if pack is None or self.busy or self.speaker.playing or self._pending_confirm:
+        if pack is None or self.busy or self.speaker.playing or self._pending_confirm or self._absorb is not None:
             self._glitching = False        # 실패했거나, 준비하는 사이 사용자가 일을 시켰다 — 조금 뒤에 다시
             self.hack.later(120 if pack is None else 30)
             return
@@ -974,7 +1229,8 @@ class Jarvis(QObject):
             self._to_idle()
 
     def _unmute(self) -> None:
-        if not self.speaker.playing:
+        # 연출(해킹 · 자비스 흡수)이 소리를 내는 동안에는 열지 않는다 — 여는 말이 장면 도중에 끝나도 마이크는 닫혀 있다
+        if not self.speaker.playing and not self._glitching and self._absorb is None:
             self.listener.muted = False
 
     # ================================================================== 도구 이벤트
@@ -1067,6 +1323,8 @@ class Jarvis(QObject):
             self.set_active(action == "active_on")
         elif action == "glitch":
             self._hack_forced = True       # 지금 하던 대답이 끝나면 바로
+        elif action == "absorb":
+            self._absorb_demo = True       # 자비스 흡수 연출 시범 (자비스 없이 장면만) — 대답이 끝나면 바로
 
     # ================================================================== 액티브 모드 (전체 화면 HUD)
     def set_active(self, on: bool) -> None:

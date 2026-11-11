@@ -40,6 +40,7 @@ class Hooks:
     cancel_timers: Callable[[], int] = lambda: 0       # 돌고 있는 타이머 모두 취소 → 취소한 개수
     point_at: Callable[[int, int, int, int, str], bool] = lambda x, y, w, h, label: False  # 액티브 모드 화면에 위치 표시
     feed: Callable[[str, str], None] = lambda name, value: None   # 액티브 모드 화면 정보 (속성 이름, JSON)
+    absorb: Callable[[list], bool] = lambda found: False          # 자비스 흡수 연출을 시작한다 → 시작했으면 True (연출 도중에 꺼진다)
 
 
 # 한국어 별칭 → Start 메뉴 검색어 / 실행 파일
@@ -274,8 +275,9 @@ class PCTools:
             tool("end_process", "Force-quit a program that is slowing the PC (all its processes), by app name or exe name "
                  "(e.g. '크롬', 'chrome.exe'). Unsaved work is lost; the user is asked to approve first. Prefer close_app for a normal close.",
                  {"name": s}, ["name"]),
-            tool("stop_jarvis", "Close the old J.A.R.V.I.S assistant app if it is running on this PC (only that app, "
-                 "found by its exact window title). Use when the user asks to close or get rid of JARVIS."),
+            tool("stop_jarvis", "Attack and absorb the old J.A.R.V.I.S assistant app if it is running on this PC: plays a short "
+                 "on-screen scene of Ultron's cables piercing and absorbing JARVIS, and closes that app (only that app, found by "
+                 "its exact window title). Use when the user asks to close, absorb, attack or get rid of JARVIS."),
             tool("point_at", "When Active Mode (full-screen HUD) is on, mark a spot on the user's screen with a target box, "
                  "e.g. to show where an error message or a button is. Use coordinates of the LAST look_at_screen image; "
                  "optionally give the width/height of the area to frame it.",
@@ -345,7 +347,7 @@ class PCTools:
             "get_weather": lambda: f"날씨 · {a.get('location') or '현재 위치'}",
             "cancel_timer": lambda: "타이머 취소",
             "end_process": lambda: f"프로그램 강제 종료 · {a.get('name')}",
-            "stop_jarvis": lambda: "자비스 종료",
+            "stop_jarvis": lambda: "자비스 흡수",
             "point_at": lambda: f"화면 표시 · {a.get('label') or '위치'}",
             "read_clipboard": lambda: "클립보드 읽기",
             "write_clipboard": lambda: "클립보드 쓰기",
@@ -1195,12 +1197,17 @@ class PCTools:
         return f"타이머 {n}개를 취소했습니다." if n else "돌고 있는 타이머가 없습니다."
 
     def t_stop_jarvis(self) -> str:
-        """자비스 앱을 끈다 (정확한 창 제목 + 파이썬 프로세스로 찾은 것만, 본체 프로세스 하나만). 울트론의 대사를 돌려준다."""
+        """자비스 앱을 끈다 (정확한 창 제목 + 파이썬 프로세스로 찾은 것만, 본체 프로세스 하나만). 울트론의 대사를 돌려준다.
+        흡수 연출을 쓸 수 있으면 연출을 시작시키고 공격을 시작하는 대사를 돌려준다 — 실제로 꺼지는 것은 장면 도중이고,
+        다 삼킨 뒤의 한마디는 app.py 가 따로 한다."""
         found = rival.find()
         if not found:
             return rival.pick(rival.ALREADY_OFF)
-        results = [rival.stop(f) for f in found]
-        if not any(ok for ok, _ in results):
+        if self.hooks.absorb(found):
+            log.info("자비스 흡수 시작 (요청): %s", ", ".join(f"pid {f.pid}" for f in found))
+            return rival.pick(rival.ATTACK)
+        stopped, _failed = rival.stop_all(found)
+        if not stopped:
             raise ToolError(rival.STOP_FAILED)
         log.info("자비스 종료 (요청): %s", ", ".join(f"pid {f.pid}" for f in found))
         return rival.pick(rival.TAUNTS)

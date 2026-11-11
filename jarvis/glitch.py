@@ -323,15 +323,15 @@ def sound(timeline: list[Frame], rng: np.random.Generator | None = None, sr: int
     return (audio * 32767).astype(np.int16)
 
 
-def write_wav(audio: np.ndarray, sr: int = SOUND_RATE, folder: str | Path | None = None) -> str:
+def write_wav(audio: np.ndarray, sr: int = SOUND_RATE, folder: str | Path | None = None, name: str = "ultron_glitch") -> str:
     """소리를 임시 파일로 쓴다. 이름을 매번 바꾼다 — 같은 이름이면 소리 재생기가 예전 소리를 다시 틀 수 있다."""
     folder = Path(folder or tempfile.gettempdir())
-    for old in folder.glob("ultron_glitch_*.wav"):
+    for old in folder.glob(f"{name}_*.wav"):
         try:
             old.unlink()
         except OSError:
             pass
-    path = folder / f"ultron_glitch_{int(time.time() * 1000)}.wav"
+    path = folder / f"{name}_{int(time.time() * 1000)}.wav"
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
