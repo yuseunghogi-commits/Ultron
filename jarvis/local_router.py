@@ -74,6 +74,15 @@ for _names, _label, _url in [
     ("디즈니플러스", "디즈니 플러스", "https://www.disneyplus.com"),
     ("클래스팅", "클래스팅", "https://www.classting.com"),
     ("하이클래스", "하이클래스", "https://www.hiclass.net"),
+    # 과제 · 발표 준비에 자주 쓰는 사이트 (디자인 도구 · 학술 자료)
+    ("미리캔버스 미리캠퍼스 미리켄버스 miricanvas", "미리캔버스", "https://www.miricanvas.com"),
+    ("캔바 canva", "캔바", "https://www.canva.com"),
+    ("망고보드 mangoboard", "망고보드", "https://www.mangoboard.net"),
+    ("구글슬라이드 구글프레젠테이션", "구글 슬라이드", "https://docs.google.com/presentation"),
+    ("패들렛 padlet", "패들렛", "https://padlet.com"),
+    ("riss 학술연구정보서비스", "RISS", "https://www.riss.kr"),
+    ("디비피아 dbpia", "DBpia", "https://www.dbpia.co.kr"),
+    ("구글스칼라 구글학술검색", "구글 학술 검색", "https://scholar.google.com"),
 ]:
     for _n in _names.split():
         WEBSITES[_n] = (_label, _url)

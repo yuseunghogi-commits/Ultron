@@ -134,6 +134,20 @@ def main() -> int:
                                                          " (자비스를 켜 두고 점검하면 1개가 나와야 함 · 끄지는 않음)"))(rival.find()))
     check("창이 클릭을 막는지 확인", lambda: f"이 창 가운데: {winutil.blocks_clicks(hwnd, (win[0] + win[2]) // 2, (win[1] + win[3]) // 2) if win else '창 영역 없음'}")
 
+    # ---- 작업 결과물 (발표 자료 · 보고서 · 엑셀) ----
+    def office_files():
+        import tempfile
+        from pathlib import Path
+
+        from . import office
+        with tempfile.TemporaryDirectory() as d:
+            office.build_presentation(Path(d) / "t.pptx", "점검", [{"title": "점검", "bullets": ["하나"]}])
+            office.build_document(Path(d) / "t.docx", "점검", [{"heading": "점검", "paragraphs": ["하나"]}])
+            office.build_spreadsheet(Path(d) / "t.xlsx", [{"name": "점검", "columns": ["a"], "rows": [[1]]}])
+        return "PPT · Word · Excel 파일을 만들 수 있음"
+
+    check("작업 결과물 만들기 (python-pptx · python-docx · XlsxWriter)", office_files)
+
     # ---- 오프라인 음성 인식 ----
     def stt():
         import numpy as np

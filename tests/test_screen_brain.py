@@ -64,8 +64,9 @@ class Runner:
     def __init__(self, b, results):
         self.b, self.results, self.calls = b, list(results), []
 
-    def __call__(self, exe, text, cancel, model):
+    def __call__(self, exe, text, cancel, model, effort=None, timeout=240):
         self.calls.append((model, self.b.session_id))
+        self.limits = getattr(self, "limits", []) + [(effort, timeout)]
         ok, sid = self.results.pop(0)
         if sid:
             self.b.session_id = sid
@@ -244,7 +245,7 @@ def test_prewarm_only_when_claude_was_used_recently(monkeypatch):
 
 def test_keep_alive_zero_uses_a_new_process_per_command(monkeypatch):
     b = live(monkeypatch, pro_keep_alive=0)
-    b._run_claude_code = lambda exe, text, cancel, model: ("예전 방식", "", False, 0, "")
+    b._run_claude_code = lambda exe, text, cancel, model, *rest: ("예전 방식", "", False, 0, "")
     assert b._claude_code("오늘 일정 정리해 줘", threading.Event()) == "예전 방식"
     assert FakeSession.made == [] and not b.wants_prewarm()
 

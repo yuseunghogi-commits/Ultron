@@ -307,6 +307,74 @@ class PCTools:
             tool("sentinel_status", "Check whether the local Sentinel Web Security Analyzer server is running and the API key works."),
             tool("remember", "Save a fact about the user to long-term memory (e.g. preferences, names). Use when the user asks you to remember something.",
                  {"fact": s}, ["fact"]),
+            tool("make_presentation",
+                 "Create a PowerPoint (.pptx) presentation and open it. Use for PPT / 발표 자료 / 슬라이드 requests; research the "
+                 "topic first with web_search / web_fetch when it needs facts. Write in Korean unless asked otherwise: short "
+                 "phrases, 3-5 bullets per slide, and a 2-4 sentence talk track in notes for every slide. Mix layouts so it is "
+                 "not all bullet lists. A cover, a 목차 slide and a 참고 자료 slide (from sources) are added automatically; long "
+                 "lists are split across slides. Saved to the user's Documents\\ULTRON folder unless folder is given.",
+                 {"title": {"type": "string", "description": "presentation title (cover)"},
+                  "subtitle": {"type": "string", "description": "cover subtitle, e.g. '3학년 2반 홍길동 · 2026.11.11' or a one-line summary"},
+                  "slides": {"type": "array", "description": "content slides in order (cover, 목차 and 참고 자료 are added for you)",
+                             "items": {"type": "object", "properties": {
+                                 "layout": {"type": "string", "enum": ["bullets", "section", "two_column", "stats", "quote", "closing"],
+                                            "description": "bullets (default) · section (big numbered chapter divider) · two_column "
+                                                           "(compare two sides) · stats (2-4 key numbers) · quote · closing (last slide)"},
+                                 "title": {"type": "string"},
+                                 "bullets": {"type": "array", "items": {"type": "string"},
+                                             "description": "bullet lines; start a line with '- ' to make it a sub-point of the line "
+                                                            "above. For section/closing: optional short lines under the title"},
+                                 "left": {"type": "object", "description": "two_column: {heading, bullets}",
+                                          "properties": {"heading": {"type": "string"}, "bullets": {"type": "array", "items": {"type": "string"}}}},
+                                 "right": {"type": "object", "description": "two_column: {heading, bullets}",
+                                           "properties": {"heading": {"type": "string"}, "bullets": {"type": "array", "items": {"type": "string"}}}},
+                                 "stats": {"type": "array", "description": "stats: 2-4 items",
+                                           "items": {"type": "object", "properties": {"value": {"type": "string", "description": "e.g. '73%'"},
+                                                                                      "label": {"type": "string"}},
+                                                     "required": ["value", "label"]}},
+                                 "quote": {"type": "string"},
+                                 "by": {"type": "string", "description": "who said the quote"},
+                                 "notes": {"type": "string", "description": "speaker notes: what to say on this slide (2-4 sentences)"}},
+                                 "required": ["title"]}},
+                  "sources": {"type": "array", "items": {"type": "string"}, "description": "references actually used: 'title — URL'"},
+                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green"], "description": "colors; default light"},
+                  "agenda": {"type": "boolean", "description": "add a 목차 slide (default: when there are 4+ content slides)"},
+                  "filename": {"type": "string", "description": "file name without extension (default: the title)"},
+                  "folder": {"type": "string", "description": "'바탕화면', '문서', '다운로드' or a full path (default Documents\\ULTRON)"},
+                  "overwrite": {"type": "boolean", "description": "replace the file of the same name (use when revising a file you just made)"},
+                  "open": {"type": "boolean", "description": "open the file after saving (default true)"}},
+                 ["title", "slides"]),
+            tool("make_document",
+                 "Create a Word (.docx) report or document and open it. Use for 보고서 / 레포트 / 조사 정리 / 문서로 정리 requests "
+                 "(research first when it needs facts). Each section has a heading, paragraphs, optional bullets and an optional "
+                 "table. A 참고 자료 list is added from sources and pages are numbered.",
+                 {"title": s,
+                  "subtitle": {"type": "string", "description": "e.g. '과목 · 학번 이름 · 날짜'"},
+                  "sections": {"type": "array", "items": {"type": "object", "properties": {
+                      "heading": {"type": "string"},
+                      "level": {"type": "integer", "enum": [1, 2], "description": "2 for a sub-heading"},
+                      "paragraphs": {"type": "array", "items": {"type": "string"}},
+                      "bullets": {"type": "array", "items": {"type": "string"}},
+                      "table": {"type": "object", "properties": {
+                          "columns": {"type": "array", "items": {"type": "string"}},
+                          "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                          "caption": {"type": "string"}}}}}},
+                  "sources": {"type": "array", "items": {"type": "string"}},
+                  "filename": s, "folder": s,
+                  "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
+                 ["title", "sections"]),
+            tool("make_spreadsheet",
+                 "Create an Excel (.xlsx) file with one or more sheets and open it. Use for 표 / 엑셀 / 시간표 / 정리표 requests. "
+                 "Give numbers as numbers. A cell that starts with '=' is written as a formula (e.g. '=SUM(B2:B8)').",
+                 {"sheets": {"type": "array", "items": {"type": "object", "properties": {
+                      "name": {"type": "string", "description": "sheet tab name"},
+                      "title": {"type": "string", "description": "optional title row above the table"},
+                      "columns": {"type": "array", "items": {"type": "string"}},
+                      "rows": {"type": "array", "items": {"type": "array", "items": {}}}},
+                      "required": ["columns"]}},
+                  "filename": s, "folder": s,
+                  "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
+                 ["sheets"]),
         ]
 
     # ------------------------------------------------------------------ 표시용 라벨
@@ -356,7 +424,11 @@ class PCTools:
             "sentinel_scan": lambda: f"Sentinel 검사 · {str(a.get('url', ''))[:40]}",
             "sentinel_report": lambda: "Sentinel 보고서 열기",
             "sentinel_status": lambda: "Sentinel 연결 확인",
+            "make_presentation": lambda: f"PPT 만들기 · {str(a.get('title', ''))[:30]}",
+            "make_document": lambda: f"문서 만들기 · {str(a.get('title', ''))[:30]}",
+            "make_spreadsheet": lambda: f"엑셀 만들기 · {str(a.get('filename') or '표')[:30]}",
             "web_search": lambda: f"웹 검색 · {a.get('query', '')}",
+            "web_fetch": lambda: f"웹 페이지 읽기 · {str(a.get('url', ''))[:40]}",
         }
         try:
             return m[name]()
@@ -1211,6 +1283,97 @@ class PCTools:
             raise ToolError(rival.STOP_FAILED)
         log.info("자비스 종료 (요청): %s", ", ".join(f"pid {f.pid}" for f in found))
         return rival.pick(rival.TAUNTS)
+
+    # ------------------------------------------------------------------ 작업 결과물 (발표 자료 · 보고서 · 표 — office.py)
+    def _work_folder(self, folder: str = "") -> Path:
+        """결과물을 저장할 폴더. 기본은 문서\\ULTRON. '바탕화면' · '문서' · '다운로드' 같은 이름이나 전체 경로를 받는다."""
+        f = (folder or "").strip()
+        if not f:
+            return (winutil.known_folder("문서") or Path.home() / "Documents") / "ULTRON"
+        known = winutil.known_folder(f)
+        if known:
+            return known
+        p = Path(os.path.expandvars(os.path.expanduser(f)))
+        if p.is_absolute():
+            return p
+        raise ToolError(f"저장할 폴더 '{folder}'를 알 수 없습니다. '바탕화면' · '문서' · '다운로드' 또는 전체 경로를 주세요.")
+
+    def _where(self, path: Path) -> str:
+        """말로 읽기 좋은 저장 위치 — '문서의 ULTRON 폴더', '바탕화면' (전체 경로를 소리 내어 읽지 않게)."""
+        for name, label in (("바탕화면", "바탕화면"), ("다운로드", "다운로드 폴더"), ("문서", "문서")):
+            base = winutil.known_folder(name)
+            if not base:
+                continue
+            try:
+                rel = Path(path).parent.relative_to(base)
+            except ValueError:
+                continue
+            return label if not rel.parts else f"{label}의 {' › '.join(rel.parts)} 폴더"
+        return f"'{Path(path).parent.name}' 폴더"
+
+    def _make_file(self, build, name: str, ext: str, folder: str, overwrite: bool, open_after: bool):
+        """build(경로) 로 파일을 만들고 연다 → (경로, 정보, 덧붙일 말).
+        같은 이름의 파일이 열려 있어 덮어쓰지 못하면 새 이름으로 저장한다."""
+        from . import office
+        place = self._work_folder(folder)
+        note = ""
+        try:
+            path = office.target(place, name, ext, bool(overwrite))
+            try:
+                info = build(path)
+            except PermissionError:
+                if not overwrite:
+                    raise
+                path = office.target(place, name, ext, False)
+                info = build(path)
+                note = " 원래 파일이 열려 있어 새 이름으로 저장했다."
+        except ImportError as e:
+            lib = {"pptx": "python-pptx", "docx": "python-docx", "xlsxwriter": "XlsxWriter"}.get(e.name or "", e.name)
+            raise ToolError(f"파일을 만드는 라이브러리({lib})가 설치되어 있지 않습니다. setup.bat 를 다시 실행해 설치하세요.")
+        except PermissionError as e:
+            raise ToolError(f"'{place}' 에 저장하지 못했습니다 (권한이 없거나 파일이 열려 있음): {e}")
+        except ValueError as e:
+            raise ToolError(str(e))
+        if open_after is not False:
+            try:
+                os.startfile(str(path))
+                note += " 파일을 열었다."
+            except (OSError, AttributeError):
+                note += " 파일을 열 프로그램을 찾지 못해 열지는 못했다."
+        log.info("작업 결과물 저장: %s %s", path, info)
+        return path, info, note
+
+    def t_make_presentation(self, title: str, slides: list, subtitle: str = "", sources: list | None = None,
+                            theme: str = "light", agenda: bool | None = None, filename: str = "", folder: str = "",
+                            overwrite: bool = False, open: bool = True) -> str:
+        from . import office
+        path, info, note = self._make_file(
+            lambda p: office.build_presentation(p, title, slides, subtitle, sources, theme, agenda),
+            filename or title, ".pptx", folder, overwrite, open)
+        talk = f", 발표 대본 {info['notes']}장" if info["notes"] else ""
+        split = f", 글이 넘친 {info['split']}곳은 다음 장으로 나눔" if info["split"] else ""
+        return (f"발표 자료를 만들었다 — 표지 포함 {info['slides']}장{talk}{split}. 저장한 곳: {self._where(path)} "
+                f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
+
+    def t_make_document(self, title: str, sections: list, subtitle: str = "", sources: list | None = None,
+                        filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True) -> str:
+        from . import office
+        path, info, note = self._make_file(
+            lambda p: office.build_document(p, title, sections, subtitle, sources),
+            filename or title, ".docx", folder, overwrite, open)
+        tables = f", 표 {info['tables']}개" if info["tables"] else ""
+        return (f"문서를 만들었다 — 장 {info['sections']}개{tables}. 저장한 곳: {self._where(path)} "
+                f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
+
+    def t_make_spreadsheet(self, sheets: list, filename: str = "", folder: str = "", overwrite: bool = False,
+                           open: bool = True) -> str:
+        from . import office
+        first = sheets[0] if isinstance(sheets, list) and sheets and isinstance(sheets[0], dict) else {}
+        name = filename or first.get("title") or first.get("name") or "표"
+        path, info, note = self._make_file(lambda p: office.build_spreadsheet(p, sheets), name, ".xlsx", folder,
+                                           overwrite, open)
+        return (f"엑셀 파일을 만들었다 — 시트 {info['sheets']}개, {info['rows']}행. 저장한 곳: {self._where(path)} "
+                f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
 
     def t_end_process(self, name: str) -> str:
         """프로그램의 프로세스를 모두 강제 종료 (Windows 핵심 프로세스 · 울트론 자신은 제외)."""
