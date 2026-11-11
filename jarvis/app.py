@@ -292,7 +292,7 @@ class Jarvis(QObject):
         self.speaker.started.connect(self._on_speak_start)
         self.speaker.finished.connect(self._on_speak_end)
         self.tts = TTS(self.speaker, lambda: (self.cfg["tts_voice"], self.cfg["tts_rate"], self.cfg["tts_pitch"] or "+0Hz",
-                                             0.72 if self.cfg["voice_fx"] else 0.0), self)
+                                             0.6 if self.cfg["voice_fx"] else 0.0), self)
         self.chime = self._make_chime()
 
         # ---- 손 + 두뇌 ----

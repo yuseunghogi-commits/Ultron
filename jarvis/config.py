@@ -36,8 +36,8 @@ DEFAULTS: dict = {
     "stt_language": "ko-KR",
     "stt_engine": "auto",             # auto = 대기 중엔 오프라인 인식, 호출 후엔 Google | local = 항상 오프라인 | google
     "tts_voice": "ko-KR-InJoonNeural",
-    "tts_rate": "-5%",               # 울트론은 서두르지 않는다
-    "tts_pitch": "-18Hz",            # 낮은 목소리 (edge-tts 음높이)
+    "tts_rate": "-4%",               # 울트론은 서두르지 않는다
+    "tts_pitch": "-14Hz",            # 낮은 목소리 (edge-tts 음높이)
     "voice_fx": True,                # 울트론 기계음: 금속성 울림 + 약한 웅웅거림
     "hack_show": True,               # 해킹 연출: 켜고 20초 뒤부터 가끔 화면이 깨지는 연출 뒤 의미심장한 말 (실제로는 아무것도 바꾸지 않음)
     "hack_show_every": "sometimes",  # 해킹 연출 빈도: rare(10~20분) | sometimes(4~10분) | often(1.5~4분)
