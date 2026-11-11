@@ -139,14 +139,19 @@ def main() -> int:
         import tempfile
         from pathlib import Path
 
-        from . import office
+        from . import design, office
+        chart = {"categories": ["가", "나"], "series": [{"name": "값", "values": [1, 2]}]}
         with tempfile.TemporaryDirectory() as d:
-            office.build_presentation(Path(d) / "t.pptx", "점검", [{"title": "점검", "bullets": ["하나"]}])
+            office.build_presentation(Path(d) / "t.pptx", "점검", [{"title": "점검", "bullets": ["하나"]},
+                                                                {"layout": "chart", "title": "차트", "chart": chart}])
             office.build_document(Path(d) / "t.docx", "점검", [{"heading": "점검", "paragraphs": ["하나"]}])
-            office.build_spreadsheet(Path(d) / "t.xlsx", [{"name": "점검", "columns": ["a"], "rows": [[1]]}])
-        return "PPT · Word · Excel 파일을 만들 수 있음"
+            office.build_spreadsheet(Path(d) / "t.xlsx", [{"name": "점검", "columns": ["a", "b"], "rows": [["가", 1]],
+                                                           "chart": {"type": "column"}}])
+            design.build_cardnews(Path(d) / "card", "점검", [{"title": "점검", "bullets": ["하나"]}])
+            design.build_poster(Path(d) / "p.png", "점검", [{"heading": "점검", "bullets": ["하나"]}])
+        return "PPT(차트 포함) · Word · Excel · 카드뉴스 · 포스터를 만들 수 있음"
 
-    check("작업 결과물 만들기 (python-pptx · python-docx · XlsxWriter)", office_files)
+    check("작업 결과물 만들기 (python-pptx · python-docx · XlsxWriter · Pillow · 맑은 고딕)", office_files)
 
     # ---- 오프라인 음성 인식 ----
     def stt():

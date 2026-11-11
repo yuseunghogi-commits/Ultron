@@ -44,8 +44,25 @@ def target(folder: Path, name: str, ext: str, overwrite: bool = False) -> Path:
     raise ValueError("같은 이름의 파일이 너무 많습니다. 다른 이름을 주세요.")
 
 
+def pretty_ref(ref: str) -> str:
+    """출처 한 줄을 읽기 좋게: 주소 속 '%EA%B8…' 같은 부호를 한글로 푼다."""
+    import urllib.parse
+    return re.sub(r"https?://\S+", lambda m: urllib.parse.unquote(m.group(0)), ref)
+
+
 def _text(v) -> str:
     return re.sub(r"\s+", " ", str(v if v is not None else "")).strip()
+
+
+def _listish(v) -> list:
+    """목록으로 읽는다: ['1월', '2월'] 그대로 · '1월, 2월, 3월' 처럼 글자로 와도 나눈다 (쉼표 · 줄바꿈 · |)."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [x.strip() for x in re.split(r"[,\n|]", v) if x.strip()]
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    return [v]
 
 
 def _strings(v) -> list[str]:
@@ -97,9 +114,32 @@ THEMES = {
     "warm": Theme("FFF8F1", "FCEBDA", "3A2417", "4B3425", "8B705E", "E5702F", "F7CFAE", "FFFFFF"),
     "green": Theme("F4FAF6", "E1F0E6", "16392A", "23402F", "5C786A", "2E9D63", "BFE3CD", "FFFFFF"),
 }
-LAYOUTS = ("bullets", "section", "two_column", "stats", "quote", "closing")
+LAYOUTS = ("bullets", "section", "two_column", "stats", "chart", "quote", "closing")
+CHARTS = ("column", "bar", "line", "pie")
 W, H, M = 13.333, 7.5, 0.8            # 슬라이드 크기 · 좌우 여백 (인치)
 BODY_SIZES = (26, 24, 22, 20, 18, 16)
+
+
+def number(v) -> float | None:
+    """숫자로 읽는다: 73 · '73%' · '1,200명' · '3.7mm' · '-2.5' → 73 · 73 · 1200 · 3.7 · -2.5. 숫자가 아니면 None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    m = re.search(r"-?\d[\d,]*(?:\.\d+)?", str(v or ""))
+    return float(m.group(0).replace(",", "")) if m else None
+
+
+def _hexmix(a: str, b: str, t: float) -> str:
+    ca = [int(a[i:i + 2], 16) for i in (0, 2, 4)]
+    cb = [int(b[i:i + 2], 16) for i in (0, 2, 4)]
+    return "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(ca, cb))
+
+
+def palette(t: "Theme") -> list[str]:
+    """차트 색 (테마에서): 강조색부터, 서로 잘 구분되게."""
+    return [t.accent, _hexmix(t.accent, t.title, 0.55), t.muted, _hexmix(t.accent, t.bg, 0.45), t.title,
+            _hexmix(t.muted, t.bg, 0.45)]
 
 
 def parse_bullets(lines) -> list[tuple[str, int]]:
@@ -391,6 +431,109 @@ class _Deck:
             self.text(s, x + 0.25, top + 2.25, cw - 0.5, 1.5, label, lsize, self.t.text, align="center")
         self.footer(s)
 
+    def chart(self, title: str, spec: dict, items: list[tuple[str, int]], notes: str) -> bool:
+        """진짜 차트 (파워포인트에서 바로 고칠 수 있음). 데이터가 차트로 그릴 수 없으면 False (→ 목록 장으로)."""
+        from pptx.chart.data import CategoryChartData
+        from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_MARKER_STYLE
+        from pptx.util import Inches, Pt
+        kind = str(spec.get("type") or "column").strip().lower()
+        kind = {"막대": "column", "가로막대": "bar", "꺾은선": "line", "선": "line", "원": "pie", "파이": "pie"}.get(kind, kind)
+        if kind not in CHARTS:
+            kind = "column"
+        cats = [_text(c) for c in _listish(spec.get("categories"))][:24]
+        series = []
+        for i, ser in enumerate([x for x in _listish(spec.get("series")) if isinstance(x, dict)][:6]):
+            vals = [number(v) for v in _listish(ser.get("values"))][:len(cats)]
+            if any(v is not None for v in vals):
+                series.append((_text(ser.get("name")) or f"값 {i + 1}", vals + [None] * (len(cats) - len(vals))))
+        if not cats or not series:
+            return False
+        if kind == "pie":
+            series = series[:1]
+        data = CategoryChartData()
+        data.categories = cats
+        for name, vals in series:
+            data.add_series(name, vals)
+        s = self.slide(notes)
+        self.header(s, title)
+        width = (W - 2 * M) * (0.64 if items else 1.0)
+        top, height = 1.85, H - 1.85 - 0.75
+        xl = {"column": XL_CHART_TYPE.COLUMN_CLUSTERED, "bar": XL_CHART_TYPE.BAR_CLUSTERED,
+              "line": XL_CHART_TYPE.LINE_MARKERS, "pie": XL_CHART_TYPE.PIE}[kind]
+        ch = s.shapes.add_chart(xl, Inches(M), Inches(top), Inches(width), Inches(height), data).chart
+        t, colors = self.t, palette(self.t)
+        ch.has_title = False                    # 장 제목이 위에 있다
+        ch.font.size, ch.font.name = Pt(14), FONT
+        ch.font.color.rgb = self.rgb(t.text)
+        unit = _text(spec.get("unit")).replace('"', "")
+        plot = ch.plots[0]
+        plot.has_data_labels = True
+        dl = plot.data_labels
+        dl.number_format, dl.number_format_is_linked = (f'General"{unit}"' if unit else "General"), False
+        dl.font.size = Pt(13)
+        dl.font.color.rgb = self.rgb(t.text)
+        if kind == "pie":
+            dl.position = XL_LABEL_POSITION.OUTSIDE_END
+            for i, pt in enumerate(plot.series[0].points):
+                pt.format.fill.solid()
+                pt.format.fill.fore_color.rgb = self.rgb(colors[i % len(colors)] if i < len(colors) else
+                                                         _hexmix(colors[i % len(colors)], t.bg, 0.3))
+        else:
+            dl.position = XL_LABEL_POSITION.ABOVE if kind == "line" else XL_LABEL_POSITION.OUTSIDE_END
+            if kind != "line":
+                plot.gap_width = 70
+            for i, ser in enumerate(plot.series):
+                c = self.rgb(colors[i % len(colors)])
+                if kind == "line":
+                    ser.smooth = False
+                    ser.format.line.color.rgb = c
+                    ser.format.line.width = Pt(3)
+                    ser.marker.style, ser.marker.size = XL_MARKER_STYLE.CIRCLE, 8
+                    ser.marker.format.fill.solid()
+                    ser.marker.format.fill.fore_color.rgb = c
+                    ser.marker.format.line.color.rgb = c
+                else:
+                    ser.format.fill.solid()
+                    ser.format.fill.fore_color.rgb = c
+            for axis in (ch.category_axis, ch.value_axis):
+                axis.tick_labels.font.size = Pt(13)
+                axis.tick_labels.font.color.rgb = self.rgb(t.muted)
+                axis.format.line.color.rgb = self.rgb(t.soft)
+            ch.value_axis.has_major_gridlines = True
+            ch.value_axis.major_gridlines.format.line.color.rgb = self.rgb(t.soft)
+            ch.value_axis.format.line.fill.background()
+        ch.has_legend = kind == "pie" or len(series) > 1
+        if ch.has_legend:
+            ch.legend.position = XL_LEGEND_POSITION.RIGHT if kind == "pie" else XL_LEGEND_POSITION.BOTTOM
+            ch.legend.include_in_layout = False
+            ch.legend.font.size = Pt(13)
+            ch.legend.font.color.rgb = self.rgb(t.text)
+        self._chart_fonts(ch)
+        if items:
+            bx = M + width + 0.35
+            bw = W - M - bx
+            size = fit_size(items, bw, height - 0.3, (22, 20, 18, 16, 14)) or 14
+            self.bullets(s, bx, top + 0.3, bw, height - 0.3, items, size)
+        self.footer(s)
+        return True
+
+    def _chart_fonts(self, ch) -> None:
+        """차트 안의 모든 글자에 한글 글꼴(동아시아 글꼴 칸)을 넣는다 — 순서: latin → ea → cs."""
+        from pptx.oxml.ns import qn
+        after = {qn(t) for t in ("a:cs", "a:sym", "a:hlinkClick", "a:hlinkMouseOver", "a:rtl", "a:extLst")}
+        for rpr in list(ch._chartSpace.iter(qn("a:defRPr"))) + list(ch._chartSpace.iter(qn("a:rPr"))):
+            latin = rpr.find(qn("a:latin"))
+            if latin is None:
+                latin = rpr.makeelement(qn("a:latin"), {})
+                nxt = next((c for c in rpr if c.tag in after or c.tag == qn("a:ea")), None)
+                nxt.addprevious(latin) if nxt is not None else rpr.append(latin)
+            latin.set("typeface", FONT)
+            ea = rpr.find(qn("a:ea"))
+            if ea is None:
+                ea = rpr.makeelement(qn("a:ea"), {})
+                latin.addnext(ea)
+            ea.set("typeface", FONT)
+
     def quote(self, title: str, quote: str, by: str, notes: str) -> None:
         s = self.slide(notes)
         t = self.t
@@ -454,18 +597,28 @@ def build_presentation(path: Path, title: str, slides: list, subtitle: str = "",
         sections = [name for lay, name, _ in clean if lay == "section"]
         deck.agenda(sections or [name for lay, name, _ in clean if lay not in ("closing", "quote")])
     split = 0
-    number = 0
+    part = 0
     width, height = W - 2 * M, H - 2.0 - 0.75
     for layout, name, raw in clean:
         notes = str(raw.get("notes") or "")
         items = parse_bullets(raw.get("bullets"))
         if layout == "section":
-            number += 1
-            deck.section(number, name, items, notes)
+            part += 1
+            deck.section(part, name, items, notes)
         elif layout == "two_column":
-            deck.two_column(name, raw.get("left") or {}, raw.get("right") or {}, notes)
+            side = [x if isinstance(x, dict) else {"heading": "", "bullets": _strings(x)} for x in (raw.get("left"), raw.get("right"))]
+            deck.two_column(name, side[0] or {}, side[1] or {}, notes)
         elif layout == "stats":
-            deck.stats(name, [x for x in (raw.get("stats") or []) if isinstance(x, dict)], notes)
+            stats = [x if isinstance(x, dict) else dict(zip(("value", "label"), (re.split(r"\s*\|\s*|\s+[—–-]\s+|\s*:\s+", str(x), maxsplit=1) + [""])[:2]))
+                     for x in (raw.get("stats") or [])]
+            deck.stats(name, stats, notes)
+        elif layout == "chart":
+            spec = raw.get("chart") if isinstance(raw.get("chart"), dict) else raw
+            if not deck.chart(name, spec, items, notes):          # 차트로 그릴 수 없는 데이터 → 목록 장 (실패시키지 않는다)
+                rows = [(f"{_text(c)}: {', '.join(_text(v) for v in vals)}", 0)
+                        for c, *vals in zip(_listish(spec.get("categories")), *[_listish(x.get("values")) for x in
+                                                                               _listish(spec.get("series")) if isinstance(x, dict)])]
+                deck.bullet_slide(name, items + rows or [("(차트 데이터 없음)", 0)], notes)
         elif layout == "quote":
             deck.quote(name, _text(raw.get("quote")) or name, _text(raw.get("by")), notes)
         elif layout == "closing":
@@ -477,7 +630,7 @@ def build_presentation(path: Path, title: str, slides: list, subtitle: str = "",
                 deck.bullet_slide(name if k == 0 else f"{name} (계속)", part, notes if k == 0 else "")
         else:
             deck.bullet_slide(name, items, notes)
-    refs = [_text(r) for r in _strings(sources)]
+    refs = [pretty_ref(_text(r)) for r in _strings(sources)]
     if refs:
         deck.sources(refs)
     deck.prs.core_properties.title = title
@@ -583,7 +736,7 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
                 cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 cap.runs[0].font.size = Pt(9)
             tables += 1
-    refs = [_text(r) for r in _strings(sources)]
+    refs = [pretty_ref(_text(r)) for r in _strings(sources)]
     if refs:
         doc.add_heading("참고 자료", level=1)
         for r in refs:
@@ -612,6 +765,44 @@ def _sheet_name(name: str, i: int, used: set) -> str:
         k += 1
     used.add(s.lower())
     return s
+
+
+_EXCEL_COLORS = ["#2F5BEA", "#E5702F", "#2E9D63", "#9B59B6", "#FF4D5E", "#6B7487"]
+
+
+def _excel_chart(wb, ws, spec: dict, cols: list[str], rows: list, r0: int, title: str) -> None:
+    """시트의 표로 엑셀 차트를 만들어 표 오른쪽에 붙인다. category_column: 이름 칸 (기본 0),
+    value_columns: 값 칸들 (기본: 숫자가 든 나머지 칸 전부)."""
+    kind = str(spec.get("type") or "column").lower()
+    kind = kind if kind in CHARTS else "column"
+    cat = int(spec.get("category_column") or 0) if str(spec.get("category_column") or 0).isdigit() else 0
+    cat = min(max(cat, 0), len(cols) - 1)
+    vals = [int(c) for c in (spec.get("value_columns") or []) if str(c).isdigit() and int(c) < len(cols) and int(c) != cat]
+    if not vals:
+        vals = [j for j in range(len(cols)) if j != cat and any(number(r[j]) is not None for r in rows if j < len(r)
+                                                                   and not (isinstance(r[j], str) and r[j].startswith("=")))]
+    if not vals:
+        return
+    ch = wb.add_chart({"type": kind})
+    last = r0 + len(rows)
+    for i, j in enumerate(vals[:1] if kind == "pie" else vals[:6]):
+        ser = {"name": [ws.name, r0, j], "categories": [ws.name, r0 + 1, cat, last, cat],
+               "values": [ws.name, r0 + 1, j, last, j], "data_labels": {"value": True}}
+        if kind == "pie":
+            ser["points"] = [{"fill": {"color": _EXCEL_COLORS[k % len(_EXCEL_COLORS)]}} for k in range(len(rows))]
+        elif kind == "line":
+            ser["line"] = {"color": _EXCEL_COLORS[i % 6], "width": 2.5}
+            ser["marker"] = {"type": "circle", "size": 7, "fill": {"color": _EXCEL_COLORS[i % 6]}, "border": {"none": True}}
+        else:
+            ser["fill"] = {"color": _EXCEL_COLORS[i % 6]}
+        ch.add_series(ser)
+    font = {"name": FONT}
+    ch.set_title({"name": _text(spec.get("title")) or title or cols[vals[0]], "name_font": {**font, "size": 13}})
+    ch.set_legend({"position": "bottom", "font": font} if kind != "pie" and len(vals) > 1 or kind == "pie" else {"none": True})
+    if kind != "pie":
+        ch.set_x_axis({"num_font": font})
+        ch.set_y_axis({"num_font": font, "major_gridlines": {"visible": True, "line": {"color": "#E3E7EF"}}})
+    ws.insert_chart(r0, len(cols) + 1, ch, {"x_scale": 1.35, "y_scale": 1.25})
 
 
 def build_spreadsheet(path: Path, sheets: list) -> dict:
@@ -671,6 +862,9 @@ def build_spreadsheet(path: Path, sheets: list) -> dict:
         ws.freeze_panes(r0 + 1, 0)
         if rows:
             ws.autofilter(r0, 0, r0 + len(rows), len(cols) - 1)
+        spec = sh.get("chart")
+        if isinstance(spec, dict) and rows:
+            _excel_chart(wb, ws, spec, cols, rows, r0, _text(sh.get("title")))
         total += len(rows)
     try:
         wb.close()

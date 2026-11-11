@@ -1,4 +1,5 @@
 """작업 결과물 — 자료조사 PPT · 보고서 · 엑셀 (office.py · tools.py 의 make_* · brain.py 의 작업 요청 처리)."""
+import re
 import threading
 import types
 import zipfile
@@ -176,6 +177,85 @@ def test_file_names_are_safe_and_never_overwrite_unless_asked(tmp_path):
     assert office.target(tmp_path / "새폴더", "발표", ".pptx", overwrite=True) == first
 
 
+# ---------------------------------------------------------------- 차트 · 느슨한 입력
+def chart_of(slide):
+    return next(sh for sh in slide.shapes if sh.has_chart)
+
+
+def test_chart_slides_are_real_editable_charts_with_korean_fonts(tmp_path):
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.oxml.ns import qn
+    path = tmp_path / "chart.pptx"
+    office.build_presentation(path, "차트", [
+        {"layout": "chart", "title": "월별 기온", "bullets": ["봄이 빨라졌다"],
+         "chart": {"type": "line", "categories": ["1월", "2월", "3월"], "unit": "℃",
+                   "series": [{"name": "2025", "values": [-2.1, "0.5℃", 6]}, {"name": "2026", "values": [-1, 1.2, 7.5]}]}},
+        {"layout": "chart", "title": "찬반", "chart": {"type": "원", "categories": "찬성, 반대, 모름", "unit": "%",
+                                                     "series": [{"name": "비율", "values": "62, 30, 8"}, {"name": "버림", "values": [1, 2, 3]}]}},
+        {"layout": "chart", "title": "학년별 참가", "categories": ["1학년", "2학년"],             # chart 를 빼먹고 바로 줘도 된다
+         "series": [{"name": "참가", "values": [120, 95]}]},
+        {"layout": "chart", "title": "숫자 없음", "chart": {"categories": ["가", "나"], "series": [{"name": "x", "values": ["많음", "적음"]}]}},
+    ], agenda=False)
+    prs = pptx.Presentation(path)
+    line_shape = chart_of(prs.slides[1])
+    line, pie, col = line_shape.chart, chart_of(prs.slides[2]).chart, chart_of(prs.slides[3]).chart
+    assert line.chart_type == XL_CHART_TYPE.LINE_MARKERS and [x.name for x in line.plots[0].series] == ["2025", "2026"]
+    assert list(line.plots[0].categories) == ["1월", "2월", "3월"] and list(line.plots[0].series[0].values) == [-2.1, 0.5, 6.0]
+    assert line.has_legend and "봄이 빨라졌다" in texts(prs.slides[1])                      # 차트 옆 설명
+    assert line_shape.left + line_shape.width <= prs.slide_width and line_shape.top + line_shape.height <= prs.slide_height
+    assert pie.chart_type == XL_CHART_TYPE.PIE and len(pie.plots[0].series) == 1           # 원 차트는 한 묶음만
+    assert list(pie.plots[0].series[0].values) == [62.0, 30.0, 8.0] and pie.plots[0].data_labels.number_format == 'General"%"'
+    assert col.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED and list(col.plots[0].series[0].values) == [120.0, 95.0]
+    fallback = prs.slides[4]
+    assert not any(sh.has_chart for sh in fallback.shapes) and "가: 많음" in texts(fallback)    # 그릴 수 없으면 목록으로
+    for ch in (line, pie, col):
+        runs = list(ch._chartSpace.iter(qn("a:defRPr"))) + list(ch._chartSpace.iter(qn("a:rPr")))
+        assert runs
+        for rpr in runs:
+            fonts = [c.tag for c in rpr if c.tag in (qn("a:latin"), qn("a:ea"), qn("a:cs"))]
+            assert fonts[:2] == [qn("a:latin"), qn("a:ea")] and rpr.find(qn("a:ea")).get("typeface") == office.FONT
+
+
+def test_spreadsheet_charts_use_the_table_and_skip_sheets_without_numbers(tmp_path):
+    path = tmp_path / "성적.xlsx"
+    office.build_spreadsheet(path, [
+        {"name": "성적", "title": "1학기 성적", "columns": ["과목", "중간", "기말", "메모"],
+         "rows": [["국어", 85, 90, "좋음"], ["수학", 72, 88, ""], ["영어", 91, 94, ""]], "chart": {"type": "column"}},
+        {"name": "비율", "columns": ["항목", "값"], "rows": [["찬성", 62], ["반대", 38]], "chart": {"type": "pie", "title": "찬반"}},
+        {"name": "글자뿐", "columns": ["이름"], "rows": [["가"]], "chart": {"type": "line"}}])
+    with zipfile.ZipFile(path) as z:
+        charts = sorted(n for n in z.namelist() if re.fullmatch(r"xl/charts/chart\d+\.xml", n))
+        assert len(charts) == 2                                              # 숫자가 없는 시트에는 넣지 않는다 (실패도 아니다)
+        bar, pie = (z.read(c).decode() for c in charts)
+    assert "<c:barChart>" in bar and bar.count("<c:ser>") == 2 and "메모" not in bar
+    assert "$A$4:$A$6" in bar and "$B$4:$B$6" in bar and "$C$4:$C$6" in bar     # 제목 줄 · 머리글 아래의 데이터
+    assert "<c:pieChart>" in pie and pie.count("<c:ser>") == 1 and "찬반" in pie
+
+
+def test_numbers_lists_and_sources_are_read_leniently():
+    assert [office.number(v) for v in (73, "73%", "1,200명", "3.7mm", "-2.5", "약 40", "없음", None, True)] == \
+        [73, 73, 1200, 3.7, -2.5, 40, None, None, None]
+    assert office._listish("1월, 2월\n3월 | 4월") == ["1월", "2월", "3월", "4월"]
+    assert office._listish(None) == [] and office._listish(5) == [5] and office._listish(("a", "b")) == ["a", "b"]
+    assert office.pretty_ref("위키백과 — https://ko.wikipedia.org/wiki/%EA%B8%B0%ED%9B%84") == \
+        "위키백과 — https://ko.wikipedia.org/wiki/기후"
+
+
+def test_stats_and_columns_given_as_plain_text_still_make_good_slides(tmp_path):
+    path = tmp_path / "lenient.pptx"
+    office.build_presentation(path, "느슨한 입력", [
+        {"layout": "stats", "title": "숫자", "stats": ["73% | 찬성", "1,200명 — 참가자", "3.7℃: 기온 상승",
+                                                     {"value": "2배", "label": "폭염"}]},
+        {"layout": "two_column", "title": "비교", "left": ["장점 하나", "장점 둘"], "right": "단점 하나\n단점 둘"},
+    ], agenda=False)
+    prs = pptx.Presentation(path)
+    boxes = [sh.text_frame.text for sh in prs.slides[1].shapes if sh.has_text_frame]
+    for value, label in (("73%", "찬성"), ("1,200명", "참가자"), ("3.7℃", "기온 상승"), ("2배", "폭염")):
+        assert value in boxes and label in boxes                                  # 숫자와 설명을 각각의 칸에
+    two = texts(prs.slides[2])
+    assert all(x in two for x in ("장점 하나", "장점 둘", "단점 하나", "단점 둘"))
+
+
 # ---------------------------------------------------------------- 도구 (tools.py)
 @pytest.fixture
 def pc(tmp_path, monkeypatch):
@@ -297,15 +377,23 @@ def brain(**cfg):
 
 
 WORK = ["인공지능에 대해 자료조사해서 PPT 만들어 줘", "파워포인트로 기후 변화 발표 자료 만들어 줘", "환경오염 보고서 써 줘",
-        "엑셀로 이번 주 시간표 만들어 줘", "미리캔버스에서 포스터 만들어 줘", "미리캠퍼스로 카드뉴스 만들어 줘",
-        "한국 전쟁 조사해서 워드로 정리해 줘", "피피티 10장 만들어줘 주제는 우주", "캔바로 발표 슬라이드 꾸며 줘"]
+        "엑셀로 이번 주 시간표 만들어 줘", "한국 전쟁 조사해서 워드로 정리해 줘", "피피티 10장 만들어줘 주제는 우주",
+        "분리배출 카드뉴스 만들어 줘", "축제 홍보 포스터 만들어 줘", "성적 차트 그려서 엑셀로 줘"]
+DESIGN = ["미리캔버스에서 포스터 만들어 줘", "미리캠퍼스로 카드뉴스 만들어 줘", "캔바로 발표 슬라이드 꾸며 줘"]
 EVERYDAY = ["오늘 날씨 어때", "크롬 열어 줘", "볼륨 올려 줘", "농담 하나 해 줘", "이 화면 요약해 줘"]
 
 
 @pytest.mark.parametrize("text", WORK)
-def test_work_requests_get_the_stronger_model_deeper_thought_and_more_time(text):
+def test_file_making_work_stays_on_the_fast_model_and_the_users_effort(text):
+    """실제로 재 보니 Sonnet · 깊은 생각은 느려지기만 했다 → 파일을 만드는 작업은 평소의 빠른 모델 그대로."""
     b = brain()
-    assert bm.WORK_TASK.search(text) and b._pro_model(text) == "sonnet" and b._effort_for(text) == "medium"
+    assert bm.WORK_TASK.search(text) and not bm.DESIGN_SITE.search(text)
+    assert b._pro_model(text) == "haiku" and b._effort_for(text) == "low"
+
+
+@pytest.mark.parametrize("text", DESIGN)
+def test_operating_a_design_site_uses_the_screen_model(text):
+    assert bm.WORK_TASK.search(text) and brain()._pro_model(text) == "sonnet"
 
 
 @pytest.mark.parametrize("text", EVERYDAY)
@@ -314,8 +402,47 @@ def test_everyday_requests_are_unchanged(text):
     assert not bm.WORK_TASK.search(text) and b._effort_for(text) == "low"
 
 
-def test_effort_never_goes_down_from_the_users_setting():
+def test_effort_follows_the_users_setting():
     assert brain(effort="high")._effort_for(WORK[0]) == "high" and brain(effort="medium")._effort_for(WORK[0]) == "medium"
+
+
+def test_work_requests_get_an_instant_spoken_answer_before_claude_starts():
+    b = brain()
+    heard = []
+
+    def slow_ai(text, cancel, on_text=None):
+        heard.append("(Claude 시작)")
+        on_text("발표 자료를 만들었다.")
+        return "발표 자료를 만들었다."
+
+    b._handle_ai = slow_ai
+    b.local.try_handle = lambda text, fallback=True: None
+    assert b.handle(WORK[0], threading.Event(), on_text=heard.append) == "발표 자료를 만들었다."
+    assert heard[0] == "알았다. 자료를 모아 바로 만들지.\n" and heard[1] == "(Claude 시작)"     # 자료조사 → 그에 맞는 말
+    heard.clear()
+    b.handle(WORK[2], threading.Event(), on_text=heard.append)
+    assert heard[0].strip() in bm.WORK_ACKS
+    heard.clear()
+    b.handle("피보나치 수열 설명해 줘", threading.Event(), on_text=heard.append)
+    assert heard[0] == "(Claude 시작)"                                         # 평소 질문에는 덧붙이지 않는다
+
+
+def test_instant_answer_only_when_something_is_being_made():
+    b = brain()
+    heard = []
+    b._handle_ai = lambda text, cancel, on_text=None: "답"
+    b.local.try_handle = lambda text, fallback=True: None
+    for text in ("과제 언제까지야", "영화 포스터 보여 줘", "이 그래프 뭐야"):
+        heard.clear()
+        b.handle(text, threading.Event(), on_text=heard.append)
+        assert heard == [], text
+
+
+def test_writing_words_in_a_work_request_do_not_mean_operating_the_screen():
+    b = brain()
+    assert b._pro_model("환경오염 보고서 써 줘") == "haiku" and b._pro_model("독후감 작성해서 워드로 줘") == "haiku"
+    assert b._pro_model("이 화면 보고 보고서 써 줘") == "sonnet"                    # 화면을 보라는 말이 있으면 그대로
+    assert b._pro_model("메모장에 써 줘") == "sonnet"                              # 작업이 아니면 화면에 글을 쓰는 일
 
 
 def test_local_ai_never_turns_a_work_request_into_opening_an_app():
@@ -347,10 +474,11 @@ def test_api_mode_can_read_web_pages_and_search_more_but_haiku_only_searches():
     assert {"make_presentation", "make_document", "make_spreadsheet"} <= {t["name"] for t in b.mcp_tools()}
 
 
-def test_system_prompt_explains_how_to_finish_work_tasks():
+def test_system_prompt_explains_how_to_finish_work_tasks_fast():
     text = brain()._build_system()
-    assert "# 작업" in text and "make_presentation" in text and "web_fetch" in text and "미리캔버스" in text
-    assert "overwrite=true" in text and "결제는 사용자가 시키지 않았으면" in text
+    assert "# 작업" in text and "make_presentation" in text and "make_cardnews" in text and "make_poster" in text
+    assert "빠른 것이 가장 중요" in text and "반드시 web_search" in text and "검색하지 말고 바로" in text
+    assert "시작한다는 말은 하지 마세요" in text and "overwrite=true" in text and "결제는 사용자가 시키지 않았으면" in text
 
 
 class Block(types.SimpleNamespace):
@@ -369,7 +497,7 @@ class FakeClient:
         return types.SimpleNamespace(content=self.content, stop_reason="end_turn")
 
 
-def test_api_mode_thinks_deeper_for_work_and_shows_page_reading(monkeypatch):
+def test_api_mode_keeps_the_users_effort_and_shows_page_reading(monkeypatch):
     b = brain(brain="api")
     shown = []
     b.on_action = lambda aid, label, status, detail: shown.append(label)
@@ -378,7 +506,7 @@ def test_api_mode_thinks_deeper_for_work_and_shows_page_reading(monkeypatch):
     b._client_for = lambda key: client
     assert b._claude(WORK[0], "key", threading.Event()) == "발표 자료를 만들었다."
     b._claude("오늘 날씨 어때", "key", threading.Event())
-    assert [kw["output_config"]["effort"] for kw in client.sent] == ["medium", "low"]
+    assert [kw["output_config"]["effort"] for kw in client.sent] == ["low", "low"]
     assert client.sent[0]["max_tokens"] == 16000 and "웹 페이지 읽기 · https://a.kr" in shown
 
 
@@ -412,7 +540,7 @@ class FakeSession:
         return False
 
 
-def test_keep_alive_session_restarts_once_with_deeper_thought_for_work_then_stays(monkeypatch):
+def test_keep_alive_session_is_never_restarted_for_work_and_only_design_sites_switch_model(monkeypatch):
     FakeSession.made = []
     monkeypatch.setattr(bm, "ClaudeSession", FakeSession)
     monkeypatch.setattr(bm.Brain, "_mcp_config", lambda self: "mcp.json")
@@ -421,17 +549,16 @@ def test_keep_alive_session_restarts_once_with_deeper_thought_for_work_then_stay
     b.claude_exe = lambda: "claude"
     b._build_system = lambda chat=False: "system"
     b.tool_server = object()
-    b._claude_code("오늘 일정 알려 줘", threading.Event())
-    b._claude_code(WORK[0], threading.Event())
-    b._claude_code("고마워", threading.Event())
+    for text in ("오늘 일정 알려 줘", WORK[0], DESIGN[0], "고마워"):
+        b._claude_code(text, threading.Event())
     s = FakeSession.made[0]
-    assert len(FakeSession.made) == 1                                             # 같은 대화를 이어 간다
-    assert s.asked == [("haiku", "low", bm.CMD_TIMEOUT), ("sonnet", "medium", bm.WORK_TIMEOUT), ("haiku", "medium", bm.CMD_TIMEOUT)]
-    assert s.closed == [False]                    # 작업 요청 때 한 번만 껐다 켰다 (대화 번호는 남김 → --resume)
-    assert s.models == ["haiku"]                  # 작업이 끝난 뒤 평소 모델로는 켠 채로 바꾼다
+    assert len(FakeSession.made) == 1 and s.closed == []                          # 한 번도 껐다 켜지 않는다
+    assert [(e, t) for _, e, t in s.asked] == [("low", bm.CMD_TIMEOUT), ("low", bm.WORK_TIMEOUT),
+                                               ("low", bm.WORK_TIMEOUT), ("low", bm.CMD_TIMEOUT)]
+    assert s.models == ["sonnet", "haiku"]       # 디자인 사이트를 조작할 때만 화면용 모델로 (켠 채로) 바꿨다 돌아온다
 
 
-def test_one_shot_runs_pass_deeper_thought_and_longer_time_for_work():
+def test_one_shot_runs_give_work_more_time_on_the_fast_model():
     b = brain(pro_keep_alive=0)
     b.claude_exe = lambda: "claude"
     b._build_system = lambda: "system"
@@ -444,7 +571,7 @@ def test_one_shot_runs_pass_deeper_thought_and_longer_time_for_work():
     b._run_claude_code = run
     b._claude_code(WORK[2], threading.Event())
     b._claude_code("내일 날씨", threading.Event())
-    assert seen == [("sonnet", "medium", bm.WORK_TIMEOUT), ("haiku", "low", bm.CMD_TIMEOUT)]
+    assert seen == [("haiku", "low", bm.WORK_TIMEOUT), ("haiku", "low", bm.CMD_TIMEOUT)]
 
 
 # ---------------------------------------------------------------- 화면 밖으로 나가는 것 · 말로 읽는 답

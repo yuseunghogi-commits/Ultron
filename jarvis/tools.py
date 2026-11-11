@@ -317,9 +317,11 @@ class PCTools:
                   "subtitle": {"type": "string", "description": "cover subtitle, e.g. '3학년 2반 홍길동 · 2026.11.11' or a one-line summary"},
                   "slides": {"type": "array", "description": "content slides in order (cover, 목차 and 참고 자료 are added for you)",
                              "items": {"type": "object", "properties": {
-                                 "layout": {"type": "string", "enum": ["bullets", "section", "two_column", "stats", "quote", "closing"],
+                                 "layout": {"type": "string",
+                                            "enum": ["bullets", "section", "two_column", "stats", "chart", "quote", "closing"],
                                             "description": "bullets (default) · section (big numbered chapter divider) · two_column "
-                                                           "(compare two sides) · stats (2-4 key numbers) · quote · closing (last slide)"},
+                                                           "(compare two sides) · stats (2-4 key numbers) · chart (a real chart "
+                                                           "from data; bullets go beside it) · quote · closing (last slide)"},
                                  "title": {"type": "string"},
                                  "bullets": {"type": "array", "items": {"type": "string"},
                                              "description": "bullet lines; start a line with '- ' to make it a sub-point of the line "
@@ -332,9 +334,17 @@ class PCTools:
                                            "items": {"type": "object", "properties": {"value": {"type": "string", "description": "e.g. '73%'"},
                                                                                       "label": {"type": "string"}},
                                                      "required": ["value", "label"]}},
+                                 "chart": {"type": "object", "description": "chart layout: data for a real, editable chart",
+                                           "properties": {
+                                               "type": {"type": "string", "enum": ["column", "bar", "line", "pie"]},
+                                               "categories": {"type": "array", "items": {"type": "string"}},
+                                               "series": {"type": "array", "items": {"type": "object", "properties": {
+                                                   "name": {"type": "string"},
+                                                   "values": {"type": "array", "items": {"type": "number"}}}}},
+                                               "unit": {"type": "string", "description": "e.g. '%', '℃', '명'"}}},
                                  "quote": {"type": "string"},
                                  "by": {"type": "string", "description": "who said the quote"},
-                                 "notes": {"type": "string", "description": "speaker notes: what to say on this slide (2-4 sentences)"}},
+                                 "notes": {"type": "string", "description": "speaker notes: what to say on this slide (1-2 short sentences)"}},
                                  "required": ["title"]}},
                   "sources": {"type": "array", "items": {"type": "string"}, "description": "references actually used: 'title — URL'"},
                   "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green"], "description": "colors; default light"},
@@ -370,11 +380,52 @@ class PCTools:
                       "name": {"type": "string", "description": "sheet tab name"},
                       "title": {"type": "string", "description": "optional title row above the table"},
                       "columns": {"type": "array", "items": {"type": "string"}},
-                      "rows": {"type": "array", "items": {"type": "array", "items": {}}}},
+                      "rows": {"type": "array", "items": {"type": "array", "items": {}}},
+                      "chart": {"type": "object", "description": "optional chart beside the table",
+                                "properties": {"type": {"type": "string", "enum": ["column", "bar", "line", "pie"]},
+                                               "title": {"type": "string"},
+                                               "category_column": {"type": "integer", "description": "0-based label column (default 0)"},
+                                               "value_columns": {"type": "array", "items": {"type": "integer"},
+                                                                 "description": "0-based value columns (default: all numeric columns)"}}}},
                       "required": ["columns"]}},
                   "filename": s, "folder": s,
                   "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["sheets"]),
+            tool("make_cardnews",
+                 "Create card news (카드뉴스): square 1080x1080 images — a cover, one card per item and a closing card — saved "
+                 "as PNG files plus one PDF in a new folder, then open the folder. Use for 카드뉴스 / 인스타 카드 / SNS 홍보 "
+                 "requests instead of operating a design website (much faster and more reliable). Keep each card short: a "
+                 "title and 2-4 short lines.",
+                 {"title": {"type": "string", "description": "cover title (big text)"},
+                  "subtitle": {"type": "string", "description": "small tag on the cover, e.g. '환경 캠페인'"},
+                  "cards": {"type": "array", "description": "content cards, 3-8 recommended (max 12)",
+                            "items": {"type": "object", "properties": {
+                                "title": {"type": "string"},
+                                "bullets": {"type": "array", "items": {"type": "string"}},
+                                "highlight": {"type": "string", "description": "optional one-line key message in a box"}},
+                                "required": ["title"]}},
+                  "closing": {"type": "string", "description": "closing card: first line is the big message, later lines small text"},
+                  "sources": {"type": "array", "items": {"type": "string"}},
+                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green"]},
+                  "filename": s, "folder": s, "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
+                 ["title", "cards"]),
+            tool("make_poster",
+                 "Create a poster (포스터 · 홍보물 · 안내문 · 캠페인) as a portrait A4 (or A3) image plus a print-ready PDF and "
+                 "open it. Use instead of operating a design website. A colored header with the title, an optional slogan "
+                 "box, 2-4 sections of short bullet points and a footer.",
+                 {"title": s,
+                  "subtitle": {"type": "string"},
+                  "highlight": {"type": "string", "description": "slogan or key message shown in a box"},
+                  "sections": {"type": "array", "description": "2-4 recommended (max 6)",
+                               "items": {"type": "object", "properties": {
+                                   "heading": {"type": "string"},
+                                   "bullets": {"type": "array", "items": {"type": "string"}}}}},
+                  "footer": {"type": "string", "description": "e.g. organizer · date · place"},
+                  "sources": {"type": "array", "items": {"type": "string"}},
+                  "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green"]},
+                  "size": {"type": "string", "enum": ["a4", "a3"]},
+                  "filename": s, "folder": s, "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
+                 ["title", "sections"]),
         ]
 
     # ------------------------------------------------------------------ 표시용 라벨
@@ -427,6 +478,8 @@ class PCTools:
             "make_presentation": lambda: f"PPT 만들기 · {str(a.get('title', ''))[:30]}",
             "make_document": lambda: f"문서 만들기 · {str(a.get('title', ''))[:30]}",
             "make_spreadsheet": lambda: f"엑셀 만들기 · {str(a.get('filename') or '표')[:30]}",
+            "make_cardnews": lambda: f"카드뉴스 만들기 · {str(a.get('title', ''))[:30]}",
+            "make_poster": lambda: f"포스터 만들기 · {str(a.get('title', ''))[:30]}",
             "web_search": lambda: f"웹 검색 · {a.get('query', '')}",
             "web_fetch": lambda: f"웹 페이지 읽기 · {str(a.get('url', ''))[:40]}",
         }
@@ -1328,7 +1381,7 @@ class PCTools:
                 info = build(path)
                 note = " 원래 파일이 열려 있어 새 이름으로 저장했다."
         except ImportError as e:
-            lib = {"pptx": "python-pptx", "docx": "python-docx", "xlsxwriter": "XlsxWriter"}.get(e.name or "", e.name)
+            lib = {"pptx": "python-pptx", "docx": "python-docx", "xlsxwriter": "XlsxWriter", "PIL": "Pillow"}.get(e.name or "", e.name)
             raise ToolError(f"파일을 만드는 라이브러리({lib})가 설치되어 있지 않습니다. setup.bat 를 다시 실행해 설치하세요.")
         except PermissionError as e:
             raise ToolError(f"'{place}' 에 저장하지 못했습니다 (권한이 없거나 파일이 열려 있음): {e}")
@@ -1374,6 +1427,26 @@ class PCTools:
                                            overwrite, open)
         return (f"엑셀 파일을 만들었다 — 시트 {info['sheets']}개, {info['rows']}행. 저장한 곳: {self._where(path)} "
                 f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
+
+    def t_make_cardnews(self, title: str, cards: list, subtitle: str = "", closing: str = "", sources: list | None = None,
+                        theme: str = "light", filename: str = "", folder: str = "", overwrite: bool = False,
+                        open: bool = True) -> str:
+        from . import design
+        path, info, note = self._make_file(
+            lambda p: design.build_cardnews(p, title, cards, subtitle, closing, sources, theme),
+            filename or f"{title} 카드뉴스", "", folder, overwrite, open)
+        return (f"카드뉴스를 만들었다 — {info['cards']}장 (표지 · 마무리 포함, 그림 파일과 한 묶음 PDF). "
+                f"저장한 곳: {self._where(path)} 안의 '{path.name}' 폴더.{note} [전체 경로: {path}]")
+
+    def t_make_poster(self, title: str, sections: list | None = None, subtitle: str = "", highlight: str = "",
+                      footer: str = "", sources: list | None = None, theme: str = "light", size: str = "a4",
+                      filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True) -> str:
+        from . import design
+        path, info, note = self._make_file(
+            lambda p: design.build_poster(p, title, sections or [], subtitle, highlight, footer, sources, theme, size),
+            filename or title, ".png", folder, overwrite, open)
+        return (f"포스터를 만들었다 — {str(size or 'a4').upper()} 세로, 구역 {info['sections']}개 (그림 파일과 인쇄용 PDF). "
+                f"저장한 곳: {self._where(path)} (파일 이름 {path.name}).{note} [전체 경로: {path}]")
 
     def t_end_process(self, name: str) -> str:
         """프로그램의 프로세스를 모두 강제 종료 (Windows 핵심 프로세스 · 울트론 자신은 제외)."""
