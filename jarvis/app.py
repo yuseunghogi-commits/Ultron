@@ -26,7 +26,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import approval, hearing, hud_feed, winutil
+from . import approval, hearing, hud_feed, rival, winutil
 from .brain import Brain, situation_text
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
@@ -218,6 +218,7 @@ class Jarvis(QObject):
     sig_timer = Signal(int, str)
     sig_hotkey = Signal()
     sig_stream = Signal(int, str)      # (명령 번호, 답 조각) — 대화 모드에서 답이 만들어지는 대로
+    sig_rival = Signal(object)         # 자비스를 끈 결과 (rival.Result)
     sig_mode = Signal(bool)            # 자유 대화 모드 켜짐/꺼짐
     sig_notify = Signal(str)           # 백그라운드 작업(작업 감시 등)의 알림
     sig_hud = Signal(str)              # 말로 HUD 보기 방식 바꾸기 (small | big | hide | active_on | active_off)
@@ -273,7 +274,7 @@ class Jarvis(QObject):
                           (self.sig_stream, self._on_stream), (self.sig_mode, self._on_mode),
                           (self.sig_notify, self._on_notify), (self.sig_hud, self._on_hud),
                           (self.sig_feed, self._on_feed), (self.sig_timer_cancel, self._cancel_timers),
-                          (self.sig_point, self._on_point)):
+                          (self.sig_point, self._on_point), (self.sig_rival, self._on_rival)):
             sig.connect(slot)
 
         # ---- 음성 출력 ----
@@ -378,6 +379,15 @@ class Jarvis(QObject):
         self._stats_timer.setInterval(1000)
         self._stats_timer.timeout.connect(self._update_stats)
         self._stats_timer.start()
+        # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음)
+        self.rival = rival.Watcher()
+        self._rival_busy = False
+        self._rival_pending: tuple[str, float] | None = None   # 바빠서 미뤄 둔 한마디
+        self._rival_timer = QTimer(self)
+        self._rival_timer.setInterval(5000)
+        self._rival_timer.timeout.connect(self._rival_tick)
+        if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
+            self._rival_timer.start()
         self._net_last = (psutil.net_io_counters(), time.monotonic())
         self._stat_n = 0
         self._bat = None
@@ -385,6 +395,62 @@ class Jarvis(QObject):
         psutil.cpu_percent(None)
 
         QTimer.singleShot(2300, self._boot_done)
+
+    # ================================================================== 자비스 견제 (rival.py)
+    def _rival_tick(self) -> None:
+        """5초마다: 자비스가 켜져 있으면 끈다. 끄는 데 잠깐 걸릴 수 있어 다른 스레드에서 한다."""
+        if self._rival_pending and self._quiet():
+            line, at = self._rival_pending
+            self._rival_pending = None
+            if time.monotonic() - at < 90:
+                self.say(line, follow_up=False)
+        if not self.cfg["rival_jarvis"] or self._rival_busy or sys.platform != "win32":
+            return
+        self._rival_busy = True
+        threading.Thread(target=self._rival_work, daemon=True, name="rival").start()
+
+    def _rival_work(self) -> None:
+        res = None
+        try:
+            res = self.rival.tick()
+        except Exception as e:
+            log.warning("자비스 확인 실패: %s", e)
+        finally:
+            self._rival_busy = False
+        if res is not None:
+            self.sig_rival.emit(res)
+
+    def _quiet(self) -> bool:
+        """지금 울트론이 혼잣말을 해도 되는가 (명령 처리 · 말하기 · 승인 대기 · 듣는 중이 아닐 때)."""
+        return not (self.busy or self.speaker.playing or self._pending_confirm or self._enroll
+                    or self._wake_train is not None or self._active())
+
+    @Slot(object)
+    def _on_rival(self, res) -> None:
+        for f in res.stopped:
+            log.info("자비스 종료 (pid %d, %s, 창 '%s')", f.pid, f.exe, f.title)
+        for f in res.failed:
+            log.warning("자비스를 끄지 못함 (pid %d, %s) — 관리자 권한으로 켜졌을 수 있음", f.pid, f.exe)
+        self.bridge.toast.emit("info" if res.stopped else "warn", res.line)
+        if res.stopped:
+            self._reclaim_hotkey()
+        if res.speak:
+            if self._quiet():
+                self.say(res.line, follow_up=False)
+            else:
+                self._rival_pending = (res.line, time.monotonic())   # 하던 일이 끝나면 말한다
+
+    def _reclaim_hotkey(self) -> None:
+        """자비스가 같은 단축키를 쥐고 있어 대체 조합을 쓰던 경우, 자비스를 끈 뒤 원래 단축키를 되찾는다."""
+        hk = self.hotkey
+        if not hk.ok or hk.active.lower() == (self.cfg["hotkey"] or "").lower():
+            return
+        hk.stop()
+        time.sleep(0.1)
+        self.hotkey = GlobalHotkey(self.cfg["hotkey"], self.sig_hotkey.emit)
+        self.hotkey.start()
+        self._show_hotkey()
+        log.info("단축키 다시 등록: %s", self.hotkey.active)
 
     def _hotkeyText(self) -> str:
         return (self.hotkey.active or self.cfg["hotkey"]).upper()

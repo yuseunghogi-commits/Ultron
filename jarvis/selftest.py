@@ -44,7 +44,7 @@ def main() -> int:
         pass
     from PIL import ImageGrab
 
-    from . import uia, vision, winutil
+    from . import rival, uia, vision, winutil
     from .config import DATA_DIR
 
     user32 = ctypes.windll.user32
@@ -130,6 +130,8 @@ def main() -> int:
     if mon and screen.items:
         check("번호 상자 그리기", marks)
     check("화면 밖 요소 찾기", lambda: f"{len(screen.find_hidden(hwnd, 'a'))}개 (이름에 'a' 가 든 것 — 웹 페이지가 길면 0 보다 큼)")
+    check("자비스 찾기 (자비스 견제)", lambda: (lambda f: f"켜져 있는 자비스 {len(f)}개" + (f" — {f[0].exe} (pid {f[0].pid}, 창 '{f[0].title}')" if f else
+                                                         " (자비스를 켜 두고 점검하면 1개가 나와야 함 · 끄지는 않음)"))(rival.find()))
     check("창이 클릭을 막는지 확인", lambda: f"이 창 가운데: {winutil.blocks_clicks(hwnd, (win[0] + win[2]) // 2, (win[1] + win[3]) // 2) if win else '창 영역 없음'}")
 
     # ---- 오프라인 음성 인식 ----

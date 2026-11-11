@@ -20,7 +20,7 @@ from typing import Callable
 
 import psutil
 
-from . import sentinel, uia, vision, winutil
+from . import rival, sentinel, uia, vision, winutil
 from .config import DATA_DIR, Config, load_memory, save_memory
 
 log = logging.getLogger("jarvis.tools")
@@ -274,6 +274,8 @@ class PCTools:
             tool("end_process", "Force-quit a program that is slowing the PC (all its processes), by app name or exe name "
                  "(e.g. '크롬', 'chrome.exe'). Unsaved work is lost; the user is asked to approve first. Prefer close_app for a normal close.",
                  {"name": s}, ["name"]),
+            tool("stop_jarvis", "Close the old J.A.R.V.I.S assistant app if it is running on this PC (only that app, "
+                 "found by its exact window title). Use when the user asks to close or get rid of JARVIS."),
             tool("point_at", "When Active Mode (full-screen HUD) is on, mark a spot on the user's screen with a target box, "
                  "e.g. to show where an error message or a button is. Use coordinates of the LAST look_at_screen image; "
                  "optionally give the width/height of the area to frame it.",
@@ -343,6 +345,7 @@ class PCTools:
             "get_weather": lambda: f"날씨 · {a.get('location') or '현재 위치'}",
             "cancel_timer": lambda: "타이머 취소",
             "end_process": lambda: f"프로그램 강제 종료 · {a.get('name')}",
+            "stop_jarvis": lambda: "자비스 종료",
             "point_at": lambda: f"화면 표시 · {a.get('label') or '위치'}",
             "read_clipboard": lambda: "클립보드 읽기",
             "write_clipboard": lambda: "클립보드 쓰기",
@@ -1190,6 +1193,17 @@ class PCTools:
     def t_cancel_timer(self) -> str:
         n = self.hooks.cancel_timers()
         return f"타이머 {n}개를 취소했습니다." if n else "돌고 있는 타이머가 없습니다."
+
+    def t_stop_jarvis(self) -> str:
+        """자비스 앱을 끈다 (정확한 창 제목 + 파이썬 프로세스로 찾은 것만, 본체 프로세스 하나만). 울트론의 대사를 돌려준다."""
+        found = rival.find()
+        if not found:
+            return rival.pick(rival.ALREADY_OFF)
+        results = [rival.stop(f) for f in found]
+        if not any(ok for ok, _ in results):
+            raise ToolError(rival.STOP_FAILED)
+        log.info("자비스 종료 (요청): %s", ", ".join(f"pid {f.pid}" for f in found))
+        return rival.pick(rival.TAUNTS)
 
     def t_end_process(self, name: str) -> str:
         """프로그램의 프로세스를 모두 강제 종료 (Windows 핵심 프로세스 · 울트론 자신은 제외)."""

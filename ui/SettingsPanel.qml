@@ -70,6 +70,7 @@ Item {
         effortBox.currentIndex = Math.max(0, efforts.findIndex(m => m.v === cfg.effort))
         voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
         fxSw.checked = cfg.voice_fx !== false
+        rivalSw.checked = cfg.rival_jarvis !== false
         sentinelServerField.text = cfg.sentinel_server || ""
         sentinelKeyField.text = ""
         sentinelReqField.text = cfg.sentinel_requester || ""
@@ -103,6 +104,7 @@ Item {
             effort: efforts[effortBox.currentIndex].v,
             tts_voice: voices[voiceBox.currentIndex].v,
             voice_fx: fxSw.checked,
+            rival_jarvis: rivalSw.checked,
             sentinel_server: sentinelServerField.text.trim() || "http://127.0.0.1:8000",
             sentinel_api_key: sentinelKeyField.text.trim(),
             sentinel_requester: sentinelReqField.text.trim(),
@@ -281,6 +283,7 @@ Item {
                 Label2 { text: "VOICE" }
                 Combo { id: voiceBox; model: sp.voices }
                 Toggle { id: fxSw; text: "울트론 기계음 (낮고 금속성인 목소리)" }
+                Toggle { id: rivalSw; text: "자비스 견제 (자비스가 같이 켜져 있으면 끄고 한마디 한다)" }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8

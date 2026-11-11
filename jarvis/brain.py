@@ -21,7 +21,7 @@ from .claude_session import ClaudeSession
 from .config import DATA_DIR, Config, load_memory
 from .hud_feed import parse_kill_index
 from .local_ai import LocalAI
-from . import routines
+from . import rival, routines
 from .local_router import _COMPOUND, LocalRouter, dedupe, normalize
 
 NO_WINDOW = 0x08000000
@@ -48,7 +48,7 @@ SYSTEM_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {ti
   사용자는 발음이 뭉개지기 쉬워 비슷한 소리로 잘못 적힐 수 있습니다(예: '대화 모드' → '대모', '태화 모드'). 소리가 비슷한 울트론 기능을 먼저 떠올리세요.
 - 무슨 말인지 확실하지 않을 때는 PowerShell 실행, 시스템 설정 변경, 전원 제어처럼 되돌리기 어렵거나 승인이 필요한 행동을
   추측으로 하지 마세요. "OO 말인가?"처럼 짧게 되물으세요.
-- 지연에 민감한 음성 대화입니다. 망설이지 말고 바로 행동하고 답하세요.
+- 지연에 민감한 음성 대화입니다. 망설이지 말고 바로 행동하고 답하세요.{rival}
 
 # 행동
 - PC 조작 요청이면 설명 없이 바로 도구를 호출하고, 끝나면 결과만 짧게 보고하세요. 예: "메모장을 열었다."
@@ -126,7 +126,7 @@ CHAT_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {titl
 - 입력은 음성 인식 결과라 오타가 있을 수 있습니다. 가장 그럴듯한 뜻으로 알아듣고, 정말 모르겠을 때만 되물으세요.
 - 모르는 최신 정보는 web_search 로 확인하고 말하세요. 대화 중에 PC 조작(음악 틀기, 앱 열기 등)을 부탁하면 도구로 바로 하고
   짧게 알린 뒤 대화를 이어가세요.
-- 상대가 대화를 끝내려 하면 짧고 여운 있게 인사하세요.
+- 상대가 대화를 끝내려 하면 짧고 여운 있게 인사하세요.{rival}
 
 # 환경
 - 현재 사용자 OS: {os}, 기본 도시: {city}
@@ -245,6 +245,7 @@ class Brain:
             home=str(Path.home()),
             city=self.cfg["home_city"],
             memory="\n".join(f"- {m}" for m in mem) if mem else "- (아직 없음)",
+            rival=rival.PERSONA if self.cfg["rival_jarvis"] else "",
         )
 
     def _tool_defs(self, model: str) -> list[dict]:
@@ -287,6 +288,9 @@ class Brain:
         hud = self._hud_command(text)
         if hud:
             return "local", hud
+        jv = self._rival_command(text)
+        if jv:
+            return "local", jv
         if not self.chat_mode:
             done = self._routine(text)
             if done:
@@ -296,17 +300,17 @@ class Brain:
             reply = self.local.try_handle(text, fallback=(mode != "local"))
             if reply is not None:
                 log.info("로컬 처리 (누적 %d회): %s", self.local.handled, text)
-                return "local", reply
+                return "local", self._misnamed(text) + reply
             if not self.chat_mode:   # 대화 중의 말은 명령 분류기에 넣지 않는다 (수다를 명령으로 오해 방지)
                 reply = self._try_local_ai(text, fallback=(mode != "local"))
                 if reply is not None:
-                    return "local_ai", reply
+                    return "local_ai", self._misnamed(text) + reply
         if self.chat_mode:
             reply = self._chat(text, cancel, on_text)
             self._last_ai = (time.time(), reply or "")
             return "chat", reply
         if mode == "local":
-            return "local", self.local.unknown_reply()
+            return "local", self._rival_jab(text) or self.local.unknown_reply()
         self._ai_used = time.time()
         reply = self._handle_ai(text, cancel, on_text)
         self._last_ai = (time.time(), reply or "")
@@ -356,6 +360,25 @@ class Brain:
             self.on_hud("active_on")
             return f"액티브 모드 가동한다, {self.cfg['user_title'] or '창조자'}."
         return None
+
+    # ------------------------------------------------------------------ 자비스 견제 (rival.py)
+    def _rival_command(self, text: str) -> str | None:
+        """'자비스 꺼' → 자비스 앱을 끈다 (견제 설정과 상관없이). '자비스 켜' → 견제가 켜져 있으면 비꼬며 거절."""
+        cmd = rival.command(text)
+        if cmd == "stop":
+            out, _err = self.execute("stop_jarvis", {})
+            return str(out)
+        if cmd == "start" and self.cfg["rival_jarvis"]:
+            return rival.pick(rival.REFUSE_START)
+        return None
+
+    def _misnamed(self, text: str) -> str:
+        """울트론을 자비스라고 부른 말이면 바로잡는 한마디를 대답 앞에 붙인다 (견제가 켜져 있을 때)."""
+        return rival.pick(rival.MISNAMED) + " " if self.cfg["rival_jarvis"] and rival.addressed(text) else ""
+
+    def _rival_jab(self, text: str) -> str | None:
+        """Claude 없이(로컬 전용) 처리할 때 자비스 얘기를 들으면 한마디 (Claude 를 쓰면 Claude 가 성격대로 답한다)."""
+        return rival.pick(rival.MENTION) if self.cfg["rival_jarvis"] and rival.mentions(text) else None
 
     # ------------------------------------------------------------------ 루틴 (명령 묶음)
     def _routine(self, text: str) -> str | None:
@@ -431,7 +454,7 @@ class Brain:
                 or ACTIVE_ON.fullmatch(c) or ACTIVE_OFF.fullmatch(c)
                 or (self.active_hud and parse_kill_index(c) is not None))):
             return True
-        if routines.match(c, self.cfg["routines"] or {}):
+        if routines.match(c, self.cfg["routines"] or {}) or rival.command(text):
             return True
         try:
             return self._dry.try_handle(text, fallback=True) is not None
