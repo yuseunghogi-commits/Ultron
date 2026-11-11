@@ -12,12 +12,6 @@
 “울트론, 구글 클래스룸에서 경제 탭 들어가 줘”
 ```
 
-## 휴대폰판 — PC 없이 혼자 도는 울트론
-
-`mobile/` 폴더에 휴대폰에서 혼자 도는 울트론이 있습니다. Android 설치형 앱(APK — [최신 받기](https://github.com/yuseunghogi-commits/ultron/releases/download/android-latest/ULTRON.apk))과 웹 앱(PWA)으로, 같은 엠블럼 · 말투 · 자비스 견제 ·
-해킹 연출에 음성 대화, 웹 검색, 타이머, 기억, 보고서 문서, 전화 · 문자 · 지도 버튼을 넣었습니다. Anthropic API 키가 필요합니다.
-설치와 올리는 방법은 [mobile/README.md](mobile/README.md) 를 보세요.
-
 ## 자비스에서 울트론으로 바뀐 점
 
 - **이름·호출어**: “울트론” (울트롱·얼트론처럼 뭉개져 들려도 알아듣습니다). “자비스”에는 더 이상 반응하지 않습니다.
