@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .office import _strings, _text, parse_bullets, pretty_ref
+from .office import _strings, _text, numeric_text, parse_bullets, pretty_ref, rich_parts
 
 TEMPLATE = Path(__file__).with_name("hwpx_template")
 BODY_WIDTH = 42520          # A4 본문 폭 (바탕 틀의 쪽 여백 기준, HWPUNIT = 1/7200 인치)
@@ -73,11 +73,13 @@ PARAS: dict[str, ParaSpec] = {
     "list": ParaSpec("LEFT", left=1800, intent=-1100, next=200, line=150),
     "list2": ParaSpec("LEFT", left=3400, intent=-1100, next=200, line=150),
     "cell": ParaSpec("LEFT", line=130),
+    "cellR": ParaSpec("RIGHT", line=130),
+    "cellC": ParaSpec("CENTER", line=130),
     "caption": ParaSpec("CENTER", prev=200, next=600, line=130),
 }
 CHAR_ID = {k: 7 + i for i, k in enumerate(CHARS)}
 PARA_ID = {k: 20 + i for i, k in enumerate(PARAS)}
-BORDER_TABLE, BORDER_HEAD = 3, 4
+BORDER_TABLE, BORDER_HEAD, BORDER_STRIPE = 3, 4, 5
 
 
 def _char_pr(template: str, cid: int, s: CharSpec) -> str:
@@ -103,14 +105,15 @@ def _para_pr(template: str, pid: int, s: ParaSpec) -> str:
 
 
 def _border_fills() -> str:
-    sides = "".join(f'<hh:{s}Border type="SOLID" width="0.12 mm" color="#7F7F7F"/>' for s in ("left", "right", "top", "bottom"))
+    sides = "".join(f'<hh:{s}Border type="SOLID" width="0.12 mm" color="#B8C2D6"/>' for s in ("left", "right", "top", "bottom"))
 
     def one(bid: int, fill: str) -> str:
         return (f'<hh:borderFill id="{bid}" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">'
                 '<hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/>'
                 f'{sides}<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>{fill}</hh:borderFill>')
-    head_fill = '<hc:fillBrush><hc:winBrush faceColor="#DCE4F7" hatchColor="#999999" alpha="0"/></hc:fillBrush>'
-    return one(BORDER_TABLE, "") + one(BORDER_HEAD, head_fill)
+    def fill(color: str) -> str:
+        return f'<hc:fillBrush><hc:winBrush faceColor="{color}" hatchColor="#999999" alpha="0"/></hc:fillBrush>'
+    return one(BORDER_TABLE, "") + one(BORDER_HEAD, fill("#DCE4F7")) + one(BORDER_STRIPE, fill("#F5F7FB"))
 
 
 def build_header() -> str:
@@ -130,7 +133,7 @@ def build_header() -> str:
     h = h.replace("</hh:charProperties>", chars + "</hh:charProperties>", 1)
     h = h.replace(f'<hh:paraProperties itemCnt="{n_para}">', f'<hh:paraProperties itemCnt="{n_para + len(PARAS)}">', 1)
     h = h.replace("</hh:paraProperties>", paras + "</hh:paraProperties>", 1)
-    h = h.replace(f'<hh:borderFills itemCnt="{n_border}">', f'<hh:borderFills itemCnt="{n_border + 2}">', 1)
+    h = h.replace(f'<hh:borderFills itemCnt="{n_border}">', f'<hh:borderFills itemCnt="{n_border + 3}">', 1)
     return h.replace("</hh:borderFills>", _border_fills() + "</hh:borderFills>", 1)
 
 
@@ -157,31 +160,27 @@ def _run(char_key: str, text: str) -> str:
     return f'<hp:run charPrIDRef="{CHAR_ID[char_key]}">{t}</hp:run>'
 
 
-def _rich(text: str, base: str = "body", bold: str = "bodyB") -> str:
-    """**굵게** 표시를 굵은 글자로."""
-    out, last = [], 0
-    for m in re.finditer(r"\*\*([^*]+)\*\*", text):
-        if m.start() > last:
-            out.append(_run(base, text[last:m.start()]))
-        out.append(_run(bold, m.group(1)))
-        last = m.end()
-    if last < len(text):
-        out.append(_run(base, text[last:]))
-    return "".join(out) or _run(base, "")
+def _rich(text: str, base: str = "body", bold: str = "bodyB", keyword: bool = False) -> str:
+    """**굵게** 표시를 굵은 글자로 (keyword=True 면 '핵심어: 설명' 의 핵심어도 — 워드 · 발표 자료와 같게)."""
+    return "".join(_run(bold if b else base, t) for t, b in rich_parts(text, keyword))
 
 
 def _table(body: _Body, columns: list[str], rows: list[list[str]]) -> str:
     cols = max(1, len(columns))
     cw = BODY_WIDTH // cols
     grid = [columns] + rows
+    numeric = [all(numeric_text(r[c]) or not r[c] for r in rows if c < len(r)) and any(c < len(r) and r[c] for r in rows)
+               for c in range(cols)]
 
     def cell(text: str, r: int, c: int) -> str:
         head = r == 0
+        fill = BORDER_HEAD if head else BORDER_STRIPE if r % 2 == 0 else BORDER_TABLE
+        align = "cellC" if head else "cellR" if numeric[c] else "cell"      # 숫자 칸은 오른쪽 맞춤
         return (f'<hp:tc name="" header="{1 if head else 0}" hasMargin="0" protect="0" editable="0" dirty="0" '
-                f'borderFillIDRef="{BORDER_HEAD if head else BORDER_TABLE}">'
+                f'borderFillIDRef="{fill}">'
                 '<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" '
                 'linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
-                + body.para("cell", _run("th" if head else "td", text)) +
+                + body.para(align, _run("th" if head else "td", text)) +
                 f'</hp:subList><hp:cellAddr colAddr="{c}" rowAddr="{r}"/><hp:cellSpan colSpan="1" rowSpan="1"/>'
                 f'<hp:cellSz width="{cw}" height="1000"/><hp:cellMargin left="510" right="510" top="141" bottom="141"/></hp:tc>')
     trs = "".join("<hp:tr>" + "".join(cell(row[c] if c < len(row) else "", r, c) for c in range(cols)) + "</hp:tr>"
@@ -215,7 +214,7 @@ def build_section(title: str, sections: list, subtitle: str = "", sources=None) 
             b.add("body", _rich(para.strip()))
         outline = sec.get("points") if not (sec.get("paragraphs") or sec.get("bullets")) else None   # 개요만 받은 장
         for line, lvl in parse_bullets(sec.get("bullets") or outline):
-            b.add("list2" if lvl else "list", _run("body", "–  " if lvl else "•  ") + _rich(line))
+            b.add("list2" if lvl else "list", _run("body", "–  " if lvl else "•  ") + _rich(line, keyword=not lvl))
         table = sec.get("table")
         if isinstance(table, dict) and table.get("columns"):
             cols = [_text(c) for c in table["columns"]]

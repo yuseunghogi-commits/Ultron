@@ -907,11 +907,28 @@ class Deck:
         dl.font.size = Pt(13)
         dl.font.color.rgb = self.rgb(t.text)
         if kind == "pie":
+            # 조각마다 '이름 + 값' 을 바로 옆에 (작은 범례를 눈으로 오가며 찾지 않게), 조각 사이는 바탕색 선으로 나눈다
             dl.position = XL_LABEL_POSITION.OUTSIDE_END
+            dl.show_category_name = True
+            dl.show_value = True
+            dl.font.size = Pt(15 if len(cats) <= 5 else 13)
+            dl.font.bold = True
+            dlbls = dl._element
+            sep = dlbls.makeelement(qn("c:separator"), {})
+            sep.text = "\n"
+            leader = dlbls.find(qn("c:showLeaderLines"))
+            if leader is not None:
+                leader.addprevious(sep)
+            else:
+                dlbls.append(sep)
+                lead = dlbls.makeelement(qn("c:showLeaderLines"), {"val": "1"})
+                dlbls.append(lead)
             for i, pt in enumerate(plot.series[0].points):
                 pt.format.fill.solid()
                 pt.format.fill.fore_color.rgb = self.rgb(colors[i % len(colors)] if i < len(colors) else
                                                          _hexmix(colors[i % len(colors)], t.bg, 0.3))
+                pt.format.line.color.rgb = self.rgb(t.bg)
+                pt.format.line.width = Pt(1.5)
         else:
             dl.position = XL_LABEL_POSITION.ABOVE if kind == "line" else XL_LABEL_POSITION.OUTSIDE_END
             if kind != "line":
@@ -951,7 +968,7 @@ class Deck:
             ch.value_axis.has_major_gridlines = True
             ch.value_axis.major_gridlines.format.line.color.rgb = self.rgb(t.soft)
             ch.value_axis.format.line.fill.background()
-        ch.has_legend = kind == "pie" or len(series) > 1
+        ch.has_legend = kind != "pie" and len(series) > 1       # 원 차트는 조각마다 이름을 붙였으니 범례가 필요 없다
         if ch.has_legend:
             ch.legend.position = XL_LEGEND_POSITION.RIGHT if kind == "pie" else XL_LEGEND_POSITION.BOTTOM
             ch.legend.include_in_layout = False

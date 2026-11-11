@@ -280,10 +280,28 @@ def _hexmix(a: str, b: str, t: float) -> str:
     return "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(ca, cb))
 
 
+_DISTINCT = ("2F5BEA", "E5702F", "2E9D63", "E0527A", "7C4DFF", "0E9AA7", "F2B705", "8B705E")
+
+
+def _hue(hex_: str) -> tuple[float, float, float]:
+    import colorsys
+    r, g, b = (int(hex_[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    return colorsys.rgb_to_hls(r, g, b)
+
+
 def palette(t: "Theme") -> list[str]:
-    """차트 색 (테마에서): 강조색부터, 서로 잘 구분되게."""
-    return [t.accent, _hexmix(t.accent, t.title, 0.55), t.muted, _hexmix(t.accent, t.bg, 0.45), t.title,
-            _hexmix(t.muted, t.bg, 0.45)]
+    """차트 색: 테마의 강조색부터, 그다음은 색상(hue)이 뚜렷이 다른 색들 — 같은 색의 밝기만 다르면 원 차트 · 여러 막대를 구분하기 어렵다.
+    어두운 바탕에서는 조금 밝게, 밝은 바탕에서는 그대로."""
+    ah, al, as_ = _hue(t.accent)
+    out = [t.accent]
+    for c in _DISTINCT:
+        h, l, s_ = _hue(c)
+        gap = min(abs(h - ah), 1 - abs(h - ah))
+        if as_ > 0.15 and gap < 0.07:              # 강조색과 거의 같은 색은 건너뛴다
+            continue
+        bg_dark = _hue(t.bg)[1] < 0.4
+        out.append(_hexmix(c, "FFFFFF", 0.18) if bg_dark else c)
+    return out[:7]
 
 
 def parse_bullets(lines) -> list[tuple[str, int]]:
@@ -482,6 +500,71 @@ def _docx_font(style_font, element, name: str = FONT) -> None:
         rpr.insert(0, fonts)
     for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
         fonts.set(qn(attr), name)
+    # 기본 서식의 '테마 글꼴' 표시가 남아 있으면 워드는 그쪽을 먼저 쓴다 → 맑은 고딕이 적용되지 않으므로 지운다
+    for attr in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+        if fonts.get(qn(attr)) is not None:
+            del fonts.attrib[qn(attr)]
+
+
+_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_KEY = re.compile(r"^([^:：]{1,24})[:：]\s+(.+)$")
+
+
+def rich_parts(text: str, keyword: bool = False) -> list[tuple[str, bool]]:
+    """글 → (조각, 굵게?) 목록. **굵게** 표시를 굵은 글자로, keyword=True 면 '핵심어: 설명' 의 핵심어도 굵게 (발표 자료와 같게)."""
+    text = text.strip()
+    if keyword and "**" not in text:
+        m = _KEY.match(text)
+        if m and not re.search(r"https?$", m.group(1)):
+            return [(m.group(1) + ": ", True), (m.group(2), False)]
+    out, last = [], 0
+    for m in _BOLD.finditer(text):
+        if m.start() > last:
+            out.append((text[last:m.start()], False))
+        out.append((m.group(1), True))
+        last = m.end()
+    if last < len(text):
+        out.append((text[last:], False))
+    return [(t, b) for t, b in out if t] or [("", False)]
+
+
+_NUM_UNIT = re.compile(r"^[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:%|％|℃|°C|명|원|만 ?원|억 ?원|개|건|회|배|위|점|년|월|일|시간|분|초|"
+                       r"t|kg|g|km|m|cm|mm|ppm|GW|MW|kWh|L|ml)?$")
+
+
+def numeric_text(v) -> bool:
+    """표 칸이 숫자(+단위)인가 — '86.9' · '1,200명' · '73%' 는 예, '3학년 2반' · '2021년 착륙' 은 아니오."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) or bool(_NUM_UNIT.match(_text(v)))
+
+
+def _rich_paragraph(doc, text: str, style: str | None = None, keyword: bool = False):
+    p = doc.add_paragraph(style=style)
+    for part, bold in rich_parts(text, keyword):
+        run = p.add_run(part)
+        if bold:
+            run.bold = True
+    return p
+
+
+def _table_borders(table, color: str = "B8C2D6") -> None:
+    """표 테두리를 얇고 연한 색으로 (기본 '표 눈금'은 검고 진하다)."""
+    from docx.oxml.ns import qn
+    tblpr = table._tbl.tblPr
+    old = tblpr.find(qn("w:tblBorders"))
+    if old is not None:
+        tblpr.remove(old)
+    borders = tblpr.makeelement(qn("w:tblBorders"), {})
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        borders.append(borders.makeelement(qn(f"w:{side}"), {qn("w:val"): "single", qn("w:sz"): "6", qn("w:space"): "0",
+                                                             qn("w:color"): color}))
+    tblpr.append(borders)
+
+
+def _repeat_header(row) -> None:
+    """표가 다음 쪽으로 넘어가면 머리줄을 다시 보여 준다."""
+    from docx.oxml.ns import qn
+    trpr = row._tr.get_or_add_trPr()
+    trpr.append(trpr.makeelement(qn("w:tblHeader"), {qn("w:val"): "true"}))
 
 
 def _shade(cell, hex_: str) -> None:
@@ -507,7 +590,7 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
     """보고서를 만든다 → {'sections': 장 수, 'tables': 표 수}."""
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Cm, Pt, RGBColor
+    from docx.shared import Cm, Mm, Pt, RGBColor
     title = _text(title)
     if not title:
         raise ValueError("문서 제목(title)이 필요합니다.")
@@ -515,6 +598,7 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
         raise ValueError("내용(sections)이 하나 이상 필요합니다.")
     doc = Document()
     for sec in doc.sections:
+        sec.page_width, sec.page_height = Mm(210), Mm(297)          # A4 (기본 서식은 미국 레터 크기)
         sec.top_margin = sec.bottom_margin = Cm(2.5)
         sec.left_margin = sec.right_margin = Cm(2.4)
     normal = doc.styles["Normal"]
@@ -543,11 +627,11 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
         if heading:
             doc.add_heading(heading, level=level)
         for para in _strings(sec.get("paragraphs")):
-            p = doc.add_paragraph(para.strip())
+            p = _rich_paragraph(doc, para)
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         outline = sec.get("points") if not (sec.get("paragraphs") or sec.get("bullets")) else None   # 개요만 받은 장
         for line, lvl in parse_bullets(sec.get("bullets") or outline):
-            p = doc.add_paragraph(line, style="List Bullet")
+            p = _rich_paragraph(doc, line, "List Bullet", keyword=not lvl)
             if lvl:
                 p.paragraph_format.left_indent = Cm(1.6)
         table = sec.get("table")
@@ -556,14 +640,24 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
             rows = [r for r in (table.get("rows") or []) if isinstance(r, (list, tuple))]
             t = doc.add_table(rows=1 + len(rows), cols=len(cols))
             t.style = "Table Grid"
+            _table_borders(t)
+            _repeat_header(t.rows[0])
+            numeric = [all(numeric_text(r[j]) or not _text(r[j]) for r in rows if j < len(r))
+                       and any(j < len(r) and _text(r[j]) for r in rows) for j in range(len(cols))]
             for j, c in enumerate(cols):
                 cell = t.rows[0].cells[j]
                 cell.text = c
                 cell.paragraphs[0].runs[0].font.bold = True
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 _shade(cell, "DCE4F7")
             for r, row in enumerate(rows, 1):
                 for j in range(len(cols)):
-                    t.rows[r].cells[j].text = _text(row[j]) if j < len(row) else ""
+                    cell = t.rows[r].cells[j]
+                    cell.text = _text(row[j]) if j < len(row) else ""
+                    if numeric[j]:                               # 숫자 칸은 오른쪽 맞춤 (자릿수가 맞게)
+                        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    if r % 2 == 0:
+                        _shade(cell, "F5F7FB")                   # 줄무늬로 읽기 쉽게
             if _text(table.get("caption")):
                 cap = doc.add_paragraph(_text(table["caption"]))
                 cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -587,7 +681,100 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
 # ---------------------------------------------------------------- 표 (Excel)
 def _width(v) -> float:
     s = str(v if v is not None else "")
+    if s.startswith("="):                       # 수식은 글이 아니라 결과(숫자)가 보인다
+        return 10
     return max((_em(line) * 1.9 for line in s.splitlines()), default=0.0) + 2
+
+
+# ---- 칸 값 다듬기 · 수식 결과 미리 계산
+_NUMLIKE = re.compile(r"^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+
+
+def cell_number(v) -> tuple[float | int, str] | None:
+    """'1,025' · '86.9' · '12.5%' 처럼 숫자로 보이는 글 → (숫자, 표시 형식). 전화번호 · 우편번호처럼 0 으로 시작하면 글자로 둔다."""
+    if not isinstance(v, str):
+        return None
+    t = v.strip()
+    pct = t.endswith("%")
+    core = t[:-1].strip() if pct else t
+    if not _NUMLIKE.match(core) or re.match(r"^-?0\d", core):
+        return None
+    n = float(core.replace(",", ""))
+    if pct:
+        return n / 100, "0%" if n == int(n) else "0.0%"
+    return (int(n), "int") if n == int(n) and "." not in core else (n, "num")
+
+
+def _col_index(letters: str) -> int:
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
+def eval_formula(formula: str, values: dict) -> float | None:
+    """간단한 수식의 결과를 미리 계산한다 (=SUM(B3:D3), =AVERAGE(...), =B3*2+C3 …).
+    엑셀은 열 때 다시 계산하지만, 미리 보기 · 휴대폰 뷰어 · 일부 프로그램은 저장된 결과만 보여 주기 때문.
+    values: {(행, 열): 숫자} (0 부터). 모르는 함수 · 아직 없는 칸 · 오류면 None."""
+    import ast
+    import operator as op
+    src = formula.lstrip("=").strip().upper()
+    if not src or len(src) > 300:
+        return None
+
+    def rng(m: re.Match) -> str:
+        c1, r1, c2, r2 = _col_index(m.group(1)), int(m.group(2)) - 1, _col_index(m.group(3)), int(m.group(4)) - 1
+        return f"__R({min(r1, r2)},{min(c1, c2)},{max(r1, r2)},{max(c1, c2)})"
+    src = re.sub(r"\$?([A-Z]{1,3})\$?(\d+):\$?([A-Z]{1,3})\$?(\d+)", rng, src)
+    src = re.sub(r"(?<![A-Z_])\$?([A-Z]{1,3})\$?(\d+)(?![\d(])", lambda m: f"__C({int(m.group(2)) - 1},{_col_index(m.group(1))})", src)
+
+    class Missing(Exception):
+        pass
+
+    def cell(r, c):
+        if (r, c) not in values:
+            raise Missing
+        return values[(r, c)]
+
+    def area(r1, c1, r2, c2):
+        return [values[(r, c)] for r in range(r1, r2 + 1) for c in range(c1, c2 + 1) if (r, c) in values]
+
+    def flat(args):
+        out = []
+        for a in args:
+            out.extend(a if isinstance(a, list) else [a])
+        return out
+
+    funcs = {
+        "SUM": lambda *a: sum(flat(a)),
+        "AVERAGE": lambda *a: (lambda xs: sum(xs) / len(xs) if xs else None)(flat(a)),
+        "MIN": lambda *a: min(flat(a)) if flat(a) else 0,
+        "MAX": lambda *a: max(flat(a)) if flat(a) else 0,
+        "COUNT": lambda *a: len(flat(a)),
+        "ROUND": lambda x, n=0: round(x, int(n)),
+        "ABS": lambda x: abs(x),
+        "__R": area, "__C": cell,
+    }
+    ops = {ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul, ast.Div: op.truediv, ast.Pow: op.pow}
+
+    def ev(node):
+        if isinstance(node, ast.Expression):
+            return ev(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in ops:
+            return ops[type(node.op)](ev(node.left), ev(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            v = ev(node.operand)
+            return -v if isinstance(node.op, ast.USub) else v
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in funcs and not node.keywords:
+            return funcs[node.func.id](*[ev(a) for a in node.args])
+        raise ValueError("지원하지 않는 수식")
+    try:
+        v = ev(ast.parse(src, mode="eval"))
+    except (Missing, ValueError, SyntaxError, TypeError, ZeroDivisionError, OverflowError, RecursionError):
+        return None
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def _sheet_name(name: str, i: int, used: set) -> str:
@@ -653,6 +840,7 @@ def build_spreadsheet(path: Path, sheets: list) -> dict:
     f_wrap = wb.add_format({**base, "border": 1, "border_color": "#D5DBE6", "text_wrap": True, "valign": "top"})
     f_int = wb.add_format({**base, "border": 1, "border_color": "#D5DBE6", "num_format": "#,##0"})
     f_num = wb.add_format({**base, "border": 1, "border_color": "#D5DBE6", "num_format": "#,##0.##"})
+    f_pct = {k: wb.add_format({**base, "border": 1, "border_color": "#D5DBE6", "num_format": k}) for k in ("0%", "0.0%")}
     used: set[str] = set()
     total = 0
     for i, sh in enumerate(sheets, 1):
@@ -671,6 +859,7 @@ def build_spreadsheet(path: Path, sheets: list) -> dict:
             ws.set_row(0, 24)
             r0 = 2
         widths = [_width(c) for c in cols]
+        known: dict = {}                          # 숫자가 든 칸 (수식 결과 미리 계산용)
         ws.set_row(r0, 22)
         for j, c in enumerate(cols):
             ws.write_string(r0, j, c, f_head)
@@ -681,12 +870,27 @@ def build_spreadsheet(path: Path, sheets: list) -> dict:
                     ws.write_string(r, j, "" if v is None else ("예" if v else "아니오"), f_cell)
                 elif isinstance(v, int):
                     ws.write_number(r, j, v, f_int)
+                    known[(r, j)] = v
                 elif isinstance(v, float):
                     ws.write_number(r, j, v, f_num if v != int(v) else f_int)
+                    known[(r, j)] = v
                 else:
                     s = str(v)
+                    if s.startswith("="):                 # {r} = 이 행, {first} · {last} = 첫 · 마지막 데이터 행 (행 번호를 셀 필요 없게)
+                        s = s.replace("{r}", str(r + 1)).replace("{first}", str(r0 + 2)).replace("{last}", str(r0 + 1 + len(rows)))
+                    num = cell_number(s)
                     if s.startswith("=") and len(s) > 1:
-                        ws.write_formula(r, j, s, f_cell)
+                        result = eval_formula(s, known)
+                        if result is None:
+                            ws.write_formula(r, j, s, f_num)
+                        else:
+                            ws.write_formula(r, j, s, f_num if result != int(result) else f_int,
+                                             int(result) if result == int(result) else round(result, 10))
+                            known[(r, j)] = result
+                    elif num is not None:                 # '1,025' · '86.9' · '12.5%' → 계산되는 숫자로
+                        n, kind = num
+                        ws.write_number(r, j, n, f_int if kind == "int" else f_num if kind == "num" else f_pct[kind])
+                        known[(r, j)] = n
                     else:
                         ws.write_string(r, j, s, f_wrap if len(s) > 60 or "\n" in s else f_cell)
                 widths[j] = max(widths[j], min(_width(v), 60))

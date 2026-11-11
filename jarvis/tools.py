@@ -403,7 +403,10 @@ class PCTools:
                  ["title", "sections"]),
             tool("make_spreadsheet",
                  "Create an Excel (.xlsx) file with one or more sheets and open it. Use for 표 / 엑셀 / 시간표 / 정리표 requests. "
-                 "Give numbers as numbers. A cell that starts with '=' is written as a formula (e.g. '=SUM(B2:B8)').",
+                 "Give numbers as numbers (put units in the column name, e.g. '금액(원)'). A cell that starts with '=' is a "
+                 "formula. Row numbers: the header is row 1 and data starts at row 2 — but with a title, the header is row 3 "
+                 "and data starts at row 4. Easier: write {r} for this row and {first} / {last} for the first / last data "
+                 "row, e.g. '=AVERAGE(B{r}:D{r})' or a 합계 row '=SUM(B{first}:B{last})' (a 합계 row should be the last row).",
                  {"sheets": {"type": "array", "items": {"type": "object", "properties": {
                       "name": {"type": "string", "description": "sheet tab name"},
                       "title": {"type": "string", "description": "optional title row above the table"},
