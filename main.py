@@ -55,6 +55,7 @@ def main() -> int:
     parser.add_argument("--shot-delay", type=float, default=4.0)
     parser.add_argument("--demo", action="store_true", help="(개발용) 상태 데모")
     parser.add_argument("--revived", action="store_true", help=argparse.SUPPRESS)   # 가디언이 되살려 준 울트론
+    parser.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)      # 공격받는 중 — 긴 연출을 건너뛴다
     parser.add_argument("--closed", default="", help=argparse.SUPPRESS)            # 가디언이 닫은 '비전'
     args = parser.parse_args()
 

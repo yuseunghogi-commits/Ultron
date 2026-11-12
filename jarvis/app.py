@@ -436,8 +436,9 @@ class Jarvis(QObject):
         psutil.cpu_percent(None)
 
         QTimer.singleShot(2300, self._boot_done)
-        if getattr(args, "revived", False):
+        if getattr(args, "revived", False) and not getattr(args, "fast", False):
             QTimer.singleShot(150, self._revive_begin)   # 되살아났다 — HUD 가 뜨자마자 부활 연출부터
+            # (공격받는 중이면 --fast 로 연출을 건너뛰고 _boot_done 에서 '되살아났다'만 바로 띄운다)
 
     # ================================================================== 자비스 견제 (rival.py)
     def _flush_line(self) -> None:
@@ -821,7 +822,9 @@ class Jarvis(QObject):
             self.bridge.toast.emit("warn", f"{self.cfg['hotkey'].upper()} 는 다른 앱이 사용 중이라 "
                                            f"{self.hotkey.active.upper()} 로 대신 부릅니다")
         if getattr(self.args, "revived", False):
-            return                         # 부활 연출이 끝나면 '되살아났다'를 띄운다 (_revive_done)
+            if getattr(self.args, "fast", False):        # 공격받는 중 — 연출 없이 바로 돌아왔다
+                self._revived_line(getattr(self.args, "closed", "") or "")
+            return                         # (연출을 켠 경우엔 끝날 때 _revive_done 이 '되살아났다'를 띄운다)
         if self.args.no_greet:
             return
         hour = time.localtime().tm_hour

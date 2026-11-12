@@ -34,7 +34,9 @@ from typing import Callable
 log = logging.getLogger("jarvis.guardian")
 
 POLL = 1.0                 # 몇 초마다 살아 있는지 보는가 (프로세스 번호 하나를 보는 일이라 1초마다 봐도 부담이 없다)
-START_TIMEOUT = 30.0       # 다시 켠 울트론이 '나 떴다'(등록)를 알릴 때까지 기다리는 최대 시간. 그 안에는 또 켜지 않는다
+REGISTER_WAIT = 10.0       # 다시 켠 울트론이 '나 떴다'(등록)를 알릴 때까지 기다리는 최대 시간. 그 안에 또 켜지 않되,
+                           # 이 안에 등록이 없으면 (뜨다 말고 또 꺼졌다) 다시 켠다 — 예전엔 30초를 기다려 빈틈이 컸다
+REVIVE_QUIET = 30.0        # 되살린 지 이 안에 또 꺼지면 (공격받는 중) 긴 연출 없이 바로 돌아온다 (연출 끝나기 전에 또 꺼지는 반복 방지)
                            # (아직 뜨는 중인 울트론을 죽은 줄 알고 한 번 더 켜면 울트론이 두 개가 된다). 넘으면 다시 켠다.
 LOCK_STALE = 10.0          # 내용이 빈 잠금 파일이 이보다 오래되면 버려진 것으로 본다
 GUARDIAN_MODULE = "jarvis.guardian"
@@ -320,8 +322,9 @@ class Guard:
     data_dir: Path
     load_cfg: Callable[[], dict]                # 설정을 매번 새로 읽는다 — 켜고 끄기 · 비전 지목이 바로 반영되게
     paths: Paths = field(init=False)
-    awaiting: tuple | None = None               # 방금 다시 켰다: (죽은 울트론의 번호, 켜진 시각, 기다림이 끝나는 시각)
+    awaiting: tuple | None = None               # 방금 다시 켰다: ((죽은 번호, 켜진 시각), 기다림이 끝나는 시각)
     revived: int = 0                            # 지금까지 되살린 횟수 (기록용)
+    last_revive: float | None = None            # 마지막으로 되살린 때 (초) — 곧바로 또 꺼지면 '공격받는 중'으로 본다
 
     def __post_init__(self) -> None:
         self.paths = Paths(Path(self.data_dir))
@@ -365,11 +368,13 @@ class Guard:
                 log.warning("비전을 닫지 못함 (pid %d): %s — 관리자 권한으로 켜졌을 수 있음", proc.pid, e)
         return closed
 
-    def relaunch(self, info: dict, closed: list[str] | None = None) -> None:
+    def relaunch(self, info: dict, closed: list[str] | None = None, fast: bool = False) -> None:
         cmd = list(info.get("relaunch") or [])
         if not cmd:
             return
         cmd.append("--revived")                 # 되살아난 울트론은 평소 인사 대신 '되살아났다'를 띄운다
+        if fast:
+            cmd.append("--fast")                # 공격받는 중 — 긴 연출을 건너뛰고 바로 돌아온다
         if closed:
             cmd += ["--closed", ", ".join(closed)[:120]]
         try:
@@ -390,22 +395,27 @@ class Guard:
         pid = int(info.get("pid") or 0)
         created = info.get("created")
         if self.awaiting:
-            dead_pid, dead_created, until = self.awaiting
-            if (pid, created) == (dead_pid, dead_created) and now < until:
-                return "wait"                   # 다시 켠 울트론이 아직 뜨는 중 (아직 등록 전)
-            self.awaiting = None                # 새 울트론이 등록했다 (또는 너무 오래 걸렸다 — 아래에서 다시 본다)
+            dead_key, until = self.awaiting
+            if (pid, created) != dead_key:
+                self.awaiting = None            # 새 울트론이 등록했다 — 아래에서 그 번호를 지킨다
+            elif now < until:
+                return "wait"                   # 다시 켠 울트론이 아직 뜨는 중 (아직 등록 전) — 잠깐 더 기다린다
+            else:
+                self.awaiting = None            # 기다렸는데 등록이 없다 (뜨다 말고 또 꺼졌다) — 아래에서 다시 켠다
         alive = same_process(created_at(pid), created)
         action = decide(quit_flag, not alive)
         if action == "restart" and shutting_down():
             log.info("PC 가 꺼지는 중 — 되살리지 않고 가디언도 끝냅니다")
             return "quit"
         if action == "restart":
-            log.warning("울트론이 강제로 꺼졌습니다 (pid %d)", pid)
+            fast = self.last_revive is not None and now - self.last_revive < REVIVE_QUIET
+            log.warning("울트론이 강제로 꺼졌습니다 (pid %d)%s", pid, " — 공격받는 중, 바로 되살림" if fast else "")
             closed = self.counter(cfg, info.get("root") or "") if cfg.get("guardian_counter") else []
-            self.relaunch(info, closed)
+            self.relaunch(info, closed, fast=fast)
             self.revived += 1
-            self.awaiting = (pid, created, now + START_TIMEOUT)
-            log.info("되살림 %d번째", self.revived)
+            self.last_revive = now
+            self.awaiting = ((pid, created), now + REGISTER_WAIT)
+            log.info("되살림 %d번째%s", self.revived, " (빠르게)" if fast else "")
         return action
 
     def run(self) -> None:
