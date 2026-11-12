@@ -599,11 +599,7 @@ class Jarvis(QObject):
             self._absorb_view.finished.connect(self._absorb_ended)
             self.focus.own_hwnds.add(int(self._absorb_view.winId()))     # (화면 캡처에서는 빼지 않는다 — 녹화할 수 있게)
         self.listener.muted = True                      # 연출 소리를 말소리로 듣지 않게
-        fx = QSoundEffect(self)
-        fx.setSource(QUrl.fromLocalFile(wav))
-        fx.setVolume(0.55)
-        fx.play()
-        self._absorb_fx = fx
+        self._absorb_fx = self._play_fx(self._absorb_fx, wav, 0.55)
         log.info("자비스 흡수 연출 (%s, %s)", "시범" if st["demo"] else "요청" if st["forced"] else "자동",
                  "자비스 창" if scene.real else "숨어 있던 자비스")
         self._absorb_view.play(top_left, scene)
@@ -665,6 +661,7 @@ class Jarvis(QObject):
         st, self._absorb = self._absorb, None
         if st is None:
             return
+        self._release_fx("_absorb_fx")
         self._absorb_last = time.monotonic()
         QTimer.singleShot(300, self._unmute)
         if st["demo"]:
@@ -753,16 +750,13 @@ class Jarvis(QObject):
             winutil.set_capture_excluded(hwnd, True)   # 화면 캡처(울트론의 화면 보기 포함)에는 찍히지 않는다
             self.focus.own_hwnds.add(hwnd)
         self.listener.muted = True                      # 연출 소리를 말소리로 듣지 않게
-        fx = QSoundEffect(self)
-        fx.setSource(QUrl.fromLocalFile(wav))
-        fx.setVolume(0.5)
-        fx.play()
-        self._glitch_fx = fx
+        self._glitch_fx = self._play_fx(self._glitch_fx, wav, 0.5)
         self._glitch_view.play(geometry, imgs)
 
     @Slot()
     def _glitch_done(self) -> None:
         self._glitching = False
+        self._release_fx("_glitch_fx")
         self.hack.done(self.cfg["hack_show_every"])
         QTimer.singleShot(300, self._unmute)
         line = glitch.line(last=self._hack_last)
@@ -1903,6 +1897,30 @@ class Jarvis(QObject):
             self.bridge.toast.emit("error", f"자동 실행 설정 실패: {e}")
 
     # ================================================================== 기타
+    def _play_fx(self, old: QSoundEffect | None, wav: str, volume: float) -> QSoundEffect:
+        """연출 소리를 튼다. 지난번 소리 객체는 지운다 — 남겨 두면 연출할 때마다 소리(수 MB)가 하나씩 쌓인다."""
+        if old is not None:
+            old.stop()
+            old.deleteLater()
+        fx = QSoundEffect(self)
+        fx.setSource(QUrl.fromLocalFile(wav))
+        fx.setVolume(volume)
+        fx.play()
+        return fx
+
+    def _release_fx(self, attr: str, after_ms: int = 2500) -> None:
+        """연출이 끝나고 소리 꼬리까지 다 나온 뒤 소리 객체를 지운다 (그새 새 연출이 시작됐으면 그대로 둔다)."""
+        fx = getattr(self, attr)
+        if fx is None:
+            return
+
+        def drop() -> None:
+            if getattr(self, attr) is fx:
+                setattr(self, attr, None)
+                fx.stop()
+                fx.deleteLater()
+        QTimer.singleShot(after_ms, drop)
+
     def _make_chime(self) -> QSoundEffect:
         path = Path(tempfile.gettempdir()) / "jarvis_chime.wav"
         if not path.exists():

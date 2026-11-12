@@ -17,9 +17,9 @@ def test_cache_returns_the_same_sound_from_memory_and_disk(tmp_path):
     assert c.get(k) is None
     pcm = np.linspace(-1, 1, 2400, dtype=np.float32)
     c.put(k, pcm)
-    assert np.array_equal(c.get(k), pcm)
+    assert np.allclose(c.get(k), pcm, atol=1e-4)                 # (16비트로 담으므로 아주 작은 차이만)
     fresh = TTSCache(tmp_path)                                   # 다시 켜도 디스크에서 꺼낸다
-    assert np.array_equal(fresh.get(k), pcm)
+    assert np.allclose(fresh.get(k), pcm, atol=1e-4)
     # 목소리 · 빠르기 · 음높이 · 기계음이 다르면 다른 소리
     others = {c.key("볼륨을 낮췄다.", v, r, p, f) for v, r, p, f in
               [("ko-KR-SunHiNeural", "-4%", "-14Hz", 0.6), ("ko-KR-InJoonNeural", "+0%", "-14Hz", 0.6),
@@ -62,7 +62,7 @@ def test_speech_render_uses_the_cache_and_skips_sapi(monkeypatch, tmp_path):
     monkeypatch.setattr(speech, "robotize", lambda a, fx: a)
     a = speech.render("볼륨을 낮췄다.", "v", "r", "p", 0.5)
     b = speech.render("볼륨을 낮췄다.", "v", "r", "p", 0.5)
-    assert calls == ["볼륨을 낮췄다."] and np.array_equal(a, b)          # 두 번째는 인터넷 합성 없이
+    assert calls == ["볼륨을 낮췄다."] and np.allclose(a, b, atol=1e-4)          # 두 번째는 인터넷 합성 없이
     suffix[0] = ".wav"                                                    # SAPI(대체 음성)는 저장하지 않는다
     speech.render("인터넷이 끊겼다.", "v", "r", "p", 0.5)
     speech.render("인터넷이 끊겼다.", "v", "r", "p", 0.5)

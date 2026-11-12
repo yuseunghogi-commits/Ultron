@@ -2,7 +2,7 @@
 
 Edge 음성은 문장마다 인터넷으로 받아 와서 0.5~1초가 걸린다. "볼륨을 낮췄다", "알았다. 바로 만들지." 처럼 자주 하는 짧은 말은
 늘 똑같으므로 다듬기 · 기계음 효과까지 끝낸 소리(PCM)를 저장해 두면 다음부터는 곧바로 말한다.
-  · 메모리: 최근 것 64개
+  · 메모리: 최근 것 64개 (16비트로 담아 float32 의 절반 — 원래 소리가 압축 음성(mp3)이라 들어서 구별되지 않는다)
   · 디스크: data/tts_cache/ 에 .npy (오래 안 쓴 것부터 지워 300개 · 40MB 이하로)
 열쇠에는 글 · 목소리 · 빠르기 · 음높이 · 기계음 세기가 모두 들어가므로 설정을 바꾸면 새로 합성한다.
 SAPI(인터넷이 끊겼을 때의 대체 음성)로 만든 소리는 저장하지 않는다 — 인터넷이 돌아오면 원래 목소리로 말하도록.
@@ -29,7 +29,7 @@ VERSION = "1"             # 다듬기 · 효과 처리 방식이 바뀌면 올�
 class TTSCache:
     def __init__(self, folder: Path, memory: int = 64) -> None:
         self.folder = Path(folder)
-        self._mem: collections.OrderedDict[str, np.ndarray] = collections.OrderedDict()
+        self._mem: collections.OrderedDict[str, np.ndarray] = collections.OrderedDict()   # int16
         self._memory = memory
         self._lock = threading.Lock()
         self._writes = 0
@@ -48,25 +48,26 @@ class TTSCache:
             pcm = self._mem.get(key)
             if pcm is not None:
                 self._mem.move_to_end(key)
-                return pcm
+                return _to_float(pcm)
         path = self.folder / f"{key}.npy"
         try:
             pcm = np.load(path, allow_pickle=False)
         except (OSError, ValueError):
             return None
-        if pcm.dtype != np.float32 or pcm.ndim != 1:
+        if pcm.dtype not in (np.int16, np.float32) or pcm.ndim != 1:
             return None
         try:
             os.utime(path)                     # 최근에 쓴 것으로 표시 (오래된 것부터 지우므로)
         except OSError:
             pass
+        pcm = _to_int16(pcm)                   # (예전 float32 파일도 그대로 읽는다)
         self._remember(key, pcm)
-        return pcm
+        return _to_float(pcm)
 
     def put(self, key: str, pcm: np.ndarray) -> None:
         if pcm is None or pcm.size == 0:
             return
-        pcm = np.ascontiguousarray(pcm, dtype=np.float32)
+        pcm = _to_int16(pcm)
         self._remember(key, pcm)
         try:
             self.folder.mkdir(parents=True, exist_ok=True)
@@ -105,3 +106,14 @@ class TTSCache:
                     p.unlink()
                 except OSError:
                     pass
+
+
+def _to_int16(pcm: np.ndarray) -> np.ndarray:
+    if pcm.dtype == np.int16:
+        return np.ascontiguousarray(pcm)
+    return np.round(np.clip(np.asarray(pcm, np.float32), -1.0, 1.0) * 32767.0).astype(np.int16)
+
+
+def _to_float(pcm: np.ndarray) -> np.ndarray:
+    """재생용 float32 사본 (재생 쪽에서 고쳐 써도 담아 둔 소리는 그대로)."""
+    return pcm.astype(np.float32) * np.float32(1.0 / 32767.0)
