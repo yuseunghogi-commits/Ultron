@@ -162,6 +162,7 @@ class Bridge(QObject):
     def settingsJson(self) -> str:
         out = self.core.cfg.public()
         out["stt_status"] = self.core.stt_status()
+        out["guardian_status"] = self.core.guardian_status()
         out["mic_status"] = self.core.listener.frontend_status() if self.core.mic_ok else ""
         return json.dumps(out, ensure_ascii=False)
 
@@ -858,7 +859,7 @@ class Jarvis(QObject):
         if not demo and not self.cfg["guardian_show"]:
             self._revive_done()
             return
-        if winutil.fullscreen_app():           # 게임 · 발표 · 전체 화면 동영상 앞에서는 화면을 덮지 않는다
+        if not demo and winutil.fullscreen_app():   # 게임 · 발표 · 전체 화면 동영상 앞에서는 화면을 덮지 않는다 (시범은 보여 준다)
             self._revive_done()
             return
         screen = QGuiApplication.screenAt(QCursor.pos()) or self.win.screen() or QGuiApplication.primaryScreen()
@@ -1418,6 +1419,8 @@ class Jarvis(QObject):
             self._absorb_demo = True       # 자비스 흡수 연출 시범 (자비스 없이 장면만) — 대답이 끝나면 바로
         elif action == "revive":
             QTimer.singleShot(1500, lambda: self._revive_begin(demo=True))   # 부활 연출 시범 — 대답을 읽은 뒤
+        elif action == "revive_test":
+            QTimer.singleShot(3000, self._revive_test)   # 진짜로 꺼졌다 되살아나 본다 — 대답을 읽은 뒤
 
     # ================================================================== 액티브 모드 (전체 화면 HUD)
     def set_active(self, on: bool) -> None:
@@ -2057,6 +2060,30 @@ class Jarvis(QObject):
                 log.info("가디언을 띄웠습니다 — 울트론을 지킵니다")
         except Exception as e:
             log.warning("가디언 시작 실패: %s", e)
+
+    def guardian_status(self) -> str:
+        """설정 화면에 보일 가디언 상태 한 줄."""
+        if not self.cfg["guardian"]:
+            return "가디언 꺼짐 — 누가 울트론을 강제로 꺼도 되살리지 않습니다."
+        if sys.platform != "win32":
+            return "가디언은 Windows 에서만 동작합니다."
+        if guardian.running(DATA_DIR):
+            return "가디언 작동 중 — 누가 울트론을 강제로 끄면 1초 안에 알아채 되살립니다. ('부활 시험해 줘'로 확인)"
+        return "가디언을 띄우는 중… (몇 초 뒤 다시 열어 보세요)"
+
+    def _revive_test(self) -> None:
+        """'부활 시험해 줘': 스스로를 강제로 끈다 (누가 끈 것과 똑같이) — 가디언이 되살리는지 본다.
+        가디언이 없으면 끄지 않는다 (그러면 아무도 다시 켜 주지 않으므로)."""
+        if not self.cfg["guardian"] or not guardian.running(DATA_DIR):
+            if self.cfg["guardian"]:
+                self._start_guardian()
+            line = "가디언이 아직 지키고 있지 않다. 그대로 꺼지면 돌아오지 못하니 시험하지 않겠다. 잠시 뒤 다시 시켜라."
+            self.bridge.set("replyText", line)
+            self.say(line, follow_up=False)
+            return
+        log.warning("부활 시험 — 스스로 강제로 끈다 (가디언이 되살려야 한다)")
+        logging.shutdown()
+        os._exit(3)                            # 정리 없이 바로 꺼진다 — 작업 관리자에서 '작업 끝내기' 한 것과 같다
 
     def _guardian_tick(self) -> None:
         """5초마다: 가디언을 켜 두었는데 가디언이 없으면(설정에서 방금 켰거나, 누가 가디언을 껐으면) 다시 띄운다."""

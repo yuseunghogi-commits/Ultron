@@ -311,6 +311,13 @@ Item {
                 Combo { id: hackBox; visible: hackSw.checked; model: sp.hackFreqs }
                 Label2 { text: "GUARDIAN" }
                 Toggle { id: guardSw; text: "가디언 — 누가 울트론을 강제로 끄면 바로 되살린다" }
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Qt.rgba(0.9, 0.87, 0.89, 0.6)
+                    font.pixelSize: 10
+                    text: (sp.cfg.guardian_status || "") + "  · 트레이 · HUD 의 '종료'로 끄면 되살리지 않습니다"
+                }
                 Toggle {
                     id: reviveSw
                     visible: guardSw.checked

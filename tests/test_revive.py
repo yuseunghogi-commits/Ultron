@@ -190,6 +190,7 @@ def app(monkeypatch):
     class App:
         _revive_begin, _revive_done, _revived_line = J._revive_begin, J._revive_done, J._revived_line
         _revive_handoff, _revive_target = J._revive_handoff, J._revive_target
+        guardian_status, _revive_test = J.guardian_status, J._revive_test
 
         def __init__(self):
             self.cfg = {"guardian_show": True, "user_title": "창조자"}
@@ -219,6 +220,9 @@ def app(monkeypatch):
         def _core_point(self):
             return 115.0, 107.0
 
+        def _start_guardian(self):
+            self.events.append("start_guardian")
+
     monkeypatch.setattr(app_mod.winutil, "fullscreen_app", lambda: False)
     monkeypatch.setattr(app_mod.QTimer, "singleShot", lambda ms, fn: None)
     return App(), app_mod
@@ -236,6 +240,46 @@ def test_no_show_over_a_fullscreen_game(app, monkeypatch):
     monkeypatch.setattr(mod.winutil, "fullscreen_app", lambda: True)
     me._revive_begin()
     assert me.said and not me._reviving and not me.listener.muted
+
+
+def test_preview_plays_even_over_a_fullscreen_app(app, monkeypatch):
+    me, mod = app
+    monkeypatch.setattr(mod.winutil, "fullscreen_app", lambda: True)
+    grabbed = []
+
+    def grab(_):
+        grabbed.append(1)
+        raise RuntimeError("화면을 찍을 수 없는 시험 환경")
+    me.win.screen = lambda: types.SimpleNamespace(grabWindow=grab)
+    monkeypatch.setattr(mod.QGuiApplication, "screenAt", lambda pos: None)
+    me._revive_begin(demo=True)                                      # 사용자가 시킨 시범은 전체 화면 앱 앞에서도 보여 준다
+    assert grabbed == [1]
+
+
+def test_guardian_status_line(app, monkeypatch):
+    me, mod = app
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    me.cfg["guardian"] = True
+    monkeypatch.setattr(mod.guardian, "running", lambda d: True)
+    assert "작동 중" in me.guardian_status()
+    monkeypatch.setattr(mod.guardian, "running", lambda d: False)
+    assert "띄우는 중" in me.guardian_status()
+    me.cfg["guardian"] = False
+    assert "꺼짐" in me.guardian_status()
+
+
+def test_revive_test_kills_itself_only_when_the_guardian_watches(app, monkeypatch):
+    me, mod = app
+    exits = []
+    monkeypatch.setattr(mod.os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(mod.logging, "shutdown", lambda: None)
+    me.cfg["guardian"] = True
+    monkeypatch.setattr(mod.guardian, "running", lambda d: False)
+    me._revive_test()                                                # 지켜보는 가디언이 없으면 끄지 않는다 (돌아오지 못하므로)
+    assert exits == [] and "start_guardian" in me.events and "시험하지 않겠다" in me.said[-1]
+    monkeypatch.setattr(mod.guardian, "running", lambda d: True)
+    me._revive_test()
+    assert exits == [3]                                              # 정리 없이 바로 꺼진다 — 누가 강제로 끈 것과 같다
 
 
 def test_demo_line_after_the_preview_and_the_hud_comes_back(app):
@@ -267,6 +311,16 @@ def test_saying_show_me_the_revival_plays_the_preview():
     for text in ("부활 연출 보여 줘", "되살아나는 장면 보여줘", "부활 연출"):
         assert REVIVE_SHOW.fullmatch(normalize(text)), text
     assert not REVIVE_SHOW.fullmatch(normalize("부활절 언제야"))
+
+
+def test_saying_test_the_revival_runs_the_real_test():
+    from jarvis.brain import REVIVE_SHOW, REVIVE_TEST
+    from jarvis.local_router import normalize
+    for text in ("부활 시험해 줘", "가디언 테스트", "강제 종료 시험해 봐", "부활 테스트 한 번"):
+        assert REVIVE_TEST.fullmatch(normalize(text)), text
+    for text in ("부활 연출 보여 줘", "시험 공부해야 해", "가디언 꺼"):
+        assert not REVIVE_TEST.fullmatch(normalize(text)), text
+    assert not REVIVE_SHOW.fullmatch(normalize("부활 시험해 줘"))
 
 
 # ---------------------------------------------------------------- 가디언 기본값

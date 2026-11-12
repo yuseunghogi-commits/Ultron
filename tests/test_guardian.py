@@ -173,14 +173,52 @@ def test_step_never_launches_twice_while_the_new_ultron_is_still_starting(guard)
 # ---------------------------------------------------------------- 되살릴 때의 명령 · 비전 닫기
 def test_relaunch_tells_the_new_ultron_it_was_revived(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(guardian.subprocess, "Popen", lambda cmd, **kw: calls.append((cmd, kw)))
+    monkeypatch.setattr(guardian, "launch_detached", lambda cmd, cwd=None: calls.append((cmd, cwd)))
     g = Guard(tmp_path, load_cfg=dict)
     g.relaunch({"relaunch": ["pythonw", "main.py"], "root": str(tmp_path)}, ["vision"])
     g.relaunch({"relaunch": ["pythonw", "main.py"], "root": str(tmp_path)})
-    assert calls[0][0] == ["pythonw", "main.py", "--revived", "--closed", "vision"]
-    assert calls[1][0] == ["pythonw", "main.py", "--revived"] and calls[0][1]["cwd"] == str(tmp_path)
+    assert calls[0] == (["pythonw", "main.py", "--revived", "--closed", "vision"], str(tmp_path))
+    assert calls[1][0] == ["pythonw", "main.py", "--revived"]       # 가디언의 자식이 아닌 독립 프로세스로 띄운다
     g.relaunch({})                                                   # 다시 켜는 법을 모르면 아무것도 하지 않는다
     assert len(calls) == 2
+
+
+def test_launch_detached_goes_through_a_short_lived_bridge(tmp_path, monkeypatch):
+    """작업 관리자에서 울트론을 '작업 끝내기' 하면 그 자식 프로세스까지 끝난다 — 가디언 · 되살린 울트론은 누구의 자식도 아니어야 한다."""
+    calls = []
+    monkeypatch.setattr(guardian.sys, "platform", "win32")
+    monkeypatch.setattr(guardian.subprocess, "Popen", lambda args, **kw: calls.append((args, kw)))
+    guardian.launch_detached(["pythonw", "main.py", "--revived"], str(tmp_path))
+    args, kw = calls[0]
+    assert args[1] == "-c" and args[3] == str(tmp_path) and args[4:] == ["pythonw", "main.py", "--revived"]
+    assert kw["creationflags"] & guardian.BREAKAWAY and kw["creationflags"] & guardian.NO_WINDOW
+    calls.clear()
+
+    def refuse_breakaway(args, **kw):                                # 작업 객체가 빠져나가기를 막으면 그냥 띄운다
+        if kw["creationflags"] & guardian.BREAKAWAY:
+            raise OSError(5, "Access is denied")
+        calls.append((args, kw))
+    monkeypatch.setattr(guardian.subprocess, "Popen", refuse_breakaway)
+    guardian.launch_detached(["x"], None)
+    assert len(calls) == 1 and not calls[0][1]["creationflags"] & guardian.BREAKAWAY
+    assert "start_new_session" in guardian._BRIDGE and "0x01000000" in guardian._BRIDGE   # 다리도 같은 방법으로
+
+
+def test_bridge_really_starts_an_orphan_process(tmp_path):
+    """(실제로) 다리를 거쳐 띄운 프로세스는 띄운 쪽의 자식이 아니다."""
+    import subprocess
+    import sys
+    import time
+    import psutil
+    out = tmp_path / "ppid.txt"
+    code = f"import os; open(r'{out}', 'w').write(str(os.getppid()))"
+    guardian.launch_detached([sys.executable, "-c", code], str(tmp_path))
+    for _ in range(50):
+        if out.exists() and out.read_text():
+            break
+        time.sleep(0.1)
+    assert out.read_text() and int(out.read_text()) != os.getpid()
+    assert int(out.read_text()) not in [c.pid for c in psutil.Process().children(recursive=True) if c.status() != "zombie"]
 
 
 def test_counter_closes_only_designated_programs(tmp_path, monkeypatch):
@@ -250,9 +288,13 @@ def test_register_clears_a_stale_quit_flag_and_records_who_to_guard(tmp_path, mo
 def test_spawn_is_skipped_when_a_guardian_already_runs(tmp_path, monkeypatch):
     launched = []
     monkeypatch.setattr(guardian.sys, "platform", "win32")
-    monkeypatch.setattr(guardian.subprocess, "Popen", lambda *a, **kw: launched.append(a))
+    monkeypatch.setattr(guardian, "launch_detached", lambda cmd, cwd=None: launched.append((cmd, cwd)))
     monkeypatch.setattr(guardian, "running", lambda d: True)
     assert guardian.spawn(tmp_path) is False and launched == []
     monkeypatch.setattr(guardian, "running", lambda d: False)
     assert guardian.spawn(tmp_path) is True and len(launched) == 1
-    assert launched[0][0][1:] == ["-m", "jarvis.guardian"]
+    assert launched[0][0][1:] == ["-m", "jarvis.guardian"] and launched[0][1] == str(tmp_path.parent)   # 울트론의 자식이 아니게
+
+
+def test_guardian_checks_every_second():
+    assert guardian.POLL <= 1.0                                       # 꺼진 지 1초 안에 알아챈다

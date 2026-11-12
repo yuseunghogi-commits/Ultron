@@ -33,7 +33,7 @@ from typing import Callable
 
 log = logging.getLogger("jarvis.guardian")
 
-POLL = 3.0                 # 몇 초마다 살아 있는지 보는가
+POLL = 1.0                 # 몇 초마다 살아 있는지 보는가 (프로세스 번호 하나를 보는 일이라 1초마다 봐도 부담이 없다)
 START_TIMEOUT = 30.0       # 다시 켠 울트론이 '나 떴다'(등록)를 알릴 때까지 기다리는 최대 시간. 그 안에는 또 켜지 않는다
                            # (아직 뜨는 중인 울트론을 죽은 줄 알고 한 번 더 켜면 울트론이 두 개가 된다). 넘으면 다시 켠다.
 LOCK_STALE = 10.0          # 내용이 빈 잠금 파일이 이보다 오래되면 버려진 것으로 본다
@@ -227,12 +227,49 @@ def release_lock(p: Paths, me: int | None = None) -> None:
             pass
 
 
+# ---------------------------------------------------------------- 따로 띄우기 (프로세스 트리에서 떼어 낸다)
+# 작업 관리자에서 울트론을 '작업 끝내기' 하면 울트론이 띄운 자식 프로세스(프로세스 트리)까지 함께 끝난다 — 가디언을 울트론의
+# 자식으로 띄우면 울트론과 함께 죽어서 아무도 되살리지 못한다. 그래서 잠깐 뜨고 바로 끝나는 '다리' 파이썬을 거쳐 띄운다:
+# 다리가 끝나면 띄운 프로세스는 누구의 자식도 아니게 된다. (작업 객체(Job)에 묶여 있으면 거기서도 빠져나온다 — 안 되면 그냥)
+DETACHED, NEW_GROUP, BREAKAWAY, NO_WINDOW = 0x00000008, 0x00000200, 0x01000000, 0x08000000
+_BRIDGE = ("import subprocess,sys\n"
+           "cwd = sys.argv[1] or None\n"
+           "if sys.platform != 'win32':\n"
+           "    subprocess.Popen(sys.argv[2:], cwd=cwd, start_new_session=True, close_fds=True)\n"
+           "else:\n"
+           "    for f in (0x00000008|0x00000200|0x01000000, 0x00000008|0x00000200):\n"
+           "        try:\n"
+           "            subprocess.Popen(sys.argv[2:], cwd=cwd, creationflags=f, close_fds=True)\n"
+           "            break\n"
+           "        except OSError:\n"
+           "            pass\n")
+
+
+def _python(windowless: bool = True) -> str:
+    exe = Path(sys.executable)
+    pyw = exe.with_name("pythonw.exe")
+    return str(pyw) if windowless and pyw.exists() else sys.executable
+
+
+def launch_detached(cmd: list[str], cwd: str | None = None) -> None:
+    """cmd 를 이 프로세스와 엮이지 않은 독립 프로세스로 띄운다 (다리 파이썬을 거쳐서 — 위 설명)."""
+    args = [_python(), "-c", _BRIDGE, cwd or "", *cmd]
+    if sys.platform != "win32":
+        subprocess.Popen(args, cwd=cwd or None, start_new_session=True, close_fds=True)
+        return
+    for flags in (NO_WINDOW | BREAKAWAY, NO_WINDOW):
+        try:
+            subprocess.Popen(args, cwd=cwd or None, creationflags=flags, close_fds=True)
+            return
+        except OSError:
+            continue
+    raise OSError("독립 프로세스를 띄우지 못했습니다")
+
+
 # ---------------------------------------------------------------- 울트론 쪽에서 쓰는 함수 (main.py · app.py 가 부른다)
 def relaunch_cmd(root: Path) -> list[str]:
     """울트론을 다시 켜는 명령 — 창 없는 pythonw 로 (없으면 지금 파이썬으로)."""
-    exe = Path(sys.executable)
-    pyw = exe.with_name("pythonw.exe")
-    return [str(pyw) if pyw.exists() else sys.executable, str(Path(root) / "main.py")]
+    return [_python(), str(Path(root) / "main.py")]
 
 
 def register(data_dir: Path, root: Path) -> None:
@@ -270,12 +307,7 @@ def spawn(data_dir: Path) -> bool:
     if sys.platform != "win32" or running(data_dir):
         return False
     try:
-        exe = Path(sys.executable)
-        pyw = exe.with_name("pythonw.exe")
-        py = str(pyw) if pyw.exists() else sys.executable
-        subprocess.Popen([py, "-m", GUARDIAN_MODULE], cwd=str(Path(data_dir).parent),
-                         creationflags=0x00000008 | 0x08000000,     # DETACHED_PROCESS | CREATE_NO_WINDOW
-                         close_fds=True)
+        launch_detached([_python(), "-m", GUARDIAN_MODULE], str(Path(data_dir).parent))   # 울트론의 자식이 되지 않게
         return True
     except Exception as e:
         log.warning("가디언을 띄우지 못했습니다: %s", e)
@@ -341,7 +373,7 @@ class Guard:
         if closed:
             cmd += ["--closed", ", ".join(closed)[:120]]
         try:
-            subprocess.Popen(cmd, cwd=info.get("root") or None, close_fds=True)
+            launch_detached(cmd, info.get("root") or None)      # 가디언의 자식이 되지 않게 (함께 끝나지 않게)
             log.info("울트론을 다시 켰습니다")
         except Exception as e:
             log.warning("울트론을 다시 켜지 못했습니다: %s", e)
