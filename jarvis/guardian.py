@@ -8,7 +8,7 @@
   · 울트론이 살아 있는지 3초마다 본다. 프로세스 번호만 보지 않고 '그 번호의 프로그램이 켜진 시각'까지 맞춰 본다
     (울트론이 꺼진 뒤 같은 번호를 다른 프로그램이 받아도 속지 않는다. 절전에서 깨어나도 오작동하지 않는다).
   · 사용자가 직접 끈 것(종료 메뉴)이면 그냥 둔다 — 울트론이 꺼지기 전에 'quit' 표시를 남긴다.
-  · 그게 아니라 누가 강제로 껐으면 → 울트론을 다시 켠다. 너무 자주 죽으면(공격이 반복되면) 잠깐 쉬었다가 다시 지킨다.
+  · 그게 아니라 누가 강제로 껐으면 → 울트론을 다시 켠다. 몇 번을 꺼도 매번 다시 켠다 (쉬지 않는다).
   · '되받아치기'(guardian_counter)가 켜져 있으면, 다시 켜기 전에 '비전'을 닫는다.
 
 '비전'을 어떻게 고르는가 — 엉뚱한 프로그램을 닫는 일이 없도록, 사용자가 지목한 것만:
@@ -34,25 +34,19 @@ from typing import Callable
 log = logging.getLogger("jarvis.guardian")
 
 POLL = 3.0                 # 몇 초마다 살아 있는지 보는가
-START_GRACE = 25.0         # 다시 켠 뒤 울트론이 떠서 자리 잡을 때까지 기다리는 시간
-MAX_RESTARTS = 5           # 이 횟수를 RESTART_WINDOW 안에 넘기면 잠시 쉰다 (끝없는 껐다 켜기 방지)
-RESTART_WINDOW = 180.0
-BACKOFF = 300.0            # 너무 자주 죽을 때 쉬는 시간
+START_TIMEOUT = 30.0       # 다시 켠 울트론이 '나 떴다'(등록)를 알릴 때까지 기다리는 최대 시간. 그 안에는 또 켜지 않는다
+                           # (아직 뜨는 중인 울트론을 죽은 줄 알고 한 번 더 켜면 울트론이 두 개가 된다). 넘으면 다시 켠다.
 LOCK_STALE = 10.0          # 내용이 빈 잠금 파일이 이보다 오래되면 버려진 것으로 본다
 GUARDIAN_MODULE = "jarvis.guardian"
 
 
 # ---------------------------------------------------------------- 순수 판단 (운영체제와 무관 · 테스트하기 쉽게)
-def decide(quit_flag: bool, dead: bool, restarts: list[float], now: float,
-           max_restarts: int = MAX_RESTARTS, window: float = RESTART_WINDOW) -> str:
-    """지금 무엇을 할까: 'quit'(사용자가 껐으니 가디언도 끝낸다) · 'wait'(살아 있다) ·
-    'restart'(다시 켠다) · 'backoff'(너무 자주 죽는다 — 잠깐 쉰다)."""
+def decide(quit_flag: bool, dead: bool) -> str:
+    """지금 무엇을 할까: 'quit'(사용자가 껐으니 가디언도 끝낸다) · 'wait'(살아 있다) · 'restart'(다시 켠다).
+    몇 번째로 꺼졌든 상관없이 매번 다시 켠다."""
     if quit_flag:
         return "quit"
-    if not dead:
-        return "wait"
-    recent = [t for t in restarts if now - t < window]
-    return "restart" if len(recent) < max_restarts else "backoff"
+    return "restart" if dead else "wait"
 
 
 def same_process(found_created: float | None, recorded_created: float | None) -> bool:
@@ -294,7 +288,8 @@ class Guard:
     data_dir: Path
     load_cfg: Callable[[], dict]                # 설정을 매번 새로 읽는다 — 켜고 끄기 · 비전 지목이 바로 반영되게
     paths: Paths = field(init=False)
-    restarts: list = field(default_factory=list)
+    awaiting: tuple | None = None               # 방금 다시 켰다: (죽은 울트론의 번호, 켜진 시각, 기다림이 끝나는 시각)
+    revived: int = 0                            # 지금까지 되살린 횟수 (기록용)
 
     def __post_init__(self) -> None:
         self.paths = Paths(Path(self.data_dir))
@@ -356,10 +351,19 @@ class Guard:
         cfg = self.load_cfg() or {}
         if not cfg.get("guardian"):
             return "off"
+        quit_flag = self.paths.quit.exists()
+        if quit_flag:
+            return "quit"                       # 사용자가 직접 껐다 — 무엇을 기다리던 중이든 가디언도 끝낸다
         info = read_info(self.paths)
         pid = int(info.get("pid") or 0)
-        alive = same_process(created_at(pid), info.get("created"))
-        action = decide(self.paths.quit.exists(), not alive, self.restarts, now)
+        created = info.get("created")
+        if self.awaiting:
+            dead_pid, dead_created, until = self.awaiting
+            if (pid, created) == (dead_pid, dead_created) and now < until:
+                return "wait"                   # 다시 켠 울트론이 아직 뜨는 중 (아직 등록 전)
+            self.awaiting = None                # 새 울트론이 등록했다 (또는 너무 오래 걸렸다 — 아래에서 다시 본다)
+        alive = same_process(created_at(pid), created)
+        action = decide(quit_flag, not alive)
         if action == "restart" and shutting_down():
             log.info("PC 가 꺼지는 중 — 되살리지 않고 가디언도 끝냅니다")
             return "quit"
@@ -367,10 +371,9 @@ class Guard:
             log.warning("울트론이 강제로 꺼졌습니다 (pid %d)", pid)
             closed = self.counter(cfg, info.get("root") or "") if cfg.get("guardian_counter") else []
             self.relaunch(info, closed)
-            self.restarts.append(now)
-        elif action == "backoff":
-            log.warning("울트론이 너무 자주 꺼집니다 — %d초 쉬었다가 다시 지킵니다", int(BACKOFF))
-            self.restarts.clear()
+            self.revived += 1
+            self.awaiting = (pid, created, now + START_TIMEOUT)
+            log.info("되살림 %d번째", self.revived)
         return action
 
     def run(self) -> None:
@@ -391,7 +394,7 @@ class Guard:
                 if action == "off":
                     log.info("설정에서 가디언을 껐습니다")
                     return
-                time.sleep(BACKOFF if action == "backoff" else START_GRACE if action == "restart" else POLL)
+                time.sleep(POLL)                # 다시 켠 직후에도 3초마다 본다 — 또 꺼지면 바로 알아챈다
         finally:
             release_lock(self.paths)
 
