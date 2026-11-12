@@ -98,14 +98,19 @@ def usable_install(inst: str, own_root: str) -> bool:
     return not (own_root and (is_within(own_root, inst) or is_within(inst, own_root)))
 
 
-def is_enemy(title: str, exe_path: str, enemy_installs: list[str], enemy_titles: list[str], own_root: str) -> bool:
-    """이 프로그램이 사용자가 지목한 '비전'인가. 울트론 자신의 설치 폴더에서 돈다면 절대 아니다 (오인 방지)."""
-    if own_root and exe_path and is_within(exe_path, own_root):
+def is_enemy(title: str, paths, enemy_installs: list[str], enemy_titles: list[str], own_root: str) -> bool:
+    """이 프로그램이 사용자가 지목한 '비전'인가. paths: 그 프로그램과 얽힌 위치들 (스크립트 · 실행 파일 · 작업 폴더).
+    그중 하나라도 울트론 자신의 폴더 안이면 절대 아니다 (울트론 · 울트론의 가디언을 닫지 않게). 제목이 맞거나,
+    위치 중 하나가 지목한 비전 폴더 안이면 비전이다 — 비전 본체뿐 아니라 그 폴더에서 도는 가디언까지 잡힌다."""
+    if isinstance(paths, str):
+        paths = [paths]
+    paths = [p for p in paths if p]
+    if own_root and any(is_within(p, own_root) for p in paths):
         return False
     t = (title or "").strip()
     if t and any(t == (e or "").strip() for e in enemy_titles if e):
         return True
-    return bool(exe_path and any(usable_install(inst, own_root) and is_within(exe_path, inst) for inst in enemy_installs))
+    return any(usable_install(inst, own_root) and any(is_within(p, inst) for p in paths) for inst in enemy_installs)
 
 
 def script_dir(cmdline: list[str]) -> str:
@@ -338,16 +343,22 @@ class Guard:
             return []
         by_title = _title_owners(titles) if titles else {}
         out = []
-        for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
+        for proc in psutil.process_iter(["pid", "exe", "cmdline", "cwd", "name"]):
             try:
                 if proc.pid == os.getpid():
                     continue
                 exe = proc.info.get("exe") or ""
-                folder = script_dir(proc.info.get("cmdline") or [])
+                cmd = proc.info.get("cmdline") or []
+                folder = script_dir(cmd)                             # 비전 본체: main.py 가 있는 폴더
+                paths = [exe]
+                if folder:
+                    paths.append(ntpath.join(folder, "main.py"))
+                name = (proc.info.get("name") or "").lower()
+                is_py = name.startswith("python") or exe.lower().endswith(("python.exe", "pythonw.exe", "python3.exe"))
+                if is_py and proc.info.get("cwd"):                   # 비전의 가디언: 'python -m jarvis.guardian' 은 스크립트가
+                    paths.append(proc.info["cwd"])                   # 없다 — 작업 폴더(비전 폴더)로 알아본다
                 title = by_title.get(proc.pid, "")
-                # 파이썬 프로그램은 스크립트 폴더로, 그 밖의 프로그램은 실행 파일 위치로 본다
-                where = ntpath.join(folder, "main.py") if folder else exe
-                if is_enemy(title, where, installs, titles, own_root):
+                if is_enemy(title, paths, installs, titles, own_root):
                     label = title or (ntpath.basename(folder.rstrip("\\")) if folder else ntpath.basename(exe)) or "비전"
                     out.append((proc, label))
             except Exception:
@@ -408,9 +419,10 @@ class Guard:
             log.info("PC 가 꺼지는 중 — 되살리지 않고 가디언도 끝냅니다")
             return "quit"
         if action == "restart":
-            fast = self.last_revive is not None and now - self.last_revive < REVIVE_QUIET
-            log.warning("울트론이 강제로 꺼졌습니다 (pid %d)%s", pid, " — 공격받는 중, 바로 되살림" if fast else "")
             closed = self.counter(cfg, info.get("root") or "") if cfg.get("guardian_counter") else []
+            # 싸우는 중이면 (비전을 닫았거나, 되살린 지 얼마 안 돼 또 꺼졌으면) 긴 연출 없이 비전처럼 바로 돌아온다
+            fast = bool(closed) or (self.last_revive is not None and now - self.last_revive < REVIVE_QUIET)
+            log.warning("울트론이 강제로 꺼졌습니다 (pid %d)%s", pid, " — 공격받는 중, 바로 되살림" if fast else "")
             self.relaunch(info, closed, fast=fast)
             self.revived += 1
             self.last_revive = now
