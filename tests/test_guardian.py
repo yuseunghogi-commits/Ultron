@@ -90,7 +90,7 @@ def guard(tmp_path, monkeypatch):
     monkeypatch.setattr(guardian, "created_at", lambda pid: g.created)
     monkeypatch.setattr(guardian, "shutting_down", lambda: g.shutdown)
     monkeypatch.setattr(Guard, "counter", lambda self, cfg, root: g.counted.append(root) or ["vision"])
-    monkeypatch.setattr(Guard, "relaunch", lambda self, info, closed=None: g.launched.append((info, closed)))
+    monkeypatch.setattr(Guard, "relaunch", lambda self, info, closed=None, fast=False: g.launched.append((info, closed, fast)))
     return g
 
 
@@ -109,7 +109,8 @@ def test_step_closes_the_enemy_then_relaunches_when_ultron_is_killed(guard):
     assert guard.step(now=100) == "restart"
     assert guard.counted == [str(guard.data_dir / "ultron")]
     assert len(guard.launched) == 1 and guard.launched[0][1] == ["vision"]   # 무엇을 닫았는지 되살린 울트론에 알린다
-    assert guard.revived == 1 and guard.awaiting == (4242, 1000.0, 100 + guardian.START_TIMEOUT)
+    assert guard.revived == 1 and guard.awaiting == ((4242, 1000.0), 100 + guardian.REGISTER_WAIT)
+    assert guard.launched[0][2] is False       # 처음 꺼졌을 땐 연출을 튼다 (빠르게 아님)
 
 
 def test_step_does_not_revive_while_the_pc_is_shutting_down(guard):
@@ -156,15 +157,29 @@ def test_step_revives_every_single_time_with_no_rest(guard, monkeypatch):
         assert guard.step(now) == "wait"                            # 새 울트론을 지키는 중
         now += 3
     assert guard.revived == 20
+    assert guard.launched[0][2] is False and guard.launched[-1][2] is True   # 2번째부터는 '공격받는 중' — 연출 없이 빠르게
+
+
+def test_rapid_rekill_comes_back_fast_a_calm_revival_plays_the_show(guard, monkeypatch):
+    alive = {4242: 1000.0}
+    monkeypatch.setattr(guardian, "created_at", lambda pid: alive.get(pid))
+    alive.clear()
+    assert guard.step(now=100) == "restart" and guard.launched[-1][2] is False   # 처음 — 연출을 튼다
+    _register(guard, 5001, 101); alive[5001] = 101
+    alive.clear()
+    assert guard.step(now=110) == "restart" and guard.launched[-1][2] is True    # 10초 만에 또 꺼짐 — 바로 돌아온다
+    _register(guard, 5002, 111); alive[5002] = 111
+    alive.clear()
+    assert guard.step(now=200) == "restart" and guard.launched[-1][2] is False   # 90초 뒤 (잠잠하다 꺼짐) — 다시 연출을 튼다
 
 
 def test_step_never_launches_twice_while_the_new_ultron_is_still_starting(guard):
     guard.created = None                                            # 꺼졌다
     assert guard.step(now=100) == "restart"
-    for t in (103, 106, 110, 120, 129):                             # 새 울트론이 아직 등록 전 — 또 켜면 울트론이 두 개가 된다
+    for t in (102, 105, 108):                                       # 새 울트론이 아직 등록 전 — 또 켜면 울트론이 두 개가 된다
         assert guard.step(now=t) == "wait"
     assert len(guard.launched) == 1
-    assert guard.step(now=100 + guardian.START_TIMEOUT + 1) == "restart"    # 30초가 지나도 안 떴다 — 다시 켠다
+    assert guard.step(now=100 + guardian.REGISTER_WAIT + 1) == "restart"    # 등록 기다림(짧다)이 지나도 안 떴다 — 다시 켠다
     assert len(guard.launched) == 2
     Paths(guard.data_dir).quit.write_text("1", encoding="utf-8")
     assert guard.step(now=140) == "quit"                            # 기다리는 중이어도 사용자가 끄면 끝낸다
