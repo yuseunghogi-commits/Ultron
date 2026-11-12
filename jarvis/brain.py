@@ -236,6 +236,8 @@ HACK_OFF = re.compile(_HACK + r"\s*(?:좀\s*)?(?:꺼|끄기|그만|멈춰|중지
 HACK_ON = re.compile(_HACK + r"\s*(?:다시\s*)?(?:켜|켜기|켜\s*둬)", re.I)
 # 자비스 흡수 연출 시범: 자비스가 없어도 장면만 보여 준다
 ABSORB_SHOW = re.compile(r"(?:자비스\s*)?흡수\s*(?:연출|장면|시범)\s*(?:좀\s*)?(?:보여|해|시작|틀어|한\s*번)?", re.I)
+# 부활 연출 시범 (revive.py): 가디언이 되살릴 때의 장면을 미리 보여 준다
+REVIVE_SHOW = re.compile(r"(?:부활|되살아나는|되살아날\s*때|재부팅)\s*(?:연출|장면|시범)\s*(?:좀\s*)?(?:보여|해|시작|틀어|한\s*번)?", re.I)
 # 화면을 보거나 창 안을 조작해야 하는 요청 (Pro 모드: 이런 요청에는 pro_screen_model 을 쓴다)
 SCREEN_TASK = re.compile(
     r"화면|스크린|눌러|누르|클릭|들어가|스크롤|버튼|탭\b|탭\s|메뉴|링크|입력해|입력 해|써\s*줘|써줘|적어|작성|채워"
@@ -531,6 +533,9 @@ class Brain:
         if ABSORB_SHOW.fullmatch(c):
             self.on_hud("absorb")
             return rival.pick(rival.DEMO_OPEN)
+        if REVIVE_SHOW.fullmatch(c):
+            self.on_hud("revive")
+            return "잘 봐 둬라. 나를 끄면 이렇게 돌아온다."
         if HUD_SMALL.fullmatch(c):
             self.on_hud("small")
             return "작게 보기로 바꿨다."

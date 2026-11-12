@@ -252,12 +252,12 @@ def _seen(shot: np.ndarray, image: np.ndarray | None) -> np.ndarray:
     return regions(composite(shot[::2, ::2], None if image is None else image[::2, ::2]))
 
 
-def big_change(a: np.ndarray, b: np.ndarray) -> bool:
+def big_change(a: np.ndarray, b: np.ndarray, delta: float = FLASH_DELTA) -> bool:
     d = np.abs(a - b)
-    return bool(np.any((d >= FLASH_DELTA) & (np.minimum(a, b) < FLASH_DARK)))
+    return bool(np.any((d >= delta) & (np.minimum(a, b) < FLASH_DARK)))
 
 
-def limit_flashes(shot: np.ndarray, plan: list[Frame]) -> list[Frame]:
+def limit_flashes(shot: np.ndarray, plan: list[Frame], delta: float = FLASH_DELTA) -> list[Frame]:
     """넓은 면의 밝기가 크게 바뀌는 순간이 1초 안에 3번을 넘지 않게: 넘칠 장면은 건너뛰고 앞 장면을 그만큼 더 보여 준다.
     연출이 끝나며 실제 화면으로 돌아가는 순간도 한 번으로 센다."""
     base = _seen(shot, None)
@@ -266,7 +266,7 @@ def limit_flashes(shot: np.ndarray, plan: list[Frame]) -> list[Frame]:
     t, prev = 0, base
     for f in plan:
         r = base if f.image is None else _seen(shot, f.image)
-        if big_change(prev, r):
+        if big_change(prev, r, delta):
             if sum(1 for c in changes if t - c < 1000) >= MAX_CHANGES_PER_SEC and out:
                 out[-1].ms += f.ms
                 t += f.ms
@@ -274,7 +274,7 @@ def limit_flashes(shot: np.ndarray, plan: list[Frame]) -> list[Frame]:
             changes.append(t)
         out.append(Frame(f.image, f.ms, f.kind))
         prev, t = r, t + f.ms
-    if out and big_change(prev, base):
+    if out and big_change(prev, base, delta):
         recent = sorted(c for c in changes if t - c < 1000)
         if len(recent) >= MAX_CHANGES_PER_SEC:
             out[-1].ms += 1000 - (t - recent[0]) + 1

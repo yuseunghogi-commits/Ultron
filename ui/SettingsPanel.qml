@@ -73,7 +73,8 @@ Item {
         rivalShowSw.checked = cfg.rival_show !== false
         hackSw.checked = cfg.hack_show !== false
         hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
-        guardSw.checked = cfg.guardian === true
+        guardSw.checked = cfg.guardian !== false
+        reviveSw.checked = cfg.guardian_show !== false
         counterSw.checked = cfg.guardian_counter !== false
         enemyField.text = (cfg.enemy_installs || []).join("; ")
         enemyTitleField.text = (cfg.enemy_titles || []).join("; ")
@@ -119,6 +120,7 @@ Item {
             hack_show: hackSw.checked,
             hack_show_every: hackFreqs[hackBox.currentIndex].v,
             guardian: guardSw.checked,
+            guardian_show: reviveSw.checked,
             guardian_counter: counterSw.checked,
             enemy_installs: splitList(enemyField.text),
             enemy_titles: splitList(enemyTitleField.text),
@@ -309,6 +311,11 @@ Item {
                 Combo { id: hackBox; visible: hackSw.checked; model: sp.hackFreqs }
                 Label2 { text: "GUARDIAN" }
                 Toggle { id: guardSw; text: "가디언 — 누가 울트론을 강제로 끄면 바로 되살린다" }
+                Toggle {
+                    id: reviveSw
+                    visible: guardSw.checked
+                    text: "되살아날 때 연출 — 화면이 해킹당하듯 깨지다 TV 지직 화면 뒤 울트론 눈부터 나타난다"
+                }
                 Toggle {
                     id: counterSw
                     visible: guardSw.checked

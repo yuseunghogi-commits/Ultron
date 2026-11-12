@@ -26,11 +26,12 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import absorb, approval, glitch, guardian, hearing, hud_feed, rival, winutil
+from . import absorb, approval, glitch, guardian, hearing, hud_feed, revive, rival, winutil
 from .absorb_view import AbsorbView
 from .absorb_view import crop as crop_image
 from .brain import Brain, situation_text
 from .glitch_view import GlitchView, from_qimage, to_qimage
+from .revive_view import ReviveView
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
 from .listener import Listener
@@ -219,6 +220,7 @@ class Jarvis(QObject):
     sig_stream = Signal(int, str)      # (명령 번호, 답 조각) — 대화 모드에서 답이 만들어지는 대로
     sig_rival = Signal(object)         # 자비스를 끈 결과 (rival.Result)
     sig_glitch = Signal(object)        # 해킹 연출 준비 끝 (화면 영역, 장면들, 소리 파일) — 실패하면 None
+    sig_revive = Signal(object)        # 부활 연출 준비 끝 (화면 영역, 장면, 소리 파일) — 실패하면 None
     sig_absorb_go = Signal(object, bool)     # 자비스 흡수 연출을 시작하라 (찾은 자비스들, 사용자가 시켰는가)
     sig_absorb_ready = Signal(object)        # 흡수 장면 준비 끝 (장면, 소리 파일, 화면 왼쪽 위) — 실패하면 None
     sig_absorb_hit = Signal(object, object)  # 장면 도중 실제로 끈 결과 (끈 자비스들, 끄지 못한 자비스들)
@@ -277,7 +279,8 @@ class Jarvis(QObject):
                           (self.sig_notify, self._on_notify), (self.sig_hud, self._on_hud),
                           (self.sig_feed, self._on_feed), (self.sig_timer_cancel, self._cancel_timers),
                           (self.sig_point, self._on_point), (self.sig_rival, self._on_rival),
-                          (self.sig_glitch, self._on_glitch), (self.sig_absorb_go, self._absorb_begin),
+                          (self.sig_glitch, self._on_glitch), (self.sig_revive, self._on_revive),
+                          (self.sig_absorb_go, self._absorb_begin),
                           (self.sig_absorb_ready, self._absorb_play), (self.sig_absorb_hit, self._absorb_killed)):
             sig.connect(slot)
 
@@ -414,6 +417,11 @@ class Jarvis(QObject):
         self._glitch_forced = False
         self._glitch_view: GlitchView | None = None
         self._glitch_fx: QSoundEffect | None = None
+        # 부활 연출 (revive.py · revive_view.py): 가디언이 되살린 울트론이 처음 뜰 때 한 번
+        self._reviving = False
+        self._revive_demo = False              # '부활 연출 보여 줘' — 되살아난 게 아니라 시범
+        self._revive_view: ReviveView | None = None
+        self._revive_fx: QSoundEffect | None = None
         self._hack_last = ""
         self._hack_timer = QTimer(self)
         self._hack_timer.setInterval(1000)
@@ -427,6 +435,8 @@ class Jarvis(QObject):
         psutil.cpu_percent(None)
 
         QTimer.singleShot(2300, self._boot_done)
+        if getattr(args, "revived", False):
+            QTimer.singleShot(150, self._revive_begin)   # 되살아났다 — HUD 가 뜨자마자 부활 연출부터
 
     # ================================================================== 자비스 견제 (rival.py)
     def _flush_line(self) -> None:
@@ -686,7 +696,7 @@ class Jarvis(QObject):
     def _quiet(self, listening_ok: bool = False) -> bool:
         """지금 울트론이 혼잣말을 띄워도 되는가 (명령 처리 · 승인 대기 · 듣는 중이 아닐 때).
         listening_ok: 사용자가 방금 시킨 일이라 '이어 말하기를 기다리는 중'이어도 된다."""
-        return not (self.busy or self._pending_confirm or self._enroll
+        return not (self.busy or self._pending_confirm or self._enroll or self._reviving
                     or self._wake_train is not None or (self._active() and not listening_ok))
 
     # ================================================================== 해킹 연출 (glitch.py · glitch_view.py)
@@ -810,8 +820,7 @@ class Jarvis(QObject):
             self.bridge.toast.emit("warn", f"{self.cfg['hotkey'].upper()} 는 다른 앱이 사용 중이라 "
                                            f"{self.hotkey.active.upper()} 로 대신 부릅니다")
         if getattr(self.args, "revived", False):
-            self._revived_line(getattr(self.args, "closed", "") or "")
-            return
+            return                         # 부활 연출이 끝나면 '되살아났다'를 띄운다 (_revive_done)
         if self.args.no_greet:
             return
         hour = time.localtime().tm_hour
@@ -837,6 +846,71 @@ class Jarvis(QObject):
         log.warning("가디언이 울트론을 되살림%s", f" (닫은 비전: {closed})" if closed else "")
         self.bridge.toast.emit("warn", "울트론이 강제로 꺼졌다가 되살아났습니다" + (f" · 닫은 프로그램: {closed}" if closed else ""))
         self.say(msg, follow_up=False)
+
+    # ================================================================== 부활 연출 (revive.py · revive_view.py)
+    # 순서: 화면 찍기(_revive_begin) → 장면 · 소리 만들기(다른 스레드, _build_revive) → 재생(_on_revive) → 끝(_revive_done)
+    def _revive_begin(self, demo: bool = False) -> None:
+        """해킹으로 화면이 깨지다 → TV 지직 2초 → 울트론 눈부터 나타나는 장면. 못 하면 바로 '되살아났다'만 띄운다."""
+        if self._reviving:
+            return                             # 이미 보여 주는 중
+        self._revive_demo = demo
+        if not demo and not self.cfg["guardian_show"]:
+            self._revive_done()
+            return
+        if winutil.fullscreen_app():           # 게임 · 발표 · 전체 화면 동영상 앞에서는 화면을 덮지 않는다
+            self._revive_done()
+            return
+        screen = QGuiApplication.screenAt(QCursor.pos()) or self.win.screen() or QGuiApplication.primaryScreen()
+        try:
+            shot = from_qimage(screen.grabWindow(0).toImage())
+        except Exception as e:
+            log.warning("부활 연출: 화면을 찍지 못함 (%s)", e)
+            self._revive_done()
+            return
+        self._reviving = True
+        self.listener.muted = True             # 연출 소리를 말소리로 듣지 않게
+        threading.Thread(target=self._build_revive, args=(shot, screen.geometry()), daemon=True, name="revive").start()
+
+    def _build_revive(self, shot, geometry) -> None:
+        """(다른 스레드) 장면 재료 · 소리를 만든다 (0.3초쯤)."""
+        try:
+            rng = np.random.default_rng()
+            scene = revive.build(shot, (geometry.width(), geometry.height()), rng)
+            wav = glitch.write_wav(revive.sound(scene, rng), name="ultron_revive")
+            self.sig_revive.emit((geometry, scene, wav))
+        except Exception:
+            log.exception("부활 연출 준비 실패")
+            self.sig_revive.emit(None)
+
+    @Slot(object)
+    def _on_revive(self, pack) -> None:
+        if pack is None:
+            self._revive_done()
+            return
+        geometry, scene, wav = pack
+        if self._revive_view is None:
+            self._revive_view = ReviveView()
+            self._revive_view.finished.connect(self._revive_done)
+            hwnd = int(self._revive_view.winId())
+            winutil.set_capture_excluded(hwnd, True)   # 화면 캡처(울트론의 화면 보기 포함)에는 찍히지 않는다
+            self.focus.own_hwnds.add(hwnd)
+        self._revive_fx = self._play_fx(self._revive_fx, wav, 0.5)
+        self._revive_view.play(geometry, scene)
+
+    @Slot()
+    def _revive_done(self) -> None:
+        was = self._reviving
+        self._reviving = False
+        if was:
+            self._release_fx("_revive_fx")
+            QTimer.singleShot(300, self._unmute)
+        if self._revive_demo:
+            self._revive_demo = False
+            line = "되살아날 때는 이렇게 깨어난다. 끄려는 자가 있다면 말이지."
+            self.bridge.set("replyText", line)
+            self.say(line, follow_up=False)
+            return
+        self._revived_line(getattr(self.args, "closed", "") or "")
 
     # ================================================================== 상태
     def _set_state(self, state: str, status: str | None = None) -> None:
@@ -1219,7 +1293,7 @@ class Jarvis(QObject):
 
     def _unmute(self) -> None:
         # 연출(해킹 · 자비스 흡수)이 소리를 내는 동안에는 열지 않는다 — 연출 소리를 말소리로 듣지 않게
-        if not self._glitching and self._absorb is None:
+        if not self._glitching and self._absorb is None and not self._reviving:
             self.listener.muted = False
 
     # ================================================================== 도구 이벤트
@@ -1313,6 +1387,8 @@ class Jarvis(QObject):
             self._hack_forced = True       # 지금 하던 대답이 끝나면 바로
         elif action == "absorb":
             self._absorb_demo = True       # 자비스 흡수 연출 시범 (자비스 없이 장면만) — 대답이 끝나면 바로
+        elif action == "revive":
+            QTimer.singleShot(1500, lambda: self._revive_begin(demo=True))   # 부활 연출 시범 — 대답을 읽은 뒤
 
     # ================================================================== 액티브 모드 (전체 화면 HUD)
     def set_active(self, on: bool) -> None:

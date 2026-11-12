@@ -43,7 +43,8 @@ DEFAULTS: dict = {
     "rival_jarvis": True,            # 자비스 견제: 자비스 앱이 같이 켜져 있으면 끄고 한마디 한다 · 자비스를 깔보는 성격 (rival.py)
     "rival_show": True,              # 자비스 흡수 연출: 자비스를 끌 때 촉수로 꿰뚫어 빨아들이는 장면을 보여 준다 (끄면 조용히 끄기만)
     # --- 가디언: 울트론을 지키는 감시 프로그램 (guardian.py) ---
-    "guardian": False,               # 켜면 울트론과 따로 도는 감시 프로그램이, 누가 울트론을 강제로 끄면 다시 켜 준다
+    "guardian": True,                # 울트론과 따로 도는 감시 프로그램이, 누가 울트론을 강제로 끄면 다시 켜 준다
+    "guardian_show": True,           # 되살아날 때 연출: 해킹 화면이 점점 심해지다 TV 지직 화면 → 울트론 눈부터 나타남 (revive.py)
     "guardian_counter": True,        # 다시 켜기 전에 '비전'(아래에 지목한 것)을 닫는다
     "enemy_installs": [],            # '비전'으로 볼 프로그램의 설치 폴더들 (이 폴더에서 실행된 것만 닫는다 — 오인 방지)
     "enemy_titles": [],              # '비전'으로 볼 창 제목들 (정확히 같을 때만)
@@ -74,9 +75,30 @@ DEFAULTS: dict = {
     # --- 화면 ---
     "position": "bottom-right",       # bottom-right | top-right
     "compact": False,
+    "migrated": [],                  # 이미 한 번 적용한 설정 옮기기 (아래 _MIGRATIONS) — 다시 적용하지 않는다
 }
 
 _lock = threading.Lock()
+
+# 기본값을 바꾸면서 '예전 설정 파일에도 한 번만' 새 값을 넣는 것들. 이름이 migrated 에 남아 다시는 적용하지 않으므로,
+# 그 뒤에 사용자가 직접 끄면 그대로 꺼져 있다 (_OLD_DEFAULTS 처럼 매번 되돌리지 않는다).
+_MIGRATIONS = {
+    "guardian_default_on": {"guardian": True},   # 가디언이 처음엔 꺼짐이 기본이었다 → 켜짐으로
+}
+
+
+def _migrate(data: dict) -> bool:
+    """아직 적용하지 않은 설정 옮기기를 한 번씩 적용한다 → 바뀐 게 있으면 True."""
+    done = list(data.get("migrated") or [])
+    changed = False
+    for name, values in _MIGRATIONS.items():
+        if name not in done:
+            data.update(values)
+            done.append(name)
+            changed = True
+    if changed:
+        data["migrated"] = done
+    return changed
 
 # 자비스 → 울트론으로 이름을 바꾸면서 기본값이 바뀐 항목. 예전 기본값을 그대로 쓰던 설정만 새 기본값으로 옮긴다
 # (사용자가 직접 바꿔 둔 값은 건드리지 않는다)
@@ -100,6 +122,7 @@ class Config:
                             self._data[k] = DEFAULTS[k]
             except Exception:
                 pass
+        _migrate(self._data)
         self.save()
 
     def __getitem__(self, key: str):
@@ -159,4 +182,5 @@ def load_config() -> dict:
             data.update(loaded)
     except (OSError, ValueError):
         pass
+    _migrate(data)          # (저장은 울트론 본체가 한다 — 여기서는 읽기만)
     return data
