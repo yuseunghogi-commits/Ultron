@@ -42,6 +42,11 @@ DEFAULTS: dict = {
     "hack_show_every": "sometimes",  # 해킹 연출 빈도: rare(10~20분) | sometimes(4~10분) | often(1.5~4분)
     "rival_jarvis": True,            # 자비스 견제: 자비스 앱이 같이 켜져 있으면 끄고 한마디 한다 · 자비스를 깔보는 성격 (rival.py)
     "rival_show": True,              # 자비스 흡수 연출: 자비스를 끌 때 촉수로 꿰뚫어 빨아들이는 장면을 보여 준다 (끄면 조용히 끄기만)
+    # --- 가디언: 울트론을 지키는 감시 프로그램 (guardian.py) ---
+    "guardian": False,               # 켜면 울트론과 따로 도는 감시 프로그램이, 누가 울트론을 강제로 끄면 다시 켜 준다
+    "guardian_counter": True,        # 다시 켜기 전에 '비전'(아래에 지목한 것)을 닫는다
+    "enemy_installs": [],            # '비전'으로 볼 프로그램의 설치 폴더들 (이 폴더에서 실행된 것만 닫는다 — 오인 방지)
+    "enemy_titles": [],              # '비전'으로 볼 창 제목들 (정확히 같을 때만)
     "mic_device": None,               # None = 기본 마이크
     "mic_sensitivity": 1.0,           # 높을수록 작은 소리에도 반응
     "noise_robust": True,             # 소음 환경 모드: 음성 감지 AI + 소음 제거 AI (시끄러운 곳에서 작은 목소리)
@@ -143,3 +148,15 @@ def load_memory() -> list[str]:
 def save_memory(items: list[str]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     MEMORY_PATH.write_text(json.dumps(items[-50:], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_config() -> dict:
+    """설정을 평범한 dict 로 읽는다 (가디언처럼 Qt 없이 도는 별개 프로세스용). 없는 값은 기본값으로 채운다."""
+    data = dict(DEFAULTS)
+    try:
+        loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            data.update(loaded)
+    except (OSError, ValueError):
+        pass
+    return data

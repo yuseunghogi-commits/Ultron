@@ -31,12 +31,14 @@ def app(monkeypatch):
 
     class App:
         say, _after_say, _read_seconds = J.say, J._after_say, staticmethod(J._read_seconds)
-        _enroll_feed = J._enroll_feed
+        _enroll_feed, _revived_line = J._enroll_feed, J._revived_line
 
         def __init__(self):
             self.shown, self.states, self.later = {}, [], []
-            self.bridge = types.SimpleNamespace(set=lambda k, v: self.shown.__setitem__(k, v))
-            self.cfg = {"follow_up_seconds": 7, "chat_idle_seconds": 40}
+            self.toasts = []
+            self.bridge = types.SimpleNamespace(set=lambda k, v: self.shown.__setitem__(k, v),
+                                                toast=types.SimpleNamespace(emit=lambda kind, m: self.toasts.append(m)))
+            self.cfg = {"follow_up_seconds": 7, "chat_idle_seconds": 40, "user_title": "창조자"}
             self.brain = types.SimpleNamespace(chat_mode=False)
             self.listener = types.SimpleNamespace(force_capture=False)
             self.busy, self.mic_ok, self._pending_confirm, self._enroll = False, True, None, None
@@ -126,3 +128,11 @@ def test_enrollment_gives_time_to_read_the_guide_before_the_sentence(app):
     assert 3000 <= waits[0] <= 8000 and app.prompts == 1            # 읽을 시간이 지나면 첫 문장
     app._enroll_feed("문장을 읽었다", "v2")
     assert fed == ["v2"] and app.prompts == 2
+
+
+def test_revived_ultron_says_it_came_back_and_names_what_it_closed(app):
+    app._revived_line("vision")
+    assert "되살아났다" in app.shown["replyText"] and "vision" in app.shown["replyText"]
+    assert app.toasts and "되살아났습니다" in app.toasts[0]
+    app._revived_line("")
+    assert "닫아 버렸다" not in app.shown["replyText"]                 # 닫은 게 없으면 그 말은 하지 않는다

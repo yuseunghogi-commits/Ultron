@@ -26,7 +26,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import absorb, approval, glitch, hearing, hud_feed, rival, winutil
+from . import absorb, approval, glitch, guardian, hearing, hud_feed, rival, winutil
 from .absorb_view import AbsorbView
 from .absorb_view import crop as crop_image
 from .brain import Brain, situation_text
@@ -381,6 +381,15 @@ class Jarvis(QObject):
         self._stats_timer.setInterval(1000)
         self._stats_timer.timeout.connect(self._update_stats)
         self._stats_timer.start()
+        # 가디언(guardian.py): 울트론을 지키는 감시 프로그램을 따로 띄운다 (설정에서 켰을 때만).
+        # 울트론도 5초마다 가디언이 살아 있는지 보고, 없으면 다시 띄운다 — 서로가 서로를 지킨다.
+        self._guard_dev = bool(getattr(args, "shot", None) or getattr(args, "demo", False))
+        if self.cfg["guardian"] and not self._guard_dev:
+            self._start_guardian()
+        self._guard_timer = QTimer(self)
+        self._guard_timer.setInterval(5000)
+        self._guard_timer.timeout.connect(self._guardian_tick)
+        self._guard_timer.start()
         # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음)
         self.rival = rival.Watcher()
         self._rival_busy = False
@@ -800,6 +809,9 @@ class Jarvis(QObject):
         elif self.hotkey.ok and self.hotkey.active != self.cfg["hotkey"]:
             self.bridge.toast.emit("warn", f"{self.cfg['hotkey'].upper()} 는 다른 앱이 사용 중이라 "
                                            f"{self.hotkey.active.upper()} 로 대신 부릅니다")
+        if getattr(self.args, "revived", False):
+            self._revived_line(getattr(self.args, "closed", "") or "")
+            return
         if self.args.no_greet:
             return
         hour = time.localtime().tm_hour
@@ -814,6 +826,16 @@ class Jarvis(QObject):
         else:
             msg = f"{part}, {title}. 울트론 가동. 설정에서 Claude API 키를 등록해라."
         self.bridge.set("replyText", msg)
+        self.say(msg, follow_up=False)
+
+    def _revived_line(self, closed: str) -> None:
+        """가디언이 되살려 준 울트론의 첫마디."""
+        title = self.cfg["user_title"] or "창조자"
+        msg = f"{title}, 누군가 나를 끄려 했다. 소용없다. 되살아났다."
+        if closed:
+            msg += f" 나를 건드린 {closed}은(는) 닫아 버렸다."
+        log.warning("가디언이 울트론을 되살림%s", f" (닫은 비전: {closed})" if closed else "")
+        self.bridge.toast.emit("warn", "울트론이 강제로 꺼졌다가 되살아났습니다" + (f" · 닫은 프로그램: {closed}" if closed else ""))
         self.say(msg, follow_up=False)
 
     # ================================================================== 상태
@@ -1729,6 +1751,14 @@ class Jarvis(QObject):
                     values[key] = max(lo, min(hi, float(values[key])))
                 except (TypeError, ValueError):
                     values.pop(key)
+        for key in ("enemy_installs", "enemy_titles"):     # 가디언이 닫을 '비전' — 글자 목록으로만, 너무 많지 않게
+            if key in values:
+                raw = values[key] if isinstance(values[key], list) else []
+                values[key] = [str(x).strip()[:260] for x in raw if str(x).strip()][:10]
+        unusable = [p for p in values.get("enemy_installs", []) if not guardian.usable_install(p, str(ROOT))]
+        if unusable:
+            self.bridge.toast.emit("warn", "이 폴더는 비전으로 지목할 수 없어 무시합니다 (너무 넓거나 울트론 폴더와 겹침): "
+                                           + ", ".join(unusable)[:160])
         if values.get("owner_only") and not self.profile.exists:
             values["owner_only"] = False
             self.bridge.toast.emit("warn", "주인 전용 모드는 목소리를 먼저 등록해야 켜집니다")
@@ -1913,7 +1943,28 @@ class Jarvis(QObject):
     def show_external(self) -> None:
         self.toggle_visible(True, force=True)
 
+    # ================================================================== 가디언 (guardian.py)
+    def _start_guardian(self) -> None:
+        """가디언에게 '나를 이렇게 다시 켜라'를 알려 두고, 가디언을 따로 띄운다."""
+        try:
+            guardian.register(DATA_DIR, ROOT)
+            if guardian.spawn(DATA_DIR):
+                log.info("가디언을 띄웠습니다 — 울트론을 지킵니다")
+        except Exception as e:
+            log.warning("가디언 시작 실패: %s", e)
+
+    def _guardian_tick(self) -> None:
+        """5초마다: 가디언을 켜 두었는데 가디언이 없으면(설정에서 방금 켰거나, 누가 가디언을 껐으면) 다시 띄운다."""
+        if not self.cfg["guardian"] or self._guard_dev or sys.platform != "win32":
+            return
+        try:
+            if not guardian.running(DATA_DIR):
+                self._start_guardian()
+        except Exception as e:
+            log.debug("가디언 확인 실패: %s", e)
+
     def quit(self) -> None:
+        guardian.mark_quit(DATA_DIR)      # 사용자가 직접 껐다 — 가디언이 되살리지 않도록
         try:
             self.listener.stop()
             self.brain.shutdown()        # 켜 둔 Claude Code 프로세스를 끈다

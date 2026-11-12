@@ -73,6 +73,10 @@ Item {
         rivalShowSw.checked = cfg.rival_show !== false
         hackSw.checked = cfg.hack_show !== false
         hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
+        guardSw.checked = cfg.guardian === true
+        counterSw.checked = cfg.guardian_counter !== false
+        enemyField.text = (cfg.enemy_installs || []).join("; ")
+        enemyTitleField.text = (cfg.enemy_titles || []).join("; ")
         sentinelServerField.text = cfg.sentinel_server || ""
         sentinelKeyField.text = ""
         sentinelReqField.text = cfg.sentinel_requester || ""
@@ -90,6 +94,11 @@ Item {
         delBtn.armed = false
         open = true
     }
+    // '; ' 나 줄바꿈으로 나눈 목록 → 배열 (빈 칸은 뺀다)
+    function splitList(text) {
+        return text.split(/[;\n]/).map(s => s.trim()).filter(s => s.length > 0)
+    }
+
     function save() {
         const out = {
             user_title: titleField.text.trim() || "창조자",
@@ -109,6 +118,10 @@ Item {
             rival_show: rivalShowSw.checked,
             hack_show: hackSw.checked,
             hack_show_every: hackFreqs[hackBox.currentIndex].v,
+            guardian: guardSw.checked,
+            guardian_counter: counterSw.checked,
+            enemy_installs: splitList(enemyField.text),
+            enemy_titles: splitList(enemyTitleField.text),
             sentinel_server: sentinelServerField.text.trim() || "http://127.0.0.1:8000",
             sentinel_api_key: sentinelKeyField.text.trim(),
             sentinel_requester: sentinelReqField.text.trim(),
@@ -294,6 +307,31 @@ Item {
                 Toggle { id: rivalShowSw; text: "자비스 흡수 연출 (끌 때 촉수로 꿰뚫어 빨아들이는 장면)" }
                 Toggle { id: hackSw; text: "해킹 연출 (가끔 화면이 깨지고 의미심장한 한마디)" }
                 Combo { id: hackBox; visible: hackSw.checked; model: sp.hackFreqs }
+                Label2 { text: "GUARDIAN" }
+                Toggle { id: guardSw; text: "가디언 — 누가 울트론을 강제로 끄면 바로 되살린다" }
+                Toggle {
+                    id: counterSw
+                    visible: guardSw.checked
+                    text: "되받아치기 — 되살리기 전에 아래에 지목한 '비전'을 닫는다"
+                }
+                Field {
+                    id: enemyField
+                    visible: guardSw.checked && counterSw.checked
+                    placeholderText: "비전 설치 폴더 (예: C:\\Users\\나\\vision) — 여러 개는 ; 로"
+                }
+                Field {
+                    id: enemyTitleField
+                    visible: guardSw.checked && counterSw.checked
+                    placeholderText: "비전 창 제목 (정확히 같을 때만, 예: V.I.S.I.O.N) — 여러 개는 ; 로"
+                }
+                Text {
+                    visible: guardSw.checked && counterSw.checked
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Qt.rgba(0.9, 0.87, 0.89, 0.55)
+                    font.pixelSize: 10
+                    text: "지목한 것만 닫는다. 울트론 자신 · 드라이브 전체 · Windows · Program Files · 사용자 폴더 자체는 지목해도 무시한다."
+                }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
