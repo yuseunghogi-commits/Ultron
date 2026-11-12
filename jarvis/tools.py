@@ -22,13 +22,10 @@ import psutil
 
 from . import rival, sentinel, uia, vision, winutil
 from .config import DATA_DIR, Config, load_memory, save_memory
+from .control import ControlTools, ToolError
 
 log = logging.getLogger("jarvis.tools")
 NO_WINDOW = 0x08000000
-
-
-class ToolError(Exception):
-    pass
 
 
 @dataclass
@@ -115,7 +112,7 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s\-_.()]+", "", s.lower())
 
 
-class PCTools:
+class PCTools(ControlTools):
     def __init__(self, cfg: Config, focus: winutil.FocusTracker, hooks: Hooks) -> None:
         self.cfg = cfg
         self.focus = focus
@@ -177,15 +174,21 @@ class PCTools:
                                      "required": required or []}}
         s = {"type": "string"}
         return [
-            tool("open_app", "Launch an installed application by name (Korean or English, e.g. '메모장', '크롬', '카카오톡', 'Visual Studio Code'). Searches the Start menu.",
+            tool("open_app", "Launch an installed application by name (Korean or English, e.g. '메모장', '크롬', '카카오톡', 'Visual Studio Code'). Searches the Start menu. "
+                 "You can type or click right after: the next screen tool waits for the new window by itself.",
                  {"name": s}, ["name"]),
             tool("close_app", "Gracefully close windows of an application (sends WM_CLOSE so unsaved work prompts). Match by app name or window title.",
                  {"name": s}, ["name"]),
             tool("focus_app", "Bring an already-open window to the front by app name or window title.", {"name": s}, ["name"]),
             tool("list_windows", "List currently open windows (title and process). Use to see what is running."),
-            tool("window_action", "Control the active window or desktop.",
-                 {"action": {"type": "string", "enum": ["show_desktop", "maximize", "minimize", "snap_left", "snap_right",
-                                                         "switch_next", "close_active", "task_view", "new_virtual_desktop"]}},
+            tool("window_action", "Control a window or the desktop. Acts on the active window, or on the window named by app "
+                 "(brought to the front first). restore = back to normal size, fullscreen = F11, move_to_next_monitor = send "
+                 "the window to the other display, minimize_others = minimize everything except this window. "
+                 "To put several windows side by side use arrange_windows.",
+                 {"action": {"type": "string", "enum": ["show_desktop", "maximize", "minimize", "restore", "snap_left", "snap_right",
+                                                         "fullscreen", "move_to_next_monitor", "minimize_others",
+                                                         "switch_next", "close_active", "task_view", "new_virtual_desktop"]},
+                  "app": {"type": "string", "description": "optional app name or window title; default = active window"}},
                  ["action"]),
             tool("open_url", "Open a URL in the default browser.", {"url": s}, ["url"]),
             tool("browser_search", "Open a search results page in the browser for the user to look at.",
@@ -199,8 +202,11 @@ class PCTools:
                   "level": {"type": "integer", "description": "0-100 for set; step size for up/down (default 10)"}},
                  ["action"]),
             tool("type_text", "Type text into the user's active window (works for Korean). Optionally press Enter after. "
-                 "Set replace=true to overwrite what is already in the focused input box (select all, then type).",
-                 {"text": s, "press_enter": {"type": "boolean"}, "replace": {"type": "boolean"}}, ["text"]),
+                 "Set replace=true to overwrite what is already in the focused input box (select all, then type). "
+                 "It pastes the text; if nothing appears (some games, terminals and remote-desktop windows block pasting) "
+                 "retry with as_keys=true to send real key presses instead. To type into a named input box use fill_ui.",
+                 {"text": s, "press_enter": {"type": "boolean"}, "replace": {"type": "boolean"},
+                  "as_keys": {"type": "boolean"}}, ["text"]),
             tool("press_keys", "Press a keyboard shortcut in the user's active window, e.g. 'ctrl+s', 'alt+tab', 'win+shift+s', 'f5', 'enter'.",
                  {"keys": s, "times": {"type": "integer"}}, ["keys"]),
             tool("look_at_screen", "Capture the user's screen (the monitor their active window is on) and look at it. Use when the user "
@@ -220,8 +226,10 @@ class PCTools:
                  {"app": {"type": "string", "description": "optional app name or window title; default = active window"},
                   "all": {"type": "boolean"}}),
             tool("wait_screen", "Wait until the screen stops changing (page finished loading, app finished opening), up to max_seconds "
-                 "(default 5). Returns as soon as it is still, so prefer it over a fixed wait.",
-                 {"max_seconds": {"type": "integer"}}),
+                 "(default 5). Returns as soon as it is still, so prefer it over a fixed wait. "
+                 "With until='text', waits instead until a button / link / text containing that appears in the active window "
+                 "(up to max_seconds, max 30) — use it for slow pages and for results that take a while ('다운로드 완료').",
+                 {"max_seconds": {"type": "integer"}, "until": {"type": "string"}}),
             tool("read_ui", "List clickable elements (buttons, links, tabs, menu items, input boxes) inside a window, numbered. "
                  "Works inside web pages in Chrome/Edge (e.g. Google Classroom tabs) and in normal apps. "
                  "Use this before click_ui to navigate inside a site or app. Defaults to the user's active window.",
@@ -231,19 +239,25 @@ class PCTools:
                  "By name it also finds elements scrolled out of view and scrolls to them first. "
                  "The result says whether the screen changed; if it did, it also lists the elements of the new screen "
                  "(renumbered), so you can pick the next element without calling read_ui again. "
-                 "To type into an input box: click it, then use type_text.",
-                 {"number": {"type": "integer"}, "name": s, "double": {"type": "boolean"}}),
+                 "To type into an input box use fill_ui. If the result says there was no change, retry once with mouse=true "
+                 "(a real mouse click instead of the element's default action). right=true opens the context menu. "
+                 "hold='ctrl' / 'shift' clicks with that key held (select several items / a range).",
+                 {"number": {"type": "integer"}, "name": s, "double": {"type": "boolean"}, "mouse": {"type": "boolean"},
+                  "right": {"type": "boolean"}, "hold": {"type": "string", "enum": ["ctrl", "shift", "alt"]}}),
             tool("click_screen", "Click a point using pixel coordinates of the LAST image you were shown (look_at_screen or zoom_screen). "
                  "Fallback when read_ui / marks cannot find the element (games, canvas, images). Aim at the centre of the target. "
                  "The result says whether the screen changed and, if it did, includes a new screenshot — no need to call "
                  "look_at_screen again; later coordinates refer to that new image.",
                  {"x": {"type": "integer"}, "y": {"type": "integer"}, "double": {"type": "boolean"},
-                  "right": {"type": "boolean"}}, ["x", "y"]),
-            tool("scroll", "Scroll the active window (or the app given) up or down. The result says whether the screen moved; "
+                  "right": {"type": "boolean"},
+                  "hold": {"type": "string", "enum": ["ctrl", "shift", "alt"], "description": "key held while clicking"}},
+                 ["x", "y"]),
+            tool("scroll", "Scroll the active window (or the app given): up / down / left / right by wheel notches, or top / "
+                 "bottom to jump to the very start / end. The result says whether the screen moved; "
                  "no change means the end was reached. To scroll one area inside the window (a list, a chat pane), give x,y "
                  "of a point inside that area in the LAST image's pixel coordinates. To reach a named element that is "
                  "scrolled out of view, prefer click_ui(name=...): it scrolls there by itself.",
-                 {"direction": {"type": "string", "enum": ["up", "down"]},
+                 {"direction": {"type": "string", "enum": ["up", "down", "left", "right", "top", "bottom"]},
                   "amount": {"type": "integer", "description": "wheel notches, default 5"}, "app": s,
                   "x": {"type": "integer"}, "y": {"type": "integer"}}, ["direction"]),
             tool("hover_screen", "Move the mouse over a point (no click), in the LAST image's pixel coordinates. Use for menus "
@@ -459,7 +473,7 @@ class PCTools:
                   "size": {"type": "string", "enum": ["a4", "a3"]},
                   "filename": s, "folder": s, "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["title", "sections"]),
-        ]
+        ] + self.control_schemas(tool)
 
     # ------------------------------------------------------------------ 표시용 라벨
     @staticmethod
@@ -469,7 +483,7 @@ class PCTools:
             "close_app": lambda: f"앱 종료 · {a.get('name')}",
             "focus_app": lambda: f"창 전환 · {a.get('name')}",
             "list_windows": lambda: "열린 창 확인",
-            "window_action": lambda: f"창 제어 · {a.get('action')}",
+            "window_action": lambda: f"창 제어 · {a.get('action')}" + (f" ({a['app']})" if a.get("app") else ""),
             "open_url": lambda: f"링크 열기 · {a.get('url', '')[:40]}",
             "browser_search": lambda: f"{a.get('site', 'google')} 검색 · {a.get('query')}",
             "play_youtube": lambda: f"YouTube 재생 · {a.get('query')}",
@@ -515,6 +529,7 @@ class PCTools:
             "make_poster": lambda: f"포스터 만들기 · {str(a.get('title', ''))[:30]}",
             "web_search": lambda: f"웹 검색 · {a.get('query', '')}",
             "web_fetch": lambda: f"웹 페이지 읽기 · {str(a.get('url', ''))[:40]}",
+            **ControlTools.control_labels(a),
         }
         try:
             return m[name]()
@@ -539,8 +554,10 @@ class PCTools:
     def t_open_app(self, name: str, min_score: float = 38) -> str:
         key = _norm(name)
         hit = self._find_app(name, min_score)
+        before = {w["hwnd"] for w in winutil.list_windows()}
         if hit:
             subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{hit[1]}"], creationflags=NO_WINDOW)
+            self._launch = (time.monotonic(), before, name)
             return f"'{hit[0]}' 실행함"
         exe = SYSTEM_EXE.get(key)
         if not exe and min_score > 38:
@@ -548,11 +565,39 @@ class PCTools:
         target = exe or name
         try:
             os.startfile(target)
+            self._launch = (time.monotonic(), before, name)
             return f"'{target}' 실행함"
         except OSError:
             if not self._apps:
                 raise ToolError("앱 목록을 아직 불러오는 중입니다. 잠시 후 다시 시도하세요.")
             raise ToolError(f"'{name}' 앱을 찾지 못했습니다.")
+
+    def _await_launch(self, timeout: float = 6.0) -> None:
+        """방금 open_app 으로 켠 앱의 창이 뜰 때까지 기다렸다가 그 창을 '작업 창'으로 삼는다.
+        앱을 켜자마자 입력 · 클릭하면 아직 창이 없어 예전 창에 들어가 버린다 — 화면을 만지는 도구들이 시작할 때 부른다.
+        (open_app 자체는 기다리지 않는다: "메모장 열어" 는 바로 대답해야 하니까.)"""
+        launch, self._launch = getattr(self, "_launch", None), None
+        if not launch:
+            return
+        t0, before, name = launch
+        if time.monotonic() - t0 > 8:
+            return                                   # 한참 전에 켠 것 — 그새 사용자가 다른 창으로 갔을 수 있다
+        had = bool(self._match_windows(name))        # 이미 열려 있던 앱이면 새 창이 안 뜰 수도 있다 (카톡처럼 창 하나짜리)
+        limit = 2.5 if had else timeout
+        while True:
+            new = [w for w in winutil.list_windows() if w["hwnd"] not in before]
+            if new:
+                self.focus.last_external, self.focus.last_title = new[0]["hwnd"], new[0]["title"]
+                if time.monotonic() - t0 < 1.5:
+                    time.sleep(0.4)                  # 창이 막 떴다 — 안이 그려질 시간
+                return
+            if time.monotonic() - t0 >= limit:
+                break
+            time.sleep(0.2)
+        hits = self._match_windows(name)
+        if hits:
+            winutil.force_foreground(hits[0]["hwnd"])
+            self.focus.last_external, self.focus.last_title = hits[0]["hwnd"], hits[0]["title"]
 
     def _match_windows(self, name: str) -> list[dict]:
         q = _norm(name)
@@ -587,16 +632,33 @@ class PCTools:
             return "열린 창이 없습니다."
         return "\n".join(f"- {w['title'][:60]} ({w['exe']})" for w in wins[:30])
 
-    def t_window_action(self, action: str) -> str:
-        combos = {"show_desktop": "win+d", "maximize": "win+up", "minimize": "win+down",
-                  "snap_left": "win+left", "snap_right": "win+right", "switch_next": "alt+tab",
-                  "close_active": "alt+f4", "task_view": "win+tab", "new_virtual_desktop": "win+ctrl+d"}
-        if action not in combos:
+    _WINDOW_KEYS = {"show_desktop": "win+d", "maximize": "win+up", "minimize": "win+down", "restore": "win+down",
+                    "snap_left": "win+left", "snap_right": "win+right", "switch_next": "alt+tab",
+                    "close_active": "alt+f4", "task_view": "win+tab", "new_virtual_desktop": "win+ctrl+d",
+                    "fullscreen": "f11", "move_to_next_monitor": "win+shift+right", "minimize_others": "win+home"}
+
+    def t_window_action(self, action: str, app: str | None = None) -> str:
+        if action not in self._WINDOW_KEYS:
             raise ToolError("지원하지 않는 동작")
-        if action != "show_desktop":
+        self._await_launch()
+        if app:
+            hits = self._match_windows(app)
+            if not hits:
+                raise ToolError(f"'{app}' 창이 열려 있지 않습니다.")
+            winutil.force_foreground(hits[0]["hwnd"])
+            self.focus.last_external, self.focus.last_title = hits[0]["hwnd"], hits[0]["title"]
+            time.sleep(0.15)
+        elif action != "show_desktop":
             self.focus.restore()
-        winutil.press_combo(combos[action])
-        return f"{action} 완료"
+        hwnd = self._active_hwnd()
+        what = f"'{winutil.window_title(hwnd)[:30]}' 창 " if hwnd and action not in ("show_desktop", "task_view", "new_virtual_desktop", "switch_next") else ""
+        if action == "close_active" and hwnd:
+            winutil.close_window(hwnd)            # 그 창에만 닫기 요청 (alt+f4 는 그 순간 앞에 있는 창을 닫아 버린다)
+        elif action in ("maximize", "minimize", "restore") and hwnd and winutil.set_window_state(hwnd, action):
+            pass                                  # 단축키(win+↑)는 창이 한쪽에 붙어 있으면 다르게 동작한다 — 창에 직접 시킨다
+        else:
+            winutil.press_combo(self._WINDOW_KEYS[action])
+        return f"{what}{action} 완료"
 
     # --- 웹 ---
     def t_open_url(self, url: str) -> str:
@@ -687,8 +749,21 @@ class PCTools:
             return f"볼륨 {'증가' if action == 'up' else '감소'}"
 
     # --- 키보드 ---
-    def t_type_text(self, text: str, press_enter: bool = False, replace: bool = False) -> str:
+    def t_type_text(self, text: str, press_enter: bool = False, replace: bool = False, as_keys: bool = False) -> str:
+        self._await_launch()
         self.focus.restore()
+        if as_keys:                       # 붙여넣기가 막힌 프로그램: 글자를 키 입력으로 하나씩 보낸다
+            if replace:
+                winutil.press_combo("ctrl+a")
+                time.sleep(0.05)
+            winutil.type_unicode(text)
+            change = ""
+            if press_enter:
+                time.sleep(0.1)
+                before = self._small()
+                winutil.press_combo("enter")
+                change = self._after(before)
+            return f"{len(text)}자를 키 입력으로 넣음 (대상 창: {self.focus.last_title[:40]})" + change
         old = winutil.get_clipboard_text()
         winutil.set_clipboard_text(text)
         time.sleep(0.05)
@@ -711,6 +786,7 @@ class PCTools:
         return f"{len(text)}자 입력함 (대상 창: {self.focus.last_title[:40]})" + change
 
     def t_press_keys(self, keys: str, times: int = 1) -> str:
+        self._await_launch()
         self.focus.restore()
         times = max(1, min(int(times or 1), 50))
         before = self._small()
@@ -810,6 +886,7 @@ class PCTools:
     def _after(self, before, timeout: float = 2.5, nochange_wait: float = 1.0) -> str:
         """동작 뒤 화면이 멈출 때까지 기다리고, 바뀌었는지를 결과 글 뒤에 붙일 말로 돌려준다."""
         self._moved = False
+        self._nochange = False                   # 화면이 전혀 바뀌지 않았는가 (깜빡이는 커서 정도도 없이)
         if before is None:
             time.sleep(0.5)
             return ""
@@ -819,6 +896,7 @@ class PCTools:
                 ch = vision.settle(lambda: vision.small_gray(self._grab_raw(bbox)), before, timeout=timeout,
                                    nochange_wait=nochange_wait)
             self._moved = not ch.settled or ch.fraction * ch.cells >= vision.TINY_CELLS
+            self._nochange = ch.settled and ch.fraction * ch.cells < vision._MIN_CELLS
             return " · " + ch.text()
         except Exception as e:
             log.debug("화면 변화 확인 실패: %s", e)
@@ -853,6 +931,7 @@ class PCTools:
         return winutil.monitor_rect(hwnd), "screen"      # 사용자의 작업 창이 있는 모니터 (모르면 주 모니터)
 
     def t_look_at_screen(self, target: str = "screen", marks: bool = False):
+        self._await_launch()
         hwnd = self._active_hwnd()
         bbox, kind = self._target_bbox(target)
         self._view_target = kind
@@ -894,13 +973,41 @@ class PCTools:
             "이 확대 이미지의 픽셀 좌표입니다. 전체 화면으로 돌아가려면 look_at_screen 을 다시 부르세요."))
 
     def t_read_screen_text(self, app: str | None = None, all: bool = False) -> str:   # noqa: A002
+        self._await_launch()
         hwnd = self._target_window(app)
         try:
             return self.screen.read_text(hwnd, include_offscreen=bool(all))
         except OSError as e:
             raise ToolError(f"창의 글자를 읽지 못했습니다: {e}")
 
-    def t_wait_screen(self, max_seconds: int = 5) -> str:
+    def _wait_for(self, what: str, max_seconds: int | None) -> str:
+        """활성 창에 what 이 든 요소나 글이 나타날 때까지 기다린다."""
+        limit = max(1.0, min(float(max_seconds or 10), 30.0))
+        q = uia._norm(what)
+        if not q:
+            raise ToolError("until 에 기다릴 글을 넣으세요.")
+        t0 = time.monotonic()
+        while True:
+            hwnd = self._active_hwnd()
+            if hwnd:
+                try:
+                    self.screen.read(hwnd, what)
+                    hits = [it for it in self.screen.items if q in uia._norm(it.name)]
+                    if hits:
+                        return (f"'{what}' 이(가) 나타났습니다 ({time.monotonic() - t0:.1f}초 기다림). click_ui 로 누를 수 있습니다:\n"
+                                + "\n".join(it.line() for it in hits[:8]))
+                    if q in uia._norm(self.screen.read_text(hwnd)):
+                        return f"화면에 '{what}' 글이 나타났습니다 ({time.monotonic() - t0:.1f}초 기다림)."
+                except Exception as e:
+                    log.debug("기다리는 중 창 읽기 실패: %s", e)
+            if time.monotonic() - t0 >= limit:
+                return f"{limit:.0f}초를 기다렸지만 '{what}' 이(가) 나타나지 않았습니다."
+            time.sleep(0.5)
+
+    def t_wait_screen(self, max_seconds: int = 5, until: str = "") -> str:
+        self._await_launch()
+        if until:
+            return self._wait_for(str(until), max_seconds)
         before = self._small()
         if before is None:
             time.sleep(1.0)
@@ -927,6 +1034,7 @@ class PCTools:
         return hwnd
 
     def t_read_ui(self, app: str | None = None, query: str | None = None) -> str:
+        self._await_launch()
         hwnd = self._target_window(app)
         try:
             out = self.screen.read(hwnd, query or "")
@@ -954,31 +1062,35 @@ class PCTools:
             return self.screen.find(None, name)
         return None
 
-    def t_click_ui(self, number: int | None = None, name: str | None = None, double: bool = False) -> str:
+    def t_click_ui(self, number: int | None = None, name: str | None = None, double: bool = False,
+                   mouse: bool = False, right: bool = False, hold: str = "") -> str:
         if not number and not name:
             raise ToolError("number 나 name 중 하나가 필요합니다.")
-        it = self.screen.find(number, name or "")
-        if it is None and name and self.screen.hwnd:
-            # 목록이 오래됐을 수 있으니 같은 창을 다시 읽고 이름으로 한 번 더 찾는다
-            self.screen.read(self.screen.hwnd)
-            it = self.screen.find(None, name)
-        if it is None and name:
-            it = self._reveal(name)      # 스크롤해야 보이는 곳에 있으면 그곳으로 가서 누른다
+        if hold and hold not in ("ctrl", "shift", "alt"):
+            raise ToolError("hold 는 ctrl · shift · alt 중 하나")
+        # 이름으로 못 찾으면 창을 다시 읽고(목록이 오래됐을 수 있다), 그래도 없으면 스크롤해야 보이는 곳까지 찾아간다
+        it = self._find_item(number, name)
         if it is None:
             raise ToolError("그 요소를 찾지 못했습니다. read_ui 로 목록을 다시 확인하세요.")
         if uia.is_risky(it.name):
             self._confirm("화면 클릭", f"'{it.name}' {it.kind} 을(를) 누릅니다.\n창: {self.screen.title}")
         before = self._small()
-        left, top, right, bottom = it.rect
+        how = {k: v for k, v in (("mouse", bool(mouse)), ("right", bool(right)), ("hold", hold or "")) if v}
+        x1, y1, x2, y2 = it.rect
         try:
-            with self._hud_aside((left + right) // 2, (top + bottom) // 2):
-                out = self.screen.click(it, double=bool(double))
+            with self._hud_aside((x1 + x2) // 2, (y1 + y2) // 2):
+                out = self.screen.click(it, double=bool(double), **how)
         except Exception as e:   # 페이지가 바뀌어 요소가 사라진 경우 등
             raise ToolError(f"누르지 못했습니다 ({e}). read_ui 로 다시 확인하세요.")
         change = self._after(before)     # 화면이 멈출 때까지 기다리고, 바뀌었는지 알려 준다
+        if self._nochange and out.endswith("누름"):
+            # 요소의 기본 동작(Invoke)이 '성공'이라고 했지만 화면은 그대로 — 웹 페이지 버튼에서 가끔 있다
+            change += " (요소의 기본 동작으로 눌렀는데 반응이 없습니다. 같은 요소를 mouse=true 로 한 번 더 눌러 보세요)"
         return out + f" · 창: {winutil.window_title(self.screen.hwnd) or self.screen.title}" + change + self._follow_ui()
 
-    def t_click_screen(self, x: int, y: int, double: bool = False, right: bool = False) -> str:
+    def t_click_screen(self, x: int, y: int, double: bool = False, right: bool = False, hold: str = "") -> str:
+        if hold and hold not in ("ctrl", "shift", "alt"):
+            raise ToolError("hold 는 ctrl · shift · alt 중 하나")
         view = self._view
         if view is None:
             raise ToolError("먼저 look_at_screen 으로 화면을 보세요 (좌표는 마지막으로 본 이미지 기준입니다).")
@@ -991,9 +1103,9 @@ class PCTools:
             self._confirm("화면 클릭", f"'{name}' {kind or '요소'} 을(를) 누릅니다.\n위치: ({sx}, {sy})")
         before = self._small()
         with self._hud_aside(sx, sy):
-            uia.click_at(sx, sy, double=bool(double), right=bool(right))
+            uia.click_at(sx, sy, double=bool(double), right=bool(right), **({"hold": hold} if hold else {}))
         what = f"'{name[:40]}' {kind}".strip() if name else f"({sx}, {sy})"
-        text = f"{what} 클릭함" + self._after(before)
+        text = f"{what} {hold + '+' if hold else ''}클릭함" + self._after(before)
         if self._follow():
             # 바뀐 화면을 바로 보여 준다 — 어차피 다시 보러 올 것을 한 번의 왕복으로 줄인다
             try:
@@ -1046,10 +1158,18 @@ class PCTools:
 
     def t_scroll(self, direction: str, amount: int = 5, app: str | None = None,
                  x: int | None = None, y: int | None = None) -> str:
-        if direction not in ("up", "down"):
-            raise ToolError("direction 은 up 또는 down")
+        if direction not in ("up", "down", "left", "right", "top", "bottom"):
+            raise ToolError("direction 은 up · down · left · right · top · bottom 중 하나")
         hwnd = self._target_window(app)
         before = self._small()
+        if direction in ("top", "bottom"):       # 맨 처음 · 맨 끝으로: 휠을 여러 번 굴리는 것보다 빠르고 확실하다
+            if app:
+                winutil.force_foreground(hwnd)
+                time.sleep(0.15)
+            else:
+                self.focus.restore()
+            winutil.press_combo("ctrl+home" if direction == "top" else "ctrl+end")
+            return f"맨 {'위' if direction == 'top' else '아래'}로 이동함" + self._after(before, timeout=1.5, nochange_wait=0.6)
         if x is not None and y is not None:      # 화면 안의 특정 영역(목록 · 채팅창)만 굴릴 때: 그 자리에서 휠
             at = self._on_view(x, y)
         else:
@@ -1058,7 +1178,7 @@ class PCTools:
         with self._hud_aside(*at):
             uia.scroll(hwnd, direction, amount or 5, at=at if x is not None and y is not None else None)
         change = self._after(before, timeout=1.5, nochange_wait=0.6)   # 변화가 없으면 끝까지 간 것일 수 있다
-        return f"{'위' if direction == 'up' else '아래'}로 스크롤함" + change
+        return f"{ {'up': '위', 'down': '아래', 'left': '왼쪽', 'right': '오른쪽'}[direction] }로 스크롤함" + change
 
     _NO_BRIGHT = "이 화면은 밝기 조절을 지원하지 않습니다. 외장 모니터는 모니터 버튼으로 조절해 주세요."
 

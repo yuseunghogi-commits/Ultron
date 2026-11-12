@@ -296,10 +296,12 @@ class Screen:
         return min(part, key=lambda it: len(it.name)) if part else None
 
     # ------------------------------------------------------------------ 누르기
-    def click(self, it: Item, double: bool = False) -> str:
+    def click(self, it: Item, double: bool = False, mouse: bool = False, right: bool = False, hold: str = "") -> str:
+        """요소를 누른다. 보통은 요소의 기본 동작(Invoke · 선택 · 토글)을 부르고, 안 되면 가운데를 마우스로 누른다.
+        mouse=True · 오른쪽 클릭 · 키를 누른 채 클릭은 처음부터 진짜 마우스로 누른다."""
         with self._lock:
             U = _U()
-            if not double:
+            if not (double or mouse or right or hold):
                 for pid, iface, call in ((UIA_InvokePatternId, U.IUIAutomationInvokePattern, "Invoke"),
                                          (UIA_SelectionItemPatternId, U.IUIAutomationSelectionItemPattern, "Select"),
                                          (UIA_TogglePatternId, U.IUIAutomationTogglePattern, "Toggle"),
@@ -312,29 +314,32 @@ class Screen:
                     except Exception as e:
                         log.debug("패턴 %s 실패: %s", pid, e)
             l, t, r, b = it.rect
-            click_at((l + r) // 2, (t + b) // 2, double=double, hwnd=self.hwnd)
-            return f"'{it.name[:40]}' {it.kind} {'더블' if double else ''}클릭"
+            click_at((l + r) // 2, (t + b) // 2, double=double, right=right, hwnd=self.hwnd, hold=hold)
+            how = "오른쪽 " if right else "더블" if double else (hold + "+") if hold else ""
+            return f"'{it.name[:40]}' {it.kind} {how}클릭"
 
 
 # ---------------------------------------------------------------------- 마우스
 MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
 MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP = 0x0008, 0x0010
 MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_HWHEEL = 0x1000
 
 
-def click_at(x: int, y: int, double: bool = False, right: bool = False, hwnd: int = 0) -> None:
-    """물리 픽셀 좌표 클릭. 대상 창을 먼저 앞으로 가져온다."""
+def click_at(x: int, y: int, double: bool = False, right: bool = False, hwnd: int = 0, hold: str = "") -> None:
+    """물리 픽셀 좌표 클릭. 대상 창을 먼저 앞으로 가져온다. hold = 누른 채로 있을 키 ('ctrl' · 'shift' · 'alt')."""
+    from .winutil import force_foreground, held
     if hwnd:
-        from .winutil import force_foreground
         force_foreground(hwnd)
         time.sleep(0.08)
     user32.SetCursorPos(int(x), int(y))
     time.sleep(0.03)
     down, up = (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP) if right else (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
-    for _ in range(2 if double else 1):
-        user32.mouse_event(down, 0, 0, 0, 0)
-        user32.mouse_event(up, 0, 0, 0, 0)
-        time.sleep(0.06)
+    with held(hold):
+        for _ in range(2 if double else 1):
+            user32.mouse_event(down, 0, 0, 0, 0)
+            user32.mouse_event(up, 0, 0, 0, 0)
+            time.sleep(0.06)
 
 
 def move_to(x: int, y: int) -> None:
@@ -359,7 +364,7 @@ def drag(x1: int, y1: int, x2: int, y2: int, steps: int = 14) -> None:
 
 
 def scroll(hwnd: int, direction: str, amount: int = 5, at: tuple[int, int] | None = None) -> None:
-    """창 한가운데(또는 at 자리)에서 마우스 휠을 굴린다."""
+    """창 한가운데(또는 at 자리)에서 마우스 휠을 굴린다 (up · down · left · right)."""
     rect = wt.RECT()
     if at is not None:
         user32.SetCursorPos(int(at[0]), int(at[1]))
@@ -369,8 +374,12 @@ def scroll(hwnd: int, direction: str, amount: int = 5, at: tuple[int, int] | Non
         force_foreground(hwnd)
         user32.SetCursorPos((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
         time.sleep(0.05)
-    delta = 120 * max(1, min(int(amount), 30)) * (1 if direction == "up" else -1)
-    user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, ctypes.c_uint32(delta & 0xFFFFFFFF).value, 0)
+    notches = 120 * max(1, min(int(amount), 30))
+    if direction in ("left", "right"):          # 가로 휠: 오른쪽이 +
+        delta, flag = notches * (1 if direction == "right" else -1), MOUSEEVENTF_HWHEEL
+    else:
+        delta, flag = notches * (1 if direction == "up" else -1), MOUSEEVENTF_WHEEL
+    user32.mouse_event(flag, 0, 0, ctypes.c_uint32(delta & 0xFFFFFFFF).value, 0)
 
 
 # ---------------------------------------------------------------------- 글자 · 위치
