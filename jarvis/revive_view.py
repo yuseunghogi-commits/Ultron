@@ -1,10 +1,15 @@
-"""부활 연출 덮개 창 — revive.py 가 만든 재료로 장면을 매 순간 그린다.
+"""부활 연출 덮개 창 — revive.py 가 만든 재료 · 사건 목록으로 장면을 매 순간 그린다.
 
 해킹 연출 덮개(glitch_view.py)와 같은 성질의 창이다: 마우스 · 키보드는 아래 창으로 그대로 통과하고, 포커스를 빼앗지 않으며,
-화면 캡처에는 찍히지 않는다 (app.py 가 설정). 해킹 장면의 투명한 곳으로는 실제 화면이 보인다.
+화면 캡처에는 찍히지 않는다 (app.py 가 설정).
+
+해킹 단계는 찍어 둔 실제 화면을 빨강 층 · 청록 층으로 나눠 반대쪽으로 밀어 겹쳐 그린다(색 번짐) — 그 위에 그 순간 일어나고 있는
+찢김 · 블록 · 얼룩 · 해킹 글자를 얹는다. 화면이 다 바뀌는 큰 그림을 미리 만들어 두지 않으므로 메모리를 거의 쓰지 않는다.
 
 울트론 코어는 HUD 의 엠블럼(ui/Emblem.qml)과 같은 모양 · 색 · 좌표(440 단위, 가운데 0,0)로 직접 그린다 —
-눈이 먼저 켜지고, 원판 → 안쪽 링 → 강철 호 · 칼날 → 눈금 → 톱니 → 육각 꺾쇠 → 이름 순으로 안쪽부터 나타난다.
+눈이 먼저 옅게 떠올라 진해지고, 원판 → 안쪽 링 → 강철 호 · 칼날 → 눈금 → 톱니 → 육각 꺾쇠 → 이름 순으로 안쪽부터 나타난다.
+다 나타나면 검은 바탕이 걷히며 그 자리에서 HUD 크기로 줄어들고(handoff 신호 — app.py 가 실제 HUD 를 그 자리에 띄운다),
+HUD 와 겹친 채 옅어진다.
 """
 from __future__ import annotations
 
@@ -69,62 +74,86 @@ def _arc(r: float, start: float, sweep: float, steps: int = 48) -> QPolygonF:
 
 
 # ---------------------------------------------------------------- 단계별 값 (시험하기 쉽게 따로)
+def fade_in(k: float, a: float, b: float) -> float:
+    """k 가 a → b 로 가는 동안 옅게 시작해 점점 진해진다 (처음과 끝이 완만)."""
+    return smooth((k - a) / max(1e-6, b - a))
+
+
 def eye_light(k: float) -> float:
-    """눈이 켜지는 밝기 (눈 단계 진행 k 0..1). 네온이 들어오듯 두어 번 깜빡이다 또렷해진다 (눈은 작아 번쩍임과 무관)."""
-    beats = [(0.00, 0.0), (0.05, 0.55), (0.10, 0.12), (0.16, 0.8), (0.22, 0.3), (0.30, 0.9), (0.45, 1.0)]
-    if k >= beats[-1][0]:
-        return 1.0
-    for (a, va), (b, vb) in zip(beats, beats[1:]):
-        if k < b:
-            return va + (vb - va) * (k - a) / (b - a)
-    return 1.0
+    """눈의 진하기 (눈 단계 진행 k 0..1) — 아주 옅게 떠올라 천천히 진해진다."""
+    return smooth(k) ** 1.15
 
 
 def eye_open(k: float) -> float:
-    """눈꺼풀: 처음엔 가는 틈으로 켜졌다가 (k 0.35 까지) 천천히 뜬다."""
-    return 0.08 + 0.92 * ease((k - 0.35) / 0.5)
+    """눈꺼풀: 반쯤 뜬 채로 떠올라 진해지면서 끝까지 뜬다."""
+    return 0.55 + 0.45 * smooth((k - 0.25) / 0.75)
 
 
 def reveal(f: float) -> dict[str, float]:
-    """코어가 나타나는 정도 (코어 단계 진행 f 0..1) — 안쪽부터 바깥으로."""
-    return {"glow": stage(f, 0.0, 0.8), "disc": stage(f, 0.0, 0.35), "inner": stage(f, 0.05, 0.4),
-            "steel": stage(f, 0.2, 0.55), "band": stage(f, 0.15, 0.6), "ticks": stage(f, 0.3, 0.75),
-            "saw": stage(f, 0.35, 0.85), "hex": stage(f, 0.45, 0.95), "word": stage(f, 0.6, 1.0)}
+    """코어가 나타나는 정도 (코어 단계 진행 f 0..1) — 안쪽부터 바깥으로, 하나하나 옅게 시작해 진해진다."""
+    return {"glow": fade_in(f, 0.0, 0.9), "disc": fade_in(f, 0.0, 0.45), "inner": fade_in(f, 0.05, 0.5),
+            "steel": fade_in(f, 0.2, 0.6), "band": fade_in(f, 0.15, 0.7), "ticks": fade_in(f, 0.3, 0.8),
+            "saw": fade_in(f, 0.35, 0.88), "hex": fade_in(f, 0.45, 0.95), "word": fade_in(f, 0.6, 1.0)}
+
+
+def _lerp(a: float, b: float, k: float) -> float:
+    return a + (b - a) * k
 
 
 def looks(scene: R.Scene, t: float) -> dict:
-    """t 초 때 무엇이 얼마나 보이는가: hack(장면) · static(지직 불투명도) · black(검은 바탕) · eyes · open · core(부분별) · alpha(전체)."""
+    """t 초 때 무엇이 얼마나 보이는가.
+    hack(해킹 단계인가) · k(해킹 세기) · tune(지직으로 넘어가는 정도) · static(지직 불투명도) · black(검은 바탕) ·
+    eyes · open · core(부분별) · done(완성 코어 한 장: (가운데 x, 가운데 y, 지름, 진하기)) — 크기는 화면 비율이 아니라 픽셀."""
     name, k = R.phase(scene, t)
-    out = {"phase": name, "hack": None, "static": 0.0, "black": 0.0, "eyes": 0.0, "open": 0.08,
-           "core": {key: 0.0 for key in reveal(0)}, "alpha": 1.0}
+    out = {"phase": name, "hack": False, "k": 0.0, "tune": 0.0, "static": 0.0, "black": 0.0, "eyes": 0.0, "open": 0.55,
+           "core": {key: 0.0 for key in reveal(0)}, "done": None}
+    w, h = scene.size
+    big = CORE_SIZE * min(w, h)
+    tx, ty, ts = scene.target
     if name == "hack":
-        out["hack"] = R.hack_index(scene, t)
-        out["static"] = smooth((t - (scene.t_hack - R.CROSS)) / R.CROSS) if scene.t_hack > 0 else 1.0
+        out["hack"], out["k"], out["tune"] = True, R.intensity(R.stutter(t)), R.tune(t)
+        out["static"] = smooth(out["tune"])
     elif name == "static":
         out["static"] = 1.0
     elif name == "settle":
         out["black"] = 1.0
         out["static"] = 1.0 - smooth(k)
-    else:
-        full = name in ("hold", "fade", "end")
-        out["black"] = 1.0
-        out["eyes"] = eye_light(k) if name == "eyes" else 1.0
-        out["open"] = eye_open(k) if name == "eyes" else 1.0
-        out["core"] = reveal(k if name == "form" else (1.0 if full else 0.0))
-        if name == "fade":
-            out["alpha"] = 1.0 - smooth(k)
-        elif name == "end":
-            out["alpha"] = 0.0
+    elif name == "eyes":
+        out["black"], out["eyes"], out["open"] = 1.0, eye_light(k), eye_open(k)
+    elif name == "form":
+        out["black"], out["eyes"], out["open"], out["core"] = 1.0, 1.0, 1.0, reveal(k)
+    elif name == "hold":
+        out["black"], out["done"] = 1.0, (w / 2, h / 2, big, 1.0)
+    elif name == "shrink":                                          # 검은 바탕이 걷히며 그 자리에서 HUD 크기로
+        q = smooth(k)
+        out["black"] = 1.0 - q
+        out["done"] = (_lerp(w / 2, tx, q), _lerp(h / 2, ty, q), _lerp(big, ts, q), 1.0)
+    elif name == "handoff":                                         # 실제 HUD 와 겹친 채 옅어진다
+        out["done"] = (tx, ty, ts, 1.0 - smooth(k))
     return out
 
 
 # ---------------------------------------------------------------- 그림 재료
+def _rgb_image(rgb: np.ndarray) -> QImage:
+    h, w, _ = rgb.shape
+    return QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888).convertToFormat(QImage.Format_RGB32)
+
+
 class Assets:
     """장면마다 한 번 만들어 두는 Qt 그림들. w · h: 그릴 화면 크기 (논리 픽셀)."""
 
     def __init__(self, scene: R.Scene, w: int, h: int) -> None:
         self.w, self.h = w, h
-        self.hack = [None if f.image is None else to_qimage(f.image) for f in scene.hack]   # 장면 번호 → 그림
+        shot = np.ascontiguousarray(scene.shot[..., :3])
+        self.plain = _rgb_image(shot)                              # 찍은 실제 화면
+        cyan, red = shot.copy(), shot.copy()
+        cyan[..., 0] = 0                                           # 초록 · 파랑만
+        red[..., 1:] = 0                                           # 빨강만 — 두 층을 반대로 밀어 더하면 색이 번진다
+        self.cyan, self.red = _rgb_image(cyan), _rgb_image(red)
+        self.code = QFont("Consolas")
+        self.code.setStyleHint(QFont.Monospace)
+        self.code.setBold(True)
+        self.code.setPixelSize(max(11, h // 46))
         self.static = []
         for g in scene.static:
             g = np.ascontiguousarray(g)
@@ -437,6 +466,90 @@ def draw_core(p: QPainter, a: Assets, cx: float, cy: float, look: dict, t: float
     p.restore()
 
 
+INK = [QColor(255, 45, 63), QColor(80, 230, 255), QColor(235, 235, 240)]
+
+
+def draw_hack(p: QPainter, scene: R.Scene, a: Assets, t: float, w: int, h: int, look: dict) -> None:
+    """점점 심해지는 해킹: 색 번짐 → 찢김 · 블록 · 얼룩 · 신호선 · 화면 튐 · 해킹 글자 → 어두워지며 흘러가 지직으로."""
+    te = R.stutter(t)                                              # 심해질수록 움직임이 버벅거린다
+    k, tn = look["k"], look["tune"]
+    iw, ih = a.plain.width(), a.plain.height()
+    scaled = (iw, ih) != (w, h)
+    if scaled:
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+    dy = R.jump_at(scene, te) * h                                  # 화면이 위아래로 툭 튄다
+    roll = (tn ** 2) * h * 0.4                                     # 지직으로 넘어가며 화면이 위로 흘러간다 (세로 동기가 풀림)
+    split = w * (0.003 + 0.02 * k) * (1 + 0.35 * math.sin(te * 9.1))   # 색 번짐 — 갈수록 크게, 흔들리며
+
+    def layers(rect: QRectF | None, dx: float, s: float) -> None:
+        """찍은 화면을 빨강 · 청록이 어긋난 채로 (rect 안에만, 옆으로 dx 밀어서)."""
+        if rect is not None:
+            p.save()
+            p.setClipRect(rect)
+        for oy in ((dy - roll, dy - roll + h) if roll > 0.5 else (dy,)):
+            p.setCompositionMode(QPainter.CompositionMode_Source)
+            p.drawImage(QRectF(dx - s, oy, w, h), a.cyan)
+            p.setCompositionMode(QPainter.CompositionMode_Plus)
+            p.drawImage(QRectF(dx + s, oy, w, h), a.red)
+        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        if rect is not None:
+            p.restore()
+
+    layers(None, 0.0, split)
+    if k > 0.25:                                                   # 색이 옆으로 더 번진다 (잔상)
+        p.setOpacity(0.22 * k)
+        p.drawImage(QRectF(split * 2.6, dy, w, h), a.red)
+        p.setOpacity(0.14 * k)
+        p.drawImage(QRectF(-split * 2.6, dy, w, h), a.cyan)
+        p.setOpacity(1.0)
+
+    # 찢어진 띠 (그 띠만 옆으로 밀리고 색이 더 어긋난다) + 띠 끝의 가는 신호선
+    for t0, t1, y, bh, dx in R.active(scene.tears, te):
+        rect = QRectF(0, y * h + dy, w, max(2.0, bh * h))
+        layers(rect, dx * w, split * 1.8)
+        if k > 0.3:
+            ink = INK[int(t0 * 1000) % 3]
+            p.fillRect(QRectF(0, rect.top(), w, max(1.0, h / 540)), _c(ink, 0.8))
+    # 한 줄을 옆으로 길게 늘인 얼룩
+    for t0, t1, y, bh, x, width, sx in R.active(scene.smears, te):
+        p.drawImage(QRectF(x * w, y * h + dy, width * w, max(1.0, bh * h)), a.plain,
+                    QRectF(sx * (iw - 2), y * ih, 1.5, max(1.0, bh * ih)))
+    # 깨진 블록 (다른 자리 조각 · 원색 · 반전)
+    unit = max(4.0, h / 46)
+    for t0, t1, x, y, cols, rows, kind, sx, sy in R.active(scene.blocks, te):
+        rect = QRectF(x * w, y * h + dy, unit * cols, unit * rows)
+        if kind == 0:
+            p.drawImage(rect, a.plain, QRectF(sx * iw, sy * ih, rect.width() * iw / w, rect.height() * ih / h))
+        elif kind == 1:
+            p.fillRect(rect, INK[int(t0 * 997) % 3])
+        else:
+            p.setCompositionMode(QPainter.CompositionMode_Difference)
+            p.fillRect(rect, QColor(255, 255, 255))
+            p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+    # 해킹 글자 (한 글자씩 쳐진다 · 갈수록 늘어난다)
+    p.setFont(a.code)
+    shown = [c for c in scene.codes if c[0] <= te][-18:]
+    for t0, x, y, text, kind in shown:
+        n = min(len(text), int((te - t0) * 42) + 1)
+        at = QPointF(x * w, y * h + dy)
+        p.setPen(QColor(0, 0, 0, 170))
+        p.drawText(at + QPointF(1, 1), text[:n])
+        p.setPen(INK[0] if kind == 0 else INK[2])
+        p.drawText(at, text[:n])
+    if k > 0.3:                                                    # 되살리는 중이라는 진행 표시
+        pct = int(min(99, 100 * k))
+        bar = "#" * (pct // 10) + "." * (10 - pct // 10)
+        p.setPen(INK[0])
+        p.drawText(QPointF(w * 0.03, h * 0.95), f"RESTORING U.L.T.R.O.N CORE [{bar}] {pct}%")
+    # 브라운관 주사선 — 갈수록 진하게
+    p.setOpacity(min(1.0, 0.15 + 0.6 * k))
+    p.drawImage(0, 0, a.crt)
+    p.setOpacity(1.0)
+    # 끝자락: 어두워진다 (모래알은 paint 가 그 위에 차오르게 그린다)
+    if tn > 0:
+        p.fillRect(QRectF(0, 0, w, h), _c(QColor(0, 0, 0), 0.55 * smooth(tn)))
+
+
 def draw_static(p: QPainter, a: Assets, t: float, w: int, h: int, opacity: float) -> None:
     """옛날 TV 전파가 안 잡힐 때의 지직거리는 흑백 화면."""
     if opacity <= 0 or not a.static:
@@ -474,21 +587,19 @@ def draw_static(p: QPainter, a: Assets, t: float, w: int, h: int, opacity: float
 def paint(p: QPainter, scene: R.Scene, a: Assets, t: float, w: int, h: int) -> None:
     """t 초 때의 장면 (덮개 창 전체). 투명하게 남긴 곳으로는 아래의 실제 화면이 보인다."""
     look = looks(scene, t)
-    if look["hack"] is not None:
-        img = a.hack[look["hack"]] if look["hack"] < len(a.hack) else None
-        if img is not None:
-            p.save()
-            p.setRenderHint(QPainter.SmoothPixmapTransform)
-            p.drawImage(QRectF(0, 0, w, h), img)
-            p.restore()
+    if look["hack"]:
+        draw_hack(p, scene, a, t, w, h, look)
     if look["black"] > 0:
-        p.fillRect(QRectF(0, 0, w, h), _c(QColor(0, 0, 0), look["black"] * look["alpha"]))
+        p.fillRect(QRectF(0, 0, w, h), _c(QColor(0, 0, 0), look["black"]))
     draw_static(p, a, t, w, h, look["static"])
-    if look["phase"] in ("hold", "fade", "end"):
-        if look["alpha"] > 0:                                       # 다 나타나 멈췄다 — 완성된 그림 한 장을 옅게 찍는다
-            p.setOpacity(look["alpha"])
-            p.drawImage(QPointF(w / 2 - a.px / 2, h / 2 - a.px / 2), a.finished_core(spin(scene, t)))
-            p.setOpacity(1.0)
+    if look["done"] is not None:                                    # 다 나타나 멈춘 코어 — 한 장을 크기 · 자리 · 진하기만 바꿔 찍는다
+        cx, cy, size, alpha = look["done"]
+        if alpha > 0:
+            p.save()
+            p.setOpacity(alpha)
+            p.setRenderHint(QPainter.SmoothPixmapTransform)
+            p.drawImage(QRectF(cx - size / 2, cy - size / 2, size, size), a.finished_core(spin(scene, t)))
+            p.restore()
     elif look["eyes"] > 0 or any(v > 0 for v in look["core"].values()):
         draw_core(p, a, w / 2, h / 2, look, spin(scene, t))
 
@@ -510,6 +621,7 @@ def render(scene: R.Scene, t: float, background: np.ndarray | None = None, asset
 
 # ---------------------------------------------------------------- 덮개 창
 class ReviveView(QWidget):
+    handoff = Signal()         # 울트론이 HUD 크기로 다 줄어들었다 — 지금 실제 HUD 를 그 자리에 띄우면 겹쳐 넘겨받는다
     finished = Signal()
 
     def __init__(self) -> None:
@@ -521,6 +633,7 @@ class ReviveView(QWidget):
         self.setWindowTitle("U.L.T.R.O.N REVIVE")
         self._scene: R.Scene | None = None
         self._assets: Assets | None = None
+        self._handed = False
         self._clock = QElapsedTimer()
         self._timer = QTimer(self)
         self._timer.setInterval(16)
@@ -538,6 +651,7 @@ class ReviveView(QWidget):
         self.setGeometry(geometry)
         self._scene, self._assets = scene, Assets(scene, geometry.width(), geometry.height())
         scene.drop_pixels()                        # 그릴 그림은 Assets 에 있다 — numpy 쪽은 놓아 준다
+        self._handed = False
         self.show()
         self.raise_()                              # 울트론 HUD 도 '항상 위' 창이다 — 그 위로 올라간다
         self._clock.start()
@@ -548,6 +662,9 @@ class ReviveView(QWidget):
     def stop(self) -> None:
         self._timer.stop()
         self._guard.stop()
+        if self._scene is not None and not self._handed:
+            self._handed = True
+            self.handoff.emit()                    # 중간에 멈췄어도 HUD 는 띄운다
         if self._scene is not None:
             self._scene.release()                  # 그림을 놓아 준다 (메모리)
             self._scene = self._assets = None
@@ -558,7 +675,12 @@ class ReviveView(QWidget):
         sc = self._scene
         if sc is None:
             return
-        if self._clock.elapsed() / 1000 >= sc.duration:
+        t = self._clock.elapsed() / 1000
+        if not self._handed and t >= sc.marks()["shrink"]:
+            self._handed = True
+            self.handoff.emit()
+            self.raise_()                          # 방금 뜬 HUD 보다 위에서 겹친 채 옅어진다
+        if t >= sc.duration:
             self.stop()
         else:
             self.update()

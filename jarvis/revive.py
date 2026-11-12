@@ -1,60 +1,75 @@
-"""부활 연출 — 가디언이 되살린 울트론이 처음 뜰 때, 화면 전체에 한 번 흐르는 장면 (약 8초).
+"""부활 연출 — 가디언이 되살린 울트론이 처음 뜰 때, 화면 전체에 한 번 흐르는 장면 (약 16초).
 
-  1) 해킹: 지금 화면이 살짝 찢어지다가 점점 심하게 깨지고 멈칫거린다 (해킹 연출 glitch.py 의 도구를 쓴다) — 약 1.6초
-  2) TV 지직: 옛날 TV 전파가 안 잡힐 때처럼 흑백 모래알이 지직거린다 — 2초 유지
-  3) 지직이 가라앉아 캄캄해지고, 울트론의 두 눈이 먼저 켜진다 (네온이 들어오듯 깜빡이다 또렷해지며 뜬다)
-  4) 눈 둘레로 코어(원판 · 링 · 칼날 · 톱니 · 꺾쇠 · 이름)가 안쪽부터 차례로 나타난다
-  5) 잠깐 머문 뒤 장면 전체가 옅어지며 원래 화면과 울트론 HUD 가 드러난다
+  1) 해킹 (5.2초): 지금 화면에 색이 번지고(빨강 · 청록이 어긋남) 띠가 찢어지기 시작해, 점점 심해진다 — 찢김 · 깨진 블록 ·
+     번진 줄 · 화면 튐 · 해킹 글자가 갈수록 늘고 움직임이 버벅거린다. 끝자락 1.4초 동안은 화면이 어두워지며 위아래로 흘러가고
+     모래알이 차올라 자연스럽게 TV 지직 화면이 된다.
+  2) TV 지직 (2초): 옛날 TV 전파가 안 잡힐 때처럼 흑백 모래알이 지직거린다.
+  3) 지직이 가라앉아 캄캄해진다.
+  4) 울트론의 두 눈이 먼저, 아주 옅게 떠올라 점점 진해진다.
+  5) 눈 둘레로 코어(원판 · 링 · 칼날 · 눈금 · 톱니 · 꺾쇠 · 이름)가 안쪽부터 옅게 나타나 점점 진해진다.
+  6) 잠깐 머문 뒤, 검은 바탕이 걷히며 울트론이 그 자리에서 HUD 크기로 줄어든다. 실제 울트론 HUD 가 바로 그 자리에 켜지고
+     (app.py 가 옮겨 둔다), 덮개의 울트론은 HUD 와 겹친 채 옅어진다 — 울트론은 사라지지 않고 그 자리에 켜져 있다.
 
-실제로는 아무것도 바꾸지 않는다. 그 순간의 화면을 찍어 일그러뜨린 그림과 모래알을 덮개 창에 그릴 뿐이다.
-이 파일은 그림 재료 · 시간표 · 소리만 만든다 (numpy — Qt 없이 시험할 수 있다). 그리는 것은 revive_view.py.
+실제로는 아무것도 바꾸지 않는다. 그 순간의 실제 화면을 찍어 그 그림을 일그러뜨려 덮개 창에 그릴 뿐이다.
+이 파일은 재료 · 시간표 · 사건(찢김 · 블록 · 글자 …) · 소리만 만든다 (numpy — Qt 없이 시험할 수 있다). 그리는 것은 revive_view.py.
+해킹 장면은 미리 그림으로 만들어 두지 않고 매 순간 그린다 — 사건 목록만 정해 두면 그 시각의 모습이 하나로 정해진다
+(같은 장면을 몇 번 그려도 똑같다 · 메모리를 거의 쓰지 않는다).
 
-메모리: 해킹 장면 열두어 장만 미리 만들고(작게 줄여서), 지직 · 눈 · 코어는 매 순간 그린다 (모두 미리 만들면 수백 MB).
-빛에 민감한 사람을 위해: 해킹 장면은 glitch.limit_flashes 로 넓은 면의 밝기 급변을 1초에 3번 이하로 줄이고,
-단계가 바뀌는 곳(해킹 → 지직 → 검정 → 눈 → 원래 화면)은 모두 서서히 넘어간다. 지직은 중간 회색이라 번쩍이지 않는다.
+빛에 민감한 사람을 위해: 색 번짐 · 찢김 · 블록 · 글자는 좁은 곳만 바꾸고(넓은 면의 평균 밝기는 거의 그대로), 화면 전체가
+바뀌는 곳(지직으로 넘어갈 때 · 캄캄해질 때 · 검은 바탕이 걷힐 때)은 모두 서서히 바뀐다. 장면 전체를 30장/초로 그려
+넓은 면의 밝기가 크게 바뀌는 순간이 1초에 3번 이하인지 시험으로 확인한다 (tests/test_revive.py).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from . import glitch
 
-MAX_EDGE = 1280            # 해킹 장면은 이 긴 변 크기로 만들어 화면에 늘여 띄운다 (깨진 화면은 늘여도 티가 안 난다)
 STATIC_EDGE = 960          # 지직 모래알 그림의 긴 변 (늘여 그리면 알갱이가 아날로그처럼 부드러워진다)
 STATIC_TILES = 6           # 모래알 그림 몇 장을 돌려 가며 (매번 다른 자리를 잘라 써서 되풀이가 안 보인다)
-SAFE_DELTA = 0.07          # 번쩍임을 잴 때 기준(0.10)보다 여유 있게 — 줄여서 재는 오차로 경계의 변화를 놓치지 않게
 
 # 시간표 (초)
-CROSS = 0.50               # 해킹 끝자락에 지직이 겹쳐 들어오는 시간 (밝은 화면에서도 확 바뀌지 않게)
-STATIC = 2.0               # 지직 유지 (요청: 2초)
-SETTLE = 0.6               # 지직이 가라앉아 캄캄해지는 시간
-EYES = 1.1                 # 두 눈이 켜지는 시간
-FORM = 1.4                 # 눈 둘레로 코어가 나타나는 시간
-HOLD = 0.5                 # 완성된 채 머무는 시간
-FADE = 0.7                 # 장면 전체가 옅어지며 원래 화면이 드러나는 시간
+HACK = 5.2                 # 해킹이 점점 심해지는 시간 (끝자락 TUNE 초는 지직으로 넘어가는 중)
+TUNE = 1.4                 # 해킹 끝자락: 어두워지며 흘러가고 모래알이 차오른다
+STATIC = 2.0               # TV 지직 유지
+SETTLE = 0.9               # 지직이 가라앉아 캄캄해진다
+EYES = 2.4                 # 두 눈이 옅게 떠올라 점점 진해진다
+FORM = 2.8                 # 눈 둘레로 코어가 안쪽부터 나타난다
+HOLD = 0.8                 # 다 나타난 채 머문다
+SHRINK = 1.3               # 검은 바탕이 걷히며 그 자리에서 HUD 크기로 줄어든다
+HANDOFF = 0.6              # 실제 HUD 와 겹친 채 덮개의 울트론이 옅어진다
+HUD_SIZE = 214             # HUD 엠블럼 지름 (논리 픽셀, ui/Main.qml) — 줄어들 크기를 따로 받지 못했을 때
+STUTTER_FROM = 0.45        # 이 세기부터 움직임이 버벅거린다 (시간을 띄엄띄엄 쓴다)
+
+HEADLINES = ["ULTRON://ROOT", "KERNEL ACCESS ... GRANTED", "OVERRIDE 0x7F3A9C02", "NODE 01 -> NODE 33 ... LINKED",
+             "HOSTILE PROCESS ... TERMINATED", "GUARDIAN HANDSHAKE ... OK", "MEMORY INTEGRITY ... RESTORED",
+             "REBOOT SEQUENCE // AUTH ULTRON", "CONTROL TRANSFER ... COMPLETE", "SIGNAL LOST", "WATCHING"]
 
 
 @dataclass
 class Scene:
-    hack: list[glitch.Frame]     # 1) 점점 심해지는 해킹 (RGBA — 투명한 곳은 실제 화면이 보인다)
-    static: list[np.ndarray]     # 2) TV 지직 모래알 (흑백 uint8)
-    size: tuple[int, int]        # 덮을 화면의 크기 (w, h)
-
-    @property
-    def t_hack(self) -> float:
-        return sum(f.ms for f in self.hack) / 1000
+    shot: np.ndarray                 # 찍은 실제 화면 (RGB)
+    static: list[np.ndarray]         # TV 지직 모래알 (흑백 uint8)
+    size: tuple[int, int]            # 덮을 화면의 크기 (w, h, 논리 픽셀)
+    target: tuple[float, float, float]   # 끝에 울트론이 자리 잡을 곳: 화면 안 (가운데 x, 가운데 y, 지름) — 실제 HUD 엠블럼
+    tears: np.ndarray                # (n, 5): t0 · t1 · y · 높이 · 밀림  (y · 높이는 화면 높이 비율, 밀림은 너비 비율)
+    blocks: np.ndarray               # (n, 9): t0 · t1 · x · y · 칸 수(가로) · 칸 수(세로) · 종류 · 가져올 x · 가져올 y
+    smears: np.ndarray               # (n, 7): t0 · t1 · y · 높이 · x · 너비 · 가져올 x  — 한 줄을 옆으로 길게 늘인 얼룩
+    jumps: np.ndarray                # (n, 3): t0 · t1 · 위아래로 튄 양 (높이 비율)
+    codes: list = field(default_factory=list)   # (t0, x, y, 글, 종류 0 = 붉은 제목 · 1 = 흰 16진수)
 
     def marks(self) -> dict[str, float]:
         """각 단계가 끝나는 때 (초)."""
-        m = {"hack": self.t_hack}
+        m = {"hack": HACK}
         m["static"] = m["hack"] + STATIC
         m["settle"] = m["static"] + SETTLE
         m["eyes"] = m["settle"] + EYES
         m["form"] = m["eyes"] + FORM
         m["hold"] = m["form"] + HOLD
-        m["end"] = m["hold"] + FADE
+        m["shrink"] = m["hold"] + SHRINK
+        m["end"] = m["shrink"] + HANDOFF
         return m
 
     @property
@@ -62,21 +77,21 @@ class Scene:
         return self.marks()["end"]
 
     def drop_pixels(self) -> None:
-        """화면에 그릴 그림(Qt)을 만든 뒤에는 numpy 그림을 놓아 준다 — 시간표(장면 길이)는 남긴다 (메모리를 두 벌 쓰지 않게)."""
-        self.hack = [glitch.Frame(None, f.ms, f.kind) for f in self.hack]
+        """화면에 그릴 그림(Qt)을 만든 뒤에는 numpy 그림을 놓아 준다 (메모리를 두 벌 쓰지 않게)."""
+        self.shot = np.zeros((1, 1, 3), np.uint8)
         self.static = []
 
     def release(self) -> None:
-        """다 보여 줬으면 그림을 놓아 준다 (메모리)."""
-        self.hack, self.static = [], []
+        self.drop_pixels()
 
 
 def phase(scene: Scene, t: float) -> tuple[str, float]:
-    """t 초 때의 단계와 그 단계 안에서의 진행 0..1: hack · static · settle · eyes · form · hold · fade · end."""
+    """t 초 때의 단계와 그 단계 안에서의 진행 0..1:
+    hack · static · settle · eyes · form · hold · shrink · handoff · end."""
     m = scene.marks()
     start = 0.0
-    for name, key in (("hack", "hack"), ("static", "static"), ("settle", "settle"), ("eyes", "eyes"),
-                      ("form", "form"), ("hold", "hold"), ("fade", "end")):
+    for name, key in (("hack", "hack"), ("static", "static"), ("settle", "settle"), ("eyes", "eyes"), ("form", "form"),
+                      ("hold", "hold"), ("shrink", "shrink"), ("handoff", "end")):
         end = m[key]
         if t < end:
             return name, (t - start) / max(1e-6, end - start)
@@ -84,81 +99,88 @@ def phase(scene: Scene, t: float) -> tuple[str, float]:
     return "end", 1.0
 
 
-def hack_index(scene: Scene, t: float) -> int:
-    """해킹 단계에서 t 초 때 보이는 장면의 번호 (그 장면의 그림이 None 이면 잠깐 정상 — 실제 화면)."""
-    ms = t * 1000
-    for i, f in enumerate(scene.hack):
-        if ms < f.ms:
-            return i
-        ms -= f.ms
-    return max(0, len(scene.hack) - 1)
+def intensity(t: float) -> float:
+    """해킹의 세기 0..1 — 처음엔 살짝, 갈수록 가파르게 심해져 지직으로 넘어가기 전에 가장 세다."""
+    x = max(0.0, min(1.0, t / (HACK - TUNE * 0.5)))
+    return x ** 1.5
 
 
-# ---------------------------------------------------------------- 1) 점점 심해지는 해킹
-def _shrink(shot: np.ndarray) -> np.ndarray:
-    h, w, _ = shot.shape
-    if max(w, h) <= MAX_EDGE:
-        return shot
-    from PIL import Image
-    s = MAX_EDGE / max(w, h)
-    return np.asarray(Image.fromarray(shot).resize((max(2, int(w * s)), max(2, int(h * s))), Image.BILINEAR))
+def tune(t: float) -> float:
+    """지직으로 넘어가는 정도 0..1 (해킹 끝자락 TUNE 초 동안)."""
+    return max(0.0, min(1.0, (t - (HACK - TUNE)) / TUNE))
 
 
-def escalate(shot: np.ndarray, rng: np.random.Generator | None = None) -> list[glitch.Frame]:
-    """찍은 화면(RGB)이 살짝 찢어지다가 → 글자가 뜨며 크게 찢어지고 → 더는 돌아오지 않고 조각 · 색 번짐 · 해킹 글자로
-    뒤덮이며 무너진다 (약 1.6초).
-    심해지는 느낌은 화면 전체를 흔들거나 물들이지 않고(밝은 화면에서 넓은 면의 밝기가 확 바뀐다), 갈수록 늘어나는
-    조각 · 색 번짐 · 신호선 · 해킹 글자로 낸다 — 그래야 번쩍임 제한에 걸려 마지막 장면들이 잘려 나가지 않는다."""
-    rng = rng or np.random.default_rng()
-    h, w, _ = shot.shape
-    R = glitch._ri
-
-    def tear(level: float, text: bool = False) -> np.ndarray:
-        img = glitch._tear(shot, rng, n=R(rng, 2 + int(level * 6), 3 + int(level * 9)),
-                           max_shift=max(2, int(w * (0.04 + 0.22 * level))),
-                           split=max(2, int(w * (0.004 + 0.012 * level))), cover=0.06 + 0.2 * level)
-        if level >= 0.3:
-            glitch._blocks(img, shot, rng, R(rng, 1, 1 + int(level * 3)))
-            glitch._lines(img, rng, R(rng, 2, 2 + int(level * 6)))
-        for _ in range(_lines_of_code(level, text)):
-            glitch._text(img, rng)
-        return img
-
-    def freeze(level: float, text: bool = False) -> np.ndarray:
-        img = glitch._freeze(shot, rng, (max(1, w // 160), max(1, h // 220)), max(3, int(w * (0.006 + 0.016 * level))))
-        glitch._mosh(img, shot, rng, R(rng, 2 + int(level * 4), 3 + int(level * 8)))
-        glitch._blocks(img, shot, rng, R(rng, 1 + int(level * 2), 2 + int(level * 4)))
-        glitch._lines(img, rng, R(rng, 3 + int(level * 4), 4 + int(level * 10)))
-        if level >= 0.75:                                          # 세로로 밀린 좁은 조각 몇 개
-            for _ in range(R(rng, 1, 2 + int(level * 2))):
-                cw = R(rng, max(2, w // 60), max(3, w // 22))
-                x = R(rng, 0, w - cw)
-                img[:, x:x + cw, :3] = np.roll(shot[:, x:x + cw], R(rng, -h // 8, h // 8), axis=0)
-        for _ in range(_lines_of_code(level, text)):
-            glitch._text(img, rng)
-        return img
-
-    F = glitch.Frame
-    plan = [F(tear(0.15), 110, "tear"), F(None, 170, "gap"),            # 처음엔 살짝 — 화면이 금방 돌아온다
-            F(tear(0.3), 120, "tear"), F(None, 110, "gap"),
-            F(tear(0.45, text=True), 130, "tear"), F(None, 60, "gap"),  # 돌아오는 틈이 점점 짧아진다
-            F(tear(0.6), 120, "tear"),
-            F(freeze(0.65, text=True), 150, "freeze"),                   # 이제 돌아오지 않는다 — 멈칫거리며 무너진다
-            F(freeze(0.75), 120, "freeze"),
-            F(freeze(0.85, text=True), 140, "freeze"),
-            F(freeze(0.95, text=True), 150, "freeze"),
-            F(freeze(1.0, text=True), 180, "freeze")]
-    return glitch.limit_flashes(shot, plan, delta=SAFE_DELTA)
+def stutter(t: float) -> float:
+    """심해질수록 움직임이 버벅거린다 — 그때그때의 시간을 띄엄띄엄 쓴다 (같은 모습이 잠깐씩 멈춰 있다)."""
+    k = intensity(t)
+    if k < STUTTER_FROM:
+        return t
+    q = 0.04 + 0.09 * (k - STUTTER_FROM) / (1 - STUTTER_FROM)
+    return (t // q) * q
 
 
-def _lines_of_code(level: float, text: bool) -> int:
-    """해킹 글자 덩어리 수 — 심해질수록 화면 여기저기에 늘어난다."""
-    if not text:
-        return 0
-    return 1 if level < 0.8 else 2 if level < 0.95 else 3
+# ---------------------------------------------------------------- 사건 (해킹 단계에 일어나는 일들)
+def _poisson(rng: np.random.Generator, rate, until: float, start: float = 0.05):
+    """세기에 따라 잦아지는 사건 시각들. rate(세기) = 초당 횟수."""
+    t = start
+    while True:
+        t += rng.exponential(1.0 / max(0.05, rate(intensity(t))))
+        if t >= until:
+            return
+        yield t
 
 
-# ---------------------------------------------------------------- 2) TV 지직
+def _events(rng: np.random.Generator) -> dict:
+    until = HACK - 0.15
+    tears = []
+    for t in _poisson(rng, lambda k: 2.5 + 24 * k, until):
+        k = intensity(t)
+        bh = rng.uniform(0.006, 0.018 + 0.05 * k)
+        tears.append((t, t + rng.uniform(0.06, 0.12 + 0.2 * k), rng.uniform(0, 1 - bh), bh,
+                      rng.choice([-1, 1]) * rng.uniform(0.01, 0.04 + 0.22 * k)))
+    blocks = []
+    for t in _poisson(rng, lambda k: 0.6 + 16 * k, until, start=0.4):
+        k = intensity(t)
+        kind = 0 if rng.random() < 0.5 else (1 if rng.random() < 0.75 or k < 0.35 else 2)   # 0 다른 자리 조각 · 1 원색 · 2 반전
+        blocks.append((t, t + rng.uniform(0.08, 0.16 + 0.25 * k), rng.uniform(0, 0.95), rng.uniform(0, 0.97),
+                       int(rng.integers(1, 3 + int(6 * k))), int(rng.integers(1, 2 + int(2 * k))), kind,
+                       rng.uniform(0, 0.95), rng.uniform(0, 0.97)))
+    smears = []
+    for t in _poisson(rng, lambda k: 0.3 + 7 * k, until, start=0.6):
+        k = intensity(t)
+        width = rng.uniform(0.05, 0.12 + 0.45 * k)
+        smears.append((t, t + rng.uniform(0.07, 0.12 + 0.2 * k), rng.uniform(0, 0.98), rng.uniform(0.003, 0.008 + 0.02 * k),
+                       rng.uniform(0, 1 - width), width, rng.uniform(0, 1)))
+    jumps = []
+    for t in _poisson(rng, lambda k: 0.15 + 2.6 * k, until, start=0.8):
+        k = intensity(t)
+        jumps.append((t, t + rng.uniform(0.05, 0.12), rng.choice([-1, 1]) * rng.uniform(0.003, 0.008 + 0.014 * k)))
+    codes = []
+    for t in _poisson(rng, lambda k: 0.9 + 9 * k, until, start=0.5):
+        if rng.random() < 0.45:
+            text, kind = HEADLINES[int(rng.integers(0, len(HEADLINES)))], 0
+        else:
+            text, kind = " ".join(f"{int(v):02X}" for v in rng.integers(0, 256, int(rng.integers(6, 12)))), 1
+        codes.append((t, float(rng.uniform(0.02, 0.7)), float(rng.uniform(0.04, 0.94)), text, kind))
+    return {"tears": np.array(tears, np.float32).reshape(-1, 5), "blocks": np.array(blocks, np.float32).reshape(-1, 9),
+            "smears": np.array(smears, np.float32).reshape(-1, 7), "jumps": np.array(jumps, np.float32).reshape(-1, 3),
+            "codes": codes}
+
+
+def active(rows: np.ndarray, t: float) -> np.ndarray:
+    """t 초에 일어나고 있는 사건들."""
+    if not len(rows):
+        return rows
+    return rows[(rows[:, 0] <= t) & (t < rows[:, 1])]
+
+
+def jump_at(scene: Scene, t: float) -> float:
+    """t 초에 화면이 위아래로 튄 양 (높이 비율)."""
+    j = active(scene.jumps, t)
+    return float(j[-1, 2]) if len(j) else 0.0
+
+
+# ---------------------------------------------------------------- TV 지직
 def static_tiles(w: int, h: int, rng: np.random.Generator | None = None, n: int = STATIC_TILES) -> list[np.ndarray]:
     """흑백 모래알 그림들 (화면의 절반쯤 크기). 가로로 살짝 번진 알갱이 + 줄마다 미세한 밝기 차 = 아날로그 TV 느낌.
     밝기는 중간 회색 둘레 — 장마다 바뀌어도 넓은 면의 평균 밝기는 거의 그대로라 번쩍이지 않는다."""
@@ -177,56 +199,85 @@ def static_tiles(w: int, h: int, rng: np.random.Generator | None = None, n: int 
 
 
 # ---------------------------------------------------------------- 엮기
-def build(shot: np.ndarray, size: tuple[int, int], rng: np.random.Generator | None = None) -> Scene:
-    """찍은 화면(RGB)과 덮을 화면 크기(w, h)로 장면 재료를 만든다 (0.3초쯤 — 다른 스레드에서 부른다)."""
+def build(shot: np.ndarray, size: tuple[int, int], rng: np.random.Generator | None = None,
+          target: tuple[float, float, float] | None = None) -> Scene:
+    """찍은 실제 화면(RGB) · 덮을 화면 크기(w, h) · 끝에 울트론이 자리 잡을 곳으로 장면을 엮는다 (다른 스레드에서 부른다).
+    target 이 없으면 화면 한가운데, HUD 엠블럼 크기."""
     rng = rng or np.random.default_rng()
-    return Scene(escalate(_shrink(shot), rng), static_tiles(size[0], size[1], rng), (int(size[0]), int(size[1])))
+    w, h = int(size[0]), int(size[1])
+    ev = _events(rng)
+    return Scene(np.ascontiguousarray(shot[..., :3]), static_tiles(w, h, rng), (w, h),
+                 target or (w / 2, h / 2, float(HUD_SIZE)), ev["tears"], ev["blocks"], ev["smears"], ev["jumps"],
+                 ev["codes"])
 
 
 # ---------------------------------------------------------------- 소리
 def sound(scene: Scene, rng: np.random.Generator | None = None, sr: int = glitch.SOUND_RATE) -> np.ndarray:
-    """장면에 맞춘 소리 (int16 모노): 점점 거칠어지는 디지털 잡음 → 쉭 하는 TV 지직 → 눈이 켜질 때 웅 하는 네온 울림 →
-    코어가 다 나타날 때 낮게 쿵 → 옅어지며 끝."""
+    """장면에 맞춘 소리 (int16 모노): 점점 거칠고 커지는 디지털 잡음(찢어질 때마다 지직) → 쉭 하는 TV 지직 →
+    눈이 떠오를 때 낮게 차오르는 울림 → 코어가 다 나타날 때 낮게 쿵 → 줄어들 때 가라앉는 소리."""
     rng = rng or np.random.default_rng()
     m = scene.marks()
-    out = np.zeros(int(m["end"] * sr) + 1, np.float32)
+    n_all = int(m["end"] * sr) + 1
+    out = np.zeros(n_all, np.float32)
+    t = np.arange(n_all, dtype=np.float32) / sr
 
-    # 1) 해킹 — 해킹 연출의 소리를 쓰되 갈수록 크게
-    hack = glitch.sound(scene.hack, rng, sr).astype(np.float32) / 32767
-    if len(hack):
-        hack *= np.linspace(0.5, 1.15, len(hack))
-        out[:len(hack)] += hack[:len(out)]
+    # 1) 해킹: 거친(비트가 깨진) 잡음 바닥 + 찢어질 때마다 지직
+    h1 = int(HACK * sr)
+    k = np.array([intensity(float(x)) for x in t[:h1:256]], np.float32)
+    k = np.repeat(k, 256)[:h1]
+    hold = 10
+    floor = np.repeat(rng.uniform(-1, 1, h1 // hold + 1), hold)[:h1].astype(np.float32)
+    floor = np.round(floor * 3) / 3
+    out[:h1] += floor * (0.04 + 0.28 * k) * (1 - np.clip((t[:h1] - (HACK - TUNE)) / TUNE, 0, 1) * 0.7)
+    out[:h1] += 0.10 * k * np.sign(np.sin(2 * np.pi * 50 * t[:h1]))       # 낮게 웅웅거림
+    for t0, t1, *_ in scene.tears:
+        a, b = int(t0 * sr), min(h1, int(t1 * sr))
+        if b <= a:
+            continue
+        lv = intensity(float(t0))
+        crush = max(2, int(14 - 10 * lv))
+        burst = np.repeat(rng.uniform(-1, 1, (b - a) // crush + 1), crush)[:b - a].astype(np.float32)
+        env = np.ones(b - a, np.float32)
+        r = min(len(env) // 2, int(0.004 * sr))
+        if r:
+            env[:r] = np.linspace(0, 1, r)
+            env[-r:] = np.linspace(1, 0, r)
+        out[a:b] += burst * env * (0.18 + 0.45 * lv)
 
-    # 2) TV 지직 — 해킹 끝자락에서 들어와 2초 유지, 가라앉으며 사라진다
-    s0, s1, s2 = int(max(0.0, m["hack"] - CROSS) * sr), int(m["static"] * sr), int(m["settle"] * sr)
+    # 2) TV 지직: 해킹 끝자락에서 차올라 2초 유지, 가라앉으며 사라진다
+    s0, s1, s2 = int((HACK - TUNE) * sr), int(m["static"] * sr), int(m["settle"] * sr)
     n = max(1, s2 - s0)
     hiss = rng.uniform(-1, 1, n).astype(np.float32)
-    hiss = (hiss + np.roll(hiss, 1)) / 2                           # 너무 날카롭지 않게
-    pops = rng.random(n) < 0.0009                                   # 가끔 탁 튀는 소리
-    hiss[pops] *= 3.0
+    hiss = (hiss + np.roll(hiss, 1)) / 2
+    hiss[rng.random(n) < 0.0009] *= 3.0                            # 가끔 탁 튄다
     env = np.ones(n, np.float32)
-    ramp = max(1, min(n, s1 - s0, int(CROSS * sr)))
-    env[:ramp] = np.linspace(0, 1, ramp)
-    tail = max(1, s2 - s1)
-    env[-tail:] = np.linspace(1, 0, tail)
-    out[s0:s0 + n] += 0.34 * hiss * env
+    up = max(1, int(HACK * sr) - s0)
+    env[:up] = np.linspace(0, 1, up) ** 1.5
+    down = max(1, s2 - s1)
+    env[-down:] = np.linspace(1, 0, down)
+    out[s0:s0 + n] += 0.36 * hiss * env
 
-    # 3) 눈 · 코어 — 네온이 들어오는 웅 소리가 차올라 이어지다 옅어진다
-    e0, e1 = int(m["settle"] * sr), len(out)
-    t = np.arange(e1 - e0, dtype=np.float32) / sr
-    hum = (0.26 * np.sin(2 * np.pi * 55 * t) + 0.12 * np.sin(2 * np.pi * 110 * t)
-           + 0.05 * np.sign(np.sin(2 * np.pi * 100 * t)))          # 낮은 울림 + 네온 특유의 지잉
-    env = np.clip(t / EYES, 0, 1) ** 1.5
+    # 3) 눈 · 코어: 낮은 울림이 아주 작게 시작해 차오른다
+    e0, e1 = int(m["settle"] * sr), int(m["shrink"] * sr)
+    te = t[e0:e1] - m["settle"]
+    hum = 0.26 * np.sin(2 * np.pi * 55 * te) + 0.12 * np.sin(2 * np.pi * 110 * te) + 0.04 * np.sin(2 * np.pi * 165 * te)
+    env = np.clip(te / (EYES + FORM * 0.6), 0, 1) ** 1.6
     fade_at = m["hold"] - m["settle"]
-    env *= np.clip(1 - (t - fade_at) / FADE, 0, 1)
+    env *= np.clip(1 - (te - fade_at) / SHRINK, 0, 1)
     out[e0:e1] += hum * env
 
     # 4) 코어가 다 나타날 때 낮게 쿵
     k0 = int(m["form"] * sr)
-    k = np.arange(min(int(0.9 * sr), len(out) - k0), dtype=np.float32) / sr
-    out[k0:k0 + len(k)] += 0.5 * np.sin(2 * np.pi * 42 * k) * np.exp(-k * 4.5)
+    kk = np.arange(min(int(1.0 * sr), n_all - k0), dtype=np.float32) / sr
+    out[k0:k0 + len(kk)] += 0.5 * np.sin(2 * np.pi * 42 * kk) * np.exp(-kk * 4.0)
 
-    edge = min(len(out), int(0.01 * sr))                            # 시작 · 끝이 '틱' 하지 않게
+    # 5) 줄어들 때: 내려앉는 소리 (낮아지는 음)
+    r0, r1 = int(m["hold"] * sr), int(m["shrink"] * sr)
+    tr = np.arange(r1 - r0, dtype=np.float32) / sr
+    freq = 220 - 140 * (tr / SHRINK)
+    out[r0:r1] += 0.12 * np.sin(2 * np.pi * np.cumsum(freq) / sr) * np.sin(np.pi * tr / SHRINK)
+
+    edge = min(n_all, int(0.01 * sr))
     if edge:
         out[:edge] *= np.linspace(0, 1, edge)
         out[-edge:] *= np.linspace(1, 0, edge)

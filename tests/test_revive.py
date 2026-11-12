@@ -1,6 +1,7 @@
 """부활 연출 (revive.py · revive_view.py) — 가디언이 되살린 울트론이 처음 뜰 때의 장면.
 
-지켜야 하는 것: 해킹이 점점 심해진다 → TV 지직이 2초 유지된다 → 눈이 먼저 켜지고 그 뒤에 코어가 나타난다 → 원래 화면으로 돌아온다,
+지켜야 하는 것: 해킹이 4초 넘게 점점 심해지다 자연스럽게 TV 지직으로 넘어가 2초 유지된다 → 눈이 먼저 옅게 떠올라 진해지고
+그 뒤에 코어가 나타난다 → 검은 바탕이 걷히며 울트론이 그 자리에서 HUD 크기로 줄어 실제 HUD 와 겹친다,
 어느 1초 동안이든 넓은 면의 밝기가 크게 바뀌는 일이 3번을 넘지 않는다 (빛에 민감한 사람), 다 보여 준 뒤 그림을 놓아 준다.
 """
 import os
@@ -28,39 +29,36 @@ def desktop(bright: bool = True) -> np.ndarray:
 
 @pytest.fixture(scope="module")
 def scene():
-    return R.build(desktop(), (W, H), np.random.default_rng(5))
+    return R.build(desktop(), (W, H), np.random.default_rng(5), target=(500.0, 180.0, 107.0))
 
 
 # ---------------------------------------------------------------- 시간표
-def test_timeline_order_and_the_two_second_static(scene):
+def test_timeline_order_long_hack_and_two_second_static(scene):
     m = scene.marks()
-    assert list(m) == ["hack", "static", "settle", "eyes", "form", "hold", "end"]
-    assert 1.2 <= m["hack"] <= 2.4                                   # 해킹이 점점 심해지는 시간
+    assert list(m) == ["hack", "static", "settle", "eyes", "form", "hold", "shrink", "end"]
+    assert m["hack"] >= 4.0 and R.HACK - R.TUNE >= 3.5             # 해킹은 4초 넘게, 지직이 차오르기 전까지 3.5초 넘게
     assert m["static"] - m["hack"] == pytest.approx(2.0)            # TV 지직은 2초 유지
-    assert m["settle"] < m["eyes"] < m["form"] < m["end"] and scene.duration == m["end"]
-    assert [R.phase(scene, t)[0] for t in (0.1, m["hack"] + 1, m["static"] + 0.1, m["settle"] + 0.1,
-                                            m["eyes"] + 0.1, m["form"] + 0.1, m["hold"] + 0.1, m["end"] + 1)] == \
-        ["hack", "static", "settle", "eyes", "form", "hold", "fade", "end"]
+    assert m["eyes"] - m["settle"] >= 2.0 and m["form"] - m["eyes"] >= 2.5   # 눈 · 코어는 천천히
+    assert [R.phase(scene, t)[0] for t in (0.1, m["hack"] + 1, m["static"] + 0.1, m["settle"] + 0.1, m["eyes"] + 0.1,
+                                            m["form"] + 0.1, m["hold"] + 0.1, m["shrink"] + 0.1, m["end"] + 1)] == \
+        ["hack", "static", "settle", "eyes", "form", "hold", "shrink", "handoff", "end"]
 
 
 def test_hacking_gets_worse_over_time(scene):
-    def covered(f):                                                  # 화면을 덮은 비율 (None = 잠깐 정상)
-        return 0.0 if f.image is None else float((f.image[..., 3] > 0).mean())
-    cov = [covered(f) for f in scene.hack]
-    third = max(1, len(cov) // 3)
-    assert max(cov[:third]) < 0.6 and cov[-1] > 0.95                # 처음엔 일부만 찢기고, 끝에는 화면 전체가 무너진다
-    assert np.mean(cov[-third:]) > np.mean(cov[:third]) + 0.4
-    assert any(f.image is None for f in scene.hack[:4])             # 처음에는 화면이 잠깐씩 돌아온다
-    assert all(f.image is not None for f in scene.hack[-4:])        # 끝으로 가면 돌아오지 않는다
-    shot = desktop().astype(int)
+    assert R.intensity(0.2) < 0.05 and R.intensity(R.HACK - R.TUNE) > 0.7 and R.intensity(R.HACK - R.TUNE / 2) == 1
+    ks = [R.intensity(t / 10) for t in range(int(R.HACK * 10))]
+    assert all(b >= a for a, b in zip(ks, ks[1:]))                  # 한 번도 약해지지 않는다
 
-    def broken(f):                                                   # 원래 화면과 눈에 띄게 달라진 칸의 비율
-        if f.image is None:
-            return 0.0
-        seen = np.where(f.image[..., 3:4] > 0, f.image[..., :3].astype(int), shot)
-        return float((np.abs(seen - shot).max(axis=2) > 40).mean())
-    first = next(f for f in scene.hack if f.image is not None)
-    assert broken(scene.hack[-1]) > broken(first) * 2                # 끝으로 갈수록 화면이 더 많이 망가진다
+    def busy(t0, t1):                                                # 그 사이에 일어난 찢김 · 블록 · 얼룩 수
+        return sum(int(((rows[:, 0] >= t0) & (rows[:, 0] < t1)).sum()) for rows in (scene.tears, scene.blocks, scene.smears))
+    assert busy(3.0, 4.0) > busy(0.0, 1.0) * 3                      # 갈수록 훨씬 잦아진다
+    assert len(scene.codes) >= 10 and scene.codes[-1][0] > 3.5      # 해킹 글자가 끝까지 늘어난다
+    assert R.stutter(0.3) == 0.3 and R.stutter(4.0) != 4.0          # 심해지면 움직임이 버벅거린다
+
+
+def test_static_creeps_in_only_at_the_end_of_the_hack():
+    assert R.tune(R.HACK - R.TUNE - 0.01) == 0 and R.tune(R.HACK) == 1
+    assert R.tune(4.0) < 0.3                                        # 4초까지는 아직 해킹 화면이 주인공
 
 
 def test_static_is_mid_gray_and_steady():
@@ -71,17 +69,16 @@ def test_static_is_mid_gray_and_steady():
     assert max(means) - min(means) < 3                              # 장마다 바뀌어도 밝기는 그대로 (번쩍이지 않는다)
 
 
-def test_big_screens_are_built_small():
-    sc = R.build(np.zeros((2160, 3840, 3), np.uint8), (3840, 2160), np.random.default_rng(2))
-    img = next(f.image for f in sc.hack if f.image is not None)
-    assert max(img.shape[:2]) <= R.MAX_EDGE and max(sc.static[0].shape) <= R.STATIC_EDGE
+def test_target_defaults_to_the_screen_center_at_hud_size():
+    sc = R.build(desktop(), (W, H), np.random.default_rng(2))
+    assert sc.target == (W / 2, H / 2, float(R.HUD_SIZE))
 
 
-def test_drop_pixels_keeps_the_timeline():
+def test_drop_pixels_keeps_the_timeline_and_events():
     sc = R.build(desktop(), (W, H), np.random.default_rng(3))
-    before = sc.duration
+    before, tears = sc.duration, len(sc.tears)
     sc.drop_pixels()
-    assert sc.duration == before and all(f.image is None for f in sc.hack) and sc.static == []
+    assert sc.duration == before and len(sc.tears) == tears and sc.shot.size <= 3 and sc.static == []
 
 
 # ---------------------------------------------------------------- 소리
@@ -93,8 +90,9 @@ def test_sound_follows_the_scene(scene):
 
     def loud(t0, t1):
         return float(np.abs(a[int(t0 * sr):int(t1 * sr)].astype(float)).mean())
+    assert loud(3.0, 4.0) > loud(0.0, 1.0) * 2                      # 해킹 소리가 갈수록 커진다
     assert loud(m["hack"] + 0.2, m["static"] - 0.2) > 2000          # TV 지직은 쉭 하고 들린다
-    assert loud(m["eyes"], m["form"]) > 500                         # 코어가 나타날 때 낮게 울린다
+    assert loud(m["eyes"], m["form"]) > loud(m["settle"], m["settle"] + 0.5)   # 울림은 작게 시작해 차오른다
     assert loud(m["end"] - 0.02, m["end"]) < 400                    # 끝은 조용히
 
 
@@ -109,38 +107,47 @@ def V():
     return revive_view
 
 
-def test_eyes_light_up_before_the_core_appears(V, scene):
+def test_eyes_rise_faint_then_deepen_before_the_core(V, scene):
+    lights = [V.eye_light(k / 50) for k in range(51)]
+    assert lights[0] == 0 and lights[-1] == 1 and all(b >= a for a, b in zip(lights, lights[1:]))   # 깜빡이지 않고 차오른다
+    assert V.eye_light(0.15) < 0.12                                 # 처음엔 아주 옅다
     m = scene.marks()
-    during_eyes = V.looks(scene, m["settle"] + 0.8)
-    assert during_eyes["eyes"] > 0.9 and all(v == 0 for v in during_eyes["core"].values())
-    early_form = V.looks(scene, m["eyes"] + 0.2)
-    assert early_form["eyes"] == 1 and early_form["core"]["disc"] > 0 and early_form["core"]["hex"] == 0   # 안쪽부터
-    assert all(v == 1 for v in V.looks(scene, m["form"] + 0.1)["core"].values())
-    assert V.looks(scene, m["end"] - 0.01)["alpha"] < 0.05           # 끝에는 원래 화면으로
-    assert V.looks(scene, m["hack"] + 1)["static"] == 1 and V.looks(scene, m["static"] + 0.1)["black"] == 1
+    during = V.looks(scene, m["settle"] + 1.2)
+    assert 0 < during["eyes"] < 1 and all(v == 0 for v in during["core"].values())   # 눈이 먼저 — 코어는 아직
+    early = V.looks(scene, m["eyes"] + 0.3)
+    assert early["eyes"] == 1 and 0 < early["core"]["disc"] < 0.5 and early["core"]["hex"] == 0   # 안쪽부터, 옅게
+    assert all(v == pytest.approx(1, abs=1e-3) for v in V.looks(scene, m["form"] - 0.001)["core"].values())
 
 
-def test_eyes_flicker_on_like_neon_then_open(V):
-    lights = [V.eye_light(k / 100) for k in range(100)]
-    dips = sum(1 for a, b in zip(lights, lights[1:]) if b < a - 0.01)
-    assert lights[0] == 0 and lights[-1] == 1 and 1 <= dips <= 40  # 두어 번 깜빡이다 켜진다
-    assert V.eye_open(0.1) < 0.15 and V.eye_open(1.0) == pytest.approx(1.0)   # 가는 틈으로 켜졌다가 뜬다
+def test_ultron_shrinks_in_place_onto_the_hud_and_the_black_lifts(V, scene):
+    m = scene.marks()
+    tx, ty, ts = scene.target
+    hold = V.looks(scene, m["hold"] - 0.1)
+    assert hold["black"] == 1 and hold["done"][:2] == (W / 2, H / 2)  # 다 나타나 가운데에 크게
+    mid = V.looks(scene, (m["hold"] + m["shrink"]) / 2)
+    assert 0 < mid["black"] < 1 and ts < mid["done"][2] < hold["done"][2]   # 걷히는 중 · 줄어드는 중
+    end = V.looks(scene, m["shrink"] + 0.001)
+    assert end["black"] == 0 and end["done"][:3] == pytest.approx((tx, ty, ts), abs=0.5)   # HUD 엠블럼 자리 · 크기에 딱
+    assert V.looks(scene, m["end"] - 0.01)["done"][3] < 0.05        # 실제 HUD 와 겹친 채 옅어진다
 
 
-def test_frames_render_and_eyes_show_in_the_dark(V, scene):
+def test_frames_render_and_end_on_the_real_screen(V, scene):
     m = scene.marks()
     a = V.Assets(scene, W, H)
+    shot = desktop().astype(int)
+    first = V.render(scene, 0.05, desktop(), a)
+    d_first = np.abs(first.astype(int) - shot).mean()
+    assert d_first < 12                                              # 처음엔 거의 그대로 (살짝 번짐)
+    late = V.render(scene, 3.6, desktop(), a)
+    assert np.abs(late.astype(int) - shot).mean() > d_first * 2     # 갈수록 크게 망가진다
     dark = V.render(scene, m["settle"] + 0.05, desktop(), a)
     assert dark.mean() < 25                                          # 지직이 가라앉아 캄캄
-    eyes = V.render(scene, m["settle"] + 1.0, desktop(), a)
+    eyes = V.render(scene, m["eyes"] - 0.05, desktop(), a)
     red = eyes[..., 0].astype(int) - eyes[..., 1]
     ys, xs = np.nonzero(red > 60)
-    assert len(ys) > 50 and abs(xs.mean() - W / 2) < W * 0.1       # 화면 한가운데에 붉은 두 눈
-    assert ys.mean() < H / 2                                         # 눈은 코어의 위쪽 절반에 있다
-    done = V.render(scene, m["form"] + 0.2, desktop(), a)
-    assert (done[..., 0].astype(int) - done[..., 1] > 60).sum() > len(ys) * 3   # 코어가 다 나타나면 붉은 면이 훨씬 넓다
+    assert len(ys) > 50 and abs(xs.mean() - W / 2) < W * 0.1 and ys.mean() < H / 2   # 한가운데 위쪽에 붉은 두 눈
     back = V.render(scene, m["end"], desktop(), a)
-    assert np.abs(back.astype(int) - desktop().astype(int)).mean() < 3        # 끝나면 원래 화면 그대로
+    assert np.abs(back.astype(int) - shot).mean() < 3                # 끝나면 원래 화면 그대로 (그 자리엔 실제 HUD)
 
 
 @pytest.mark.parametrize("bright", [True, False])
@@ -154,23 +161,24 @@ def test_whole_scene_never_flashes_more_than_three_times_a_second(V, bright):
         t = i / 30
         r = glitch.regions(V.render(sc, t, bg, a))
         if glitch.big_change(prev, r):
-            times.append(t)
+            times.append(round(t, 2))
         prev = r
     worst = max((sum(1 for u in times if s <= u < s + 1.0) for s in times), default=0)
     assert worst <= glitch.MAX_CHANGES_PER_SEC, times
 
 
-def test_view_plays_then_lets_go(V, scene, monkeypatch):
+def test_view_hands_off_then_lets_go(V):
     from PySide6.QtCore import QRect
     sc = R.build(desktop(), (W, H), np.random.default_rng(9))
     view = V.ReviveView()
-    done = []
-    view.finished.connect(lambda: done.append(1))
+    events = []
+    view.handoff.connect(lambda: events.append("handoff"))
+    view.finished.connect(lambda: events.append("finished"))
     view.play(QRect(0, 0, W, H), sc)
-    assert view.playing and all(f.image is None for f in sc.hack)   # 그릴 그림은 Qt 쪽에만 (numpy 는 놓아 줌)
+    assert view.playing and sc.shot.size <= 3                       # 그릴 그림은 Qt 쪽에만 (numpy 는 놓아 줌)
     view.grab()                                                      # 한 번 그려 본다 (오류 없이)
-    view.stop()
-    assert done == [1] and not view.playing and sc.hack == [] and view._assets is None
+    view.stop()                                                      # 중간에 멈춰도 HUD 는 넘겨받는다
+    assert events == ["handoff", "finished"] and not view.playing and view._assets is None
 
 
 # ---------------------------------------------------------------- 울트론 본체 연결
@@ -181,15 +189,20 @@ def app(monkeypatch):
 
     class App:
         _revive_begin, _revive_done, _revived_line = J._revive_begin, J._revive_done, J._revived_line
+        _revive_handoff, _revive_target = J._revive_handoff, J._revive_target
 
         def __init__(self):
             self.cfg = {"guardian_show": True, "user_title": "창조자"}
             self.args = types.SimpleNamespace(closed="vision")
-            self.shown, self.toasts, self.said, self.later = {}, [], [], []
-            self.bridge = types.SimpleNamespace(set=lambda k, v: self.shown.__setitem__(k, v),
+            self.shown, self.toasts, self.said, self.events = {}, [], [], []
+            self.bridge = types.SimpleNamespace(set=lambda k, v: self.shown.__setitem__(k, v), _compact=True,
                                                 toast=types.SimpleNamespace(emit=lambda kind, m: self.toasts.append(m)))
             self._reviving, self._revive_demo = False, False
             self.listener = types.SimpleNamespace(muted=False)
+            self.visible = True
+            me = self
+            self.win = types.SimpleNamespace(isVisible=lambda: me.visible, show=lambda: me.events.append("show"),
+                                             setGeometry=lambda r: me.events.append(("geometry", r)))
 
         def say(self, text, follow_up=True):
             self.said.append(text)
@@ -199,6 +212,12 @@ def app(monkeypatch):
 
         def _unmute(self):
             self.listener.muted = False
+
+        def toggle_visible(self, show=None, force=False):
+            self.events.append(("toggle", show, force))
+
+        def _core_point(self):
+            return 115.0, 107.0
 
     monkeypatch.setattr(app_mod.winutil, "fullscreen_app", lambda: False)
     monkeypatch.setattr(app_mod.QTimer, "singleShot", lambda ms, fn: None)
@@ -219,11 +238,27 @@ def test_no_show_over_a_fullscreen_game(app, monkeypatch):
     assert me.said and not me._reviving and not me.listener.muted
 
 
-def test_demo_line_after_the_preview(app):
+def test_demo_line_after_the_preview_and_the_hud_comes_back(app):
     me, mod = app
-    me._revive_demo, me._reviving = True, True
+    me._revive_demo, me._reviving, me.visible = True, True, False
     me._revive_done()
     assert "이렇게 깨어난다" in me.said[0] and not me._reviving
+    assert ("toggle", True, True) in me.events                       # 장면을 못 마쳤어도 HUD 는 다시 보인다
+
+
+def test_hud_target_puts_its_emblem_at_the_screen_center(app):
+    from PySide6.QtCore import QRect
+    me, mod = app
+    screen = types.SimpleNamespace(geometry=lambda: QRect(0, 0, 1920, 1080), availableGeometry=lambda: QRect(0, 0, 1920, 1040))
+    (tx, ty, size), rect = me._revive_target(screen)
+    assert (tx, ty, size) == (960.0, 540.0, 214.0)                   # 울트론이 나타난 바로 그 자리 · HUD 엠블럼 크기
+    assert (rect.x(), rect.y(), rect.width(), rect.height()) == (960 - 115, 540 - 107, *mod.COMPACT)
+    me._revive_hud = rect
+    me._revive_handoff()
+    assert me.events == [("geometry", rect), "show"]                 # 그 자리에 실제 HUD 를 띄운다
+    me.bridge._compact = False                                        # 큰 HUD 는 화면 밖으로 나가지 않게 당긴다
+    (tx, ty, size), rect = me._revive_target(screen)
+    assert rect.bottom() <= 1039 and size == 212.0 and ty == rect.y() + 107
 
 
 def test_saying_show_me_the_revival_plays_the_preview():

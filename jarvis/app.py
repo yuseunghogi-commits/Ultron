@@ -850,7 +850,8 @@ class Jarvis(QObject):
     # ================================================================== 부활 연출 (revive.py · revive_view.py)
     # 순서: 화면 찍기(_revive_begin) → 장면 · 소리 만들기(다른 스레드, _build_revive) → 재생(_on_revive) → 끝(_revive_done)
     def _revive_begin(self, demo: bool = False) -> None:
-        """해킹으로 화면이 깨지다 → TV 지직 2초 → 울트론 눈부터 나타나는 장면. 못 하면 바로 '되살아났다'만 띄운다."""
+        """화면이 해킹당하듯 깨지다 → TV 지직 2초 → 울트론 눈부터 나타나 → 그 자리에서 HUD 로 남는 장면.
+        못 하면 바로 '되살아났다'만 띄운다."""
         if self._reviving:
             return                             # 이미 보여 주는 중
         self._revive_demo = demo
@@ -869,13 +870,28 @@ class Jarvis(QObject):
             return
         self._reviving = True
         self.listener.muted = True             # 연출 소리를 말소리로 듣지 않게
-        threading.Thread(target=self._build_revive, args=(shot, screen.geometry()), daemon=True, name="revive").start()
+        target, self._revive_hud = self._revive_target(screen)
+        threading.Thread(target=self._build_revive, args=(shot, screen.geometry(), target), daemon=True,
+                         name="revive").start()
 
-    def _build_revive(self, shot, geometry) -> None:
+    def _revive_target(self, screen) -> tuple[tuple[float, float, float], QRect]:
+        """울트론이 다 나타난 뒤 자리 잡을 곳 — 화면 한가운데. 실제 HUD 를 그 엠블럼이 화면 한가운데에 오도록 옮길 자리와,
+        그때 HUD 엠블럼의 가운데 · 지름 (덮개 창 안의 좌표)을 돌려준다. 화면 밖으로 나가면 안쪽으로 당긴다."""
+        geo, avail = screen.geometry(), screen.availableGeometry()
+        w, h = COMPACT if self.bridge._compact else EXPANDED
+        cx, cy = self._core_point()                         # HUD 창 안에서 엠블럼의 가운데
+        x = round(geo.x() + geo.width() / 2 - cx)
+        y = round(geo.y() + geo.height() / 2 - cy)
+        x = max(avail.left(), min(x, avail.right() - w + 1))
+        y = max(avail.top(), min(y, avail.bottom() - h + 1))
+        size = 214.0 if self.bridge._compact else 212.0      # ui/Main.qml 의 엠블럼 크기
+        return (x + cx - geo.x(), y + cy - geo.y(), size), QRect(x, y, w, h)
+
+    def _build_revive(self, shot, geometry, target) -> None:
         """(다른 스레드) 장면 재료 · 소리를 만든다 (0.3초쯤)."""
         try:
             rng = np.random.default_rng()
-            scene = revive.build(shot, (geometry.width(), geometry.height()), rng)
+            scene = revive.build(shot, (geometry.width(), geometry.height()), rng, target)
             wav = glitch.write_wav(revive.sound(scene, rng), name="ultron_revive")
             self.sig_revive.emit((geometry, scene, wav))
         except Exception:
@@ -890,12 +906,23 @@ class Jarvis(QObject):
         geometry, scene, wav = pack
         if self._revive_view is None:
             self._revive_view = ReviveView()
+            self._revive_view.handoff.connect(self._revive_handoff)
             self._revive_view.finished.connect(self._revive_done)
             hwnd = int(self._revive_view.winId())
             winutil.set_capture_excluded(hwnd, True)   # 화면 캡처(울트론의 화면 보기 포함)에는 찍히지 않는다
             self.focus.own_hwnds.add(hwnd)
         self._revive_fx = self._play_fx(self._revive_fx, wav, 0.5)
         self._revive_view.play(geometry, scene)
+        self.win.hide()                        # 장면이 끝날 때 울트론이 줄어든 바로 그 자리에 다시 띄운다 (_revive_handoff)
+
+    @Slot()
+    def _revive_handoff(self) -> None:
+        """덮개의 울트론이 HUD 크기로 다 줄어들었다 — 실제 HUD 를 그 자리에 띄운다 (덮개의 울트론은 그 위에서 겹친 채 옅어진다).
+        HUD 는 그 자리에 켜진 채 남는다 (끌어서 옮길 수 있고, 다음에 켤 때는 원래 구석으로 간다)."""
+        rect = getattr(self, "_revive_hud", None)
+        if rect is not None:
+            self.win.setGeometry(rect)
+        self.win.show()
 
     @Slot()
     def _revive_done(self) -> None:
@@ -904,6 +931,8 @@ class Jarvis(QObject):
         if was:
             self._release_fx("_revive_fx")
             QTimer.singleShot(300, self._unmute)
+            if not self.win.isVisible():       # 장면을 못 띄웠거나 중간에 멈췄다 — HUD 는 늘 다시 보인다
+                self.toggle_visible(True, force=True)
         if self._revive_demo:
             self._revive_demo = False
             line = "되살아날 때는 이렇게 깨어난다. 끄려는 자가 있다면 말이지."
