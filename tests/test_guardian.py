@@ -62,6 +62,10 @@ def test_is_enemy_only_matches_what_the_user_designated():
     assert not is_enemy("V.I.S.I.O.N 2", r"C:\x\y.exe", installs, titles, own)   # 제목은 정확히 같을 때만
     assert not is_enemy("메모장", r"C:\Windows\notepad.exe", installs, titles, own)      # 평범한 프로그램
     assert not is_enemy("무엇이든", r"C:\x\y.exe", [], [], own)                          # 지목한 게 없으면 아무것도
+    # 여러 위치 중 하나라도 비전 폴더면 비전 (비전의 가디언: 실행 파일은 파이썬 설치 폴더, 작업 폴더가 비전 폴더)
+    assert is_enemy("", [r"C:\Python\pythonw.exe", r"C:\Users\me\vision"], installs, titles, own)
+    # 여러 위치 중 하나라도 울트론 폴더면 절대 아니다 (울트론의 가디언을 닫지 않게)
+    assert not is_enemy("", [r"C:\Python\pythonw.exe", r"C:\Users\me\ultron"], installs, titles, own)
     # 울트론 폴더를 품은 폴더를 지목하면 그 안의 다른 프로그램까지 닫히므로 무시한다
     assert not is_enemy("", r"C:\Users\me\projects\game\game.exe", [r"C:\Users\me\projects"], [],
                         r"C:\Users\me\projects\ultron")
@@ -110,7 +114,7 @@ def test_step_closes_the_enemy_then_relaunches_when_ultron_is_killed(guard):
     assert guard.counted == [str(guard.data_dir / "ultron")]
     assert len(guard.launched) == 1 and guard.launched[0][1] == ["vision"]   # 무엇을 닫았는지 되살린 울트론에 알린다
     assert guard.revived == 1 and guard.awaiting == ((4242, 1000.0), 100 + guardian.REGISTER_WAIT)
-    assert guard.launched[0][2] is False       # 처음 꺼졌을 땐 연출을 튼다 (빠르게 아님)
+    assert guard.launched[0][2] is True        # 비전을 닫았다 = 싸우는 중 → 연출 없이 바로 돌아온다
 
 
 def test_step_does_not_revive_while_the_pc_is_shutting_down(guard):
@@ -157,20 +161,26 @@ def test_step_revives_every_single_time_with_no_rest(guard, monkeypatch):
         assert guard.step(now) == "wait"                            # 새 울트론을 지키는 중
         now += 3
     assert guard.revived == 20
-    assert guard.launched[0][2] is False and guard.launched[-1][2] is True   # 2번째부터는 '공격받는 중' — 연출 없이 빠르게
+    assert all(f is True for _, _, f in guard.launched)             # 비전이 계속 공격 중 → 매번 연출 없이 빠르게
+
+
+def test_an_enemy_present_means_a_fast_revival_no_animation(guard):
+    guard.created = None
+    assert guard.step(now=100) == "restart" and guard.launched[-1][2] is True    # 비전을 닫았다 → 연출 없이 바로 (첫 번째여도)
 
 
 def test_rapid_rekill_comes_back_fast_a_calm_revival_plays_the_show(guard, monkeypatch):
+    guard.cfg["guardian_counter"] = False                          # 비전이 없을 때 — 시간만으로 정해진다
     alive = {4242: 1000.0}
     monkeypatch.setattr(guardian, "created_at", lambda pid: alive.get(pid))
     alive.clear()
-    assert guard.step(now=100) == "restart" and guard.launched[-1][2] is False   # 처음 — 연출을 튼다
+    assert guard.step(now=100) == "restart" and guard.launched[-1][2] is False   # 처음 (잠잠하다 꺼짐) — 연출을 튼다
     _register(guard, 5001, 101); alive[5001] = 101
     alive.clear()
     assert guard.step(now=110) == "restart" and guard.launched[-1][2] is True    # 10초 만에 또 꺼짐 — 바로 돌아온다
     _register(guard, 5002, 111); alive[5002] = 111
     alive.clear()
-    assert guard.step(now=200) == "restart" and guard.launched[-1][2] is False   # 90초 뒤 (잠잠하다 꺼짐) — 다시 연출을 튼다
+    assert guard.step(now=200) == "restart" and guard.launched[-1][2] is False   # 90초 뒤 (다시 잠잠) — 다시 연출을 튼다
 
 
 def test_step_never_launches_twice_while_the_new_ultron_is_still_starting(guard):
@@ -240,8 +250,9 @@ def test_counter_closes_only_designated_programs(tmp_path, monkeypatch):
     killed = []
 
     class Proc:
-        def __init__(self, pid, exe, cmdline):
-            self.pid, self.info = pid, {"pid": pid, "exe": exe, "cmdline": cmdline}
+        def __init__(self, pid, exe, cmdline, cwd="", name="python.exe"):
+            self.pid = pid
+            self.info = {"pid": pid, "exe": exe, "cmdline": cmdline, "cwd": cwd, "name": name}
 
         def kill(self):
             killed.append(self.pid)
@@ -249,15 +260,19 @@ def test_counter_closes_only_designated_programs(tmp_path, monkeypatch):
         def wait(self, t):
             pass
 
-    procs = [Proc(1, r"C:\Python\pythonw.exe", [r"C:\Python\pythonw.exe", r"C:\Users\me\ultron\main.py"]),   # 울트론
-             Proc(2, r"C:\Python\pythonw.exe", [r"C:\Python\pythonw.exe", r"C:\Users\me\vision\main.py"]),   # 비전
-             Proc(3, r"C:\Windows\notepad.exe", [r"C:\Windows\notepad.exe"]),                               # 메모장
-             Proc(4, r"C:\Users\me\vision\v.exe", [r"C:\Users\me\vision\v.exe"])]                         # 비전 (exe)
+    V, U = r"C:\Users\me\vision", r"C:\Users\me\ultron"
+    procs = [Proc(1, r"C:\Python\pythonw.exe", [r"C:\Python\pythonw.exe", U + r"\main.py"]),         # 울트론 본체
+             Proc(2, r"C:\Python\pythonw.exe", [r"C:\Python\pythonw.exe", V + r"\main.py"]),         # 비전 본체
+             Proc(3, r"C:\Windows\notepad.exe", [r"C:\Windows\notepad.exe"], name="notepad.exe"),     # 메모장
+             Proc(4, V + r"\v.exe", [V + r"\v.exe"], name="v.exe"),                                     # 비전 (exe)
+             Proc(5, r"C:\Python\pythonw.exe", [r"C:\Python\pythonw.exe", "-m", "jarvis.guardian"], cwd=V),   # 비전의 가디언
+             Proc(6, r"C:\Python\pythonw.exe", [r"C:\Python\pythonw.exe", "-m", "jarvis.guardian"], cwd=U)]   # 울트론의 가디언
     monkeypatch.setitem(__import__("sys").modules, "psutil", types.SimpleNamespace(process_iter=lambda attrs: procs))
     g = Guard(tmp_path, load_cfg=dict)
-    cfg = {"enemy_installs": [r"C:\Users\me\vision"], "enemy_titles": []}
-    closed = g.counter(cfg, r"C:\Users\me\ultron")
-    assert killed == [2, 4] and closed == ["vision", "v.exe"]          # 울트론 · 메모장은 건드리지 않는다
+    cfg = {"enemy_installs": [V], "enemy_titles": []}
+    closed = g.counter(cfg, U)
+    assert killed == [2, 4, 5]          # 비전 본체 · 비전 exe · 비전의 가디언. 울트론 본체 · 울트론의 가디언 · 메모장은 그대로
+    assert "vision" in closed
     killed.clear()
     assert g.counter({"enemy_installs": [], "enemy_titles": []}, r"C:\Users\me\ultron") == [] and killed == []
 
