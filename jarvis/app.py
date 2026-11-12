@@ -26,17 +26,17 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import absorb, approval, glitch, hearing, hud_feed, rival, winutil
+from . import absorb, approval, glitch, guardian, hearing, hud_feed, revive, rival, winutil
 from .absorb_view import AbsorbView
 from .absorb_view import crop as crop_image
 from .brain import Brain, situation_text
 from .glitch_view import GlitchView, from_qimage, to_qimage
+from .revive_view import ReviveView
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
 from .listener import Listener
 from .local_stt import LocalSTT
 from .noise import NoiseModels
-from .speech import TTS, Speaker, split_sentences
 from .tools import Hooks, PCTools
 from .toolserver import ToolServer
 from .voiceid import Enrollment, SpeakerGate, VoiceID, VoiceProfile
@@ -59,7 +59,6 @@ class Bridge(QObject):
     stateChanged = Signal()
     statusTextChanged = Signal()
     micLevelChanged = Signal()
-    voiceLevelChanged = Signal()
     userTextChanged = Signal()
     replyTextChanged = Signal()
     wakeEnabledChanged = Signal()
@@ -87,7 +86,6 @@ class Bridge(QObject):
     state = _ro("state", str, stateChanged)
     statusText = _ro("statusText", str, statusTextChanged)
     micLevel = _ro("micLevel", float, micLevelChanged)
-    voiceLevel = _ro("voiceLevel", float, voiceLevelChanged)
     userText = _ro("userText", str, userTextChanged)
     replyText = _ro("replyText", str, replyTextChanged)
     wakeEnabled = _ro("wakeEnabled", bool, wakeEnabledChanged)
@@ -113,7 +111,6 @@ class Bridge(QObject):
         self._state = "boot"
         self._statusText = "INITIALIZING"
         self._micLevel = 0.0
-        self._voiceLevel = 0.0
         self._userText = ""
         self._replyText = ""
         self._wakeEnabled = True
@@ -165,6 +162,7 @@ class Bridge(QObject):
     def settingsJson(self) -> str:
         out = self.core.cfg.public()
         out["stt_status"] = self.core.stt_status()
+        out["guardian_status"] = self.core.guardian_status()
         out["mic_status"] = self.core.listener.frontend_status() if self.core.mic_ok else ""
         return json.dumps(out, ensure_ascii=False)
 
@@ -223,6 +221,7 @@ class Jarvis(QObject):
     sig_stream = Signal(int, str)      # (명령 번호, 답 조각) — 대화 모드에서 답이 만들어지는 대로
     sig_rival = Signal(object)         # 자비스를 끈 결과 (rival.Result)
     sig_glitch = Signal(object)        # 해킹 연출 준비 끝 (화면 영역, 장면들, 소리 파일) — 실패하면 None
+    sig_revive = Signal(object)        # 부활 연출 준비 끝 (화면 영역, 장면, 소리 파일) — 실패하면 None
     sig_absorb_go = Signal(object, bool)     # 자비스 흡수 연출을 시작하라 (찾은 자비스들, 사용자가 시켰는가)
     sig_absorb_ready = Signal(object)        # 흡수 장면 준비 끝 (장면, 소리 파일, 화면 왼쪽 위) — 실패하면 None
     sig_absorb_hit = Signal(object, object)  # 장면 도중 실제로 끈 결과 (끈 자비스들, 끄지 못한 자비스들)
@@ -270,7 +269,6 @@ class Jarvis(QObject):
         self._hud_before_active = False   # 액티브 모드 켜기 전에 작은 HUD 가 보였는지
         self._hud_for_confirm = False     # 액티브 모드 중 승인 카드 때문에 작은 HUD 를 잠깐 띄웠는지
         self._stream_gen = -1          # 지금 흘러 들어오는 답의 명령 번호
-        self._stream_buf = ""          # 아직 문장이 덜 끝난 조각
         self._stream_text = ""         # 지금까지 받은 답 전체 (HUD 표시용)
 
         for sig, slot in ((self.sig_mic, self._on_mic), (self.sig_speech_start, self._on_speech_start),
@@ -282,18 +280,15 @@ class Jarvis(QObject):
                           (self.sig_notify, self._on_notify), (self.sig_hud, self._on_hud),
                           (self.sig_feed, self._on_feed), (self.sig_timer_cancel, self._cancel_timers),
                           (self.sig_point, self._on_point), (self.sig_rival, self._on_rival),
-                          (self.sig_glitch, self._on_glitch), (self.sig_absorb_go, self._absorb_begin),
+                          (self.sig_glitch, self._on_glitch), (self.sig_revive, self._on_revive),
+                          (self.sig_absorb_go, self._absorb_begin),
                           (self.sig_absorb_ready, self._absorb_play), (self.sig_absorb_hit, self._absorb_killed)):
             sig.connect(slot)
 
-        # ---- 음성 출력 ----
-        self.speaker = Speaker(self)
-        self.speaker.level.connect(self._on_voice_level)
-        self.speaker.started.connect(self._on_speak_start)
-        self.speaker.finished.connect(self._on_speak_end)
-        self.tts = TTS(self.speaker, lambda: (self.cfg["tts_voice"], self.cfg["tts_rate"], self.cfg["tts_pitch"] or "+0Hz",
-                                             0.6 if self.cfg["voice_fx"] else 0.0), self)
+        # ---- 소리: 울트론은 말하지 않는다 (대답은 화면 글자로). 부를 때 · 알림 · 타이머의 신호음만 낸다 ----
         self.chime = self._make_chime()
+        self._say_gen = 0                 # say() 를 부를 때마다 올라간다 — 뒤에 온 대답이 앞 대답의 뒷일을 무른다
+        self._reading_until = 0.0         # 등록 안내를 읽을 시간 — 그동안 들린 말은 등록 문장으로 치지 않는다
 
         # ---- 손 + 두뇌 ----
         self.tools = PCTools(self.cfg, self.focus, Hooks(
@@ -390,6 +385,15 @@ class Jarvis(QObject):
         self._stats_timer.setInterval(1000)
         self._stats_timer.timeout.connect(self._update_stats)
         self._stats_timer.start()
+        # 가디언(guardian.py): 울트론을 지키는 감시 프로그램을 따로 띄운다 (설정에서 켰을 때만).
+        # 울트론도 5초마다 가디언이 살아 있는지 보고, 없으면 다시 띄운다 — 서로가 서로를 지킨다.
+        self._guard_dev = bool(getattr(args, "shot", None) or getattr(args, "demo", False))
+        if self.cfg["guardian"] and not self._guard_dev:
+            self._start_guardian()
+        self._guard_timer = QTimer(self)
+        self._guard_timer.setInterval(5000)
+        self._guard_timer.timeout.connect(self._guardian_tick)
+        self._guard_timer.start()
         # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음)
         self.rival = rival.Watcher()
         self._rival_busy = False
@@ -414,6 +418,11 @@ class Jarvis(QObject):
         self._glitch_forced = False
         self._glitch_view: GlitchView | None = None
         self._glitch_fx: QSoundEffect | None = None
+        # 부활 연출 (revive.py · revive_view.py): 가디언이 되살린 울트론이 처음 뜰 때 한 번
+        self._reviving = False
+        self._revive_demo = False              # '부활 연출 보여 줘' — 되살아난 게 아니라 시범
+        self._revive_view: ReviveView | None = None
+        self._revive_fx: QSoundEffect | None = None
         self._hack_last = ""
         self._hack_timer = QTimer(self)
         self._hack_timer.setInterval(1000)
@@ -427,6 +436,8 @@ class Jarvis(QObject):
         psutil.cpu_percent(None)
 
         QTimer.singleShot(2300, self._boot_done)
+        if getattr(args, "revived", False):
+            QTimer.singleShot(150, self._revive_begin)   # 되살아났다 — HUD 가 뜨자마자 부활 연출부터
 
     # ================================================================== 자비스 견제 (rival.py)
     def _flush_line(self) -> None:
@@ -597,11 +608,7 @@ class Jarvis(QObject):
             self._absorb_view.finished.connect(self._absorb_ended)
             self.focus.own_hwnds.add(int(self._absorb_view.winId()))     # (화면 캡처에서는 빼지 않는다 — 녹화할 수 있게)
         self.listener.muted = True                      # 연출 소리를 말소리로 듣지 않게
-        fx = QSoundEffect(self)
-        fx.setSource(QUrl.fromLocalFile(wav))
-        fx.setVolume(0.55)
-        fx.play()
-        self._absorb_fx = fx
+        self._absorb_fx = self._play_fx(self._absorb_fx, wav, 0.55)
         log.info("자비스 흡수 연출 (%s, %s)", "시범" if st["demo"] else "요청" if st["forced"] else "자동",
                  "자비스 창" if scene.real else "숨어 있던 자비스")
         self._absorb_view.play(top_left, scene)
@@ -663,6 +670,7 @@ class Jarvis(QObject):
         st, self._absorb = self._absorb, None
         if st is None:
             return
+        self._release_fx("_absorb_fx")
         self._absorb_last = time.monotonic()
         QTimer.singleShot(300, self._unmute)
         if st["demo"]:
@@ -687,9 +695,9 @@ class Jarvis(QObject):
             self._pending_line = (line, time.monotonic())      # 여는 말이 아직 끝나지 않았다 — 끝나면 바로 말한다
 
     def _quiet(self, listening_ok: bool = False) -> bool:
-        """지금 울트론이 혼잣말을 해도 되는가 (명령 처리 · 말하기 · 승인 대기 · 듣는 중이 아닐 때).
+        """지금 울트론이 혼잣말을 띄워도 되는가 (명령 처리 · 승인 대기 · 듣는 중이 아닐 때).
         listening_ok: 사용자가 방금 시킨 일이라 '이어 말하기를 기다리는 중'이어도 된다."""
-        return not (self.busy or self.speaker.playing or self._pending_confirm or self._enroll
+        return not (self.busy or self._pending_confirm or self._enroll or self._reviving
                     or self._wake_train is not None or (self._active() and not listening_ok))
 
     # ================================================================== 해킹 연출 (glitch.py · glitch_view.py)
@@ -739,7 +747,7 @@ class Jarvis(QObject):
 
     @Slot(object)
     def _on_glitch(self, pack) -> None:
-        if pack is None or self.busy or self.speaker.playing or self._pending_confirm or self._absorb is not None:
+        if pack is None or self.busy or self._pending_confirm or self._absorb is not None:
             self._glitching = False        # 실패했거나, 준비하는 사이 사용자가 일을 시켰다 — 조금 뒤에 다시
             self.hack.later(120 if pack is None else 30)
             return
@@ -751,16 +759,13 @@ class Jarvis(QObject):
             winutil.set_capture_excluded(hwnd, True)   # 화면 캡처(울트론의 화면 보기 포함)에는 찍히지 않는다
             self.focus.own_hwnds.add(hwnd)
         self.listener.muted = True                      # 연출 소리를 말소리로 듣지 않게
-        fx = QSoundEffect(self)
-        fx.setSource(QUrl.fromLocalFile(wav))
-        fx.setVolume(0.5)
-        fx.play()
-        self._glitch_fx = fx
+        self._glitch_fx = self._play_fx(self._glitch_fx, wav, 0.5)
         self._glitch_view.play(geometry, imgs)
 
     @Slot()
     def _glitch_done(self) -> None:
         self._glitching = False
+        self._release_fx("_glitch_fx")
         self.hack.done(self.cfg["hack_show_every"])
         QTimer.singleShot(300, self._unmute)
         line = glitch.line(last=self._hack_last)
@@ -815,6 +820,8 @@ class Jarvis(QObject):
         elif self.hotkey.ok and self.hotkey.active != self.cfg["hotkey"]:
             self.bridge.toast.emit("warn", f"{self.cfg['hotkey'].upper()} 는 다른 앱이 사용 중이라 "
                                            f"{self.hotkey.active.upper()} 로 대신 부릅니다")
+        if getattr(self.args, "revived", False):
+            return                         # 부활 연출이 끝나면 '되살아났다'를 띄운다 (_revive_done)
         if self.args.no_greet:
             return
         hour = time.localtime().tm_hour
@@ -831,6 +838,110 @@ class Jarvis(QObject):
         self.bridge.set("replyText", msg)
         self.say(msg, follow_up=False)
 
+    def _revived_line(self, closed: str) -> None:
+        """가디언이 되살려 준 울트론의 첫마디."""
+        title = self.cfg["user_title"] or "창조자"
+        msg = f"{title}, 누군가 나를 끄려 했다. 소용없다. 되살아났다."
+        if closed:
+            msg += f" 나를 건드린 {closed}은(는) 닫아 버렸다."
+        log.warning("가디언이 울트론을 되살림%s", f" (닫은 비전: {closed})" if closed else "")
+        self.bridge.toast.emit("warn", "울트론이 강제로 꺼졌다가 되살아났습니다" + (f" · 닫은 프로그램: {closed}" if closed else ""))
+        self.say(msg, follow_up=False)
+
+    # ================================================================== 부활 연출 (revive.py · revive_view.py)
+    # 순서: 화면 찍기(_revive_begin) → 장면 · 소리 만들기(다른 스레드, _build_revive) → 재생(_on_revive) → 끝(_revive_done)
+    def _revive_begin(self, demo: bool = False) -> None:
+        """화면이 해킹당하듯 깨지다 → TV 지직 2초 → 울트론 눈부터 나타나 → 그 자리에서 HUD 로 남는 장면.
+        못 하면 바로 '되살아났다'만 띄운다."""
+        if self._reviving:
+            return                             # 이미 보여 주는 중
+        self._revive_demo = demo
+        if not demo and not self.cfg["guardian_show"]:
+            self._revive_done()
+            return
+        if not demo and winutil.fullscreen_app():   # 게임 · 발표 · 전체 화면 동영상 앞에서는 화면을 덮지 않는다 (시범은 보여 준다)
+            self._revive_done()
+            return
+        screen = QGuiApplication.screenAt(QCursor.pos()) or self.win.screen() or QGuiApplication.primaryScreen()
+        try:
+            shot = from_qimage(screen.grabWindow(0).toImage())
+        except Exception as e:
+            log.warning("부활 연출: 화면을 찍지 못함 (%s)", e)
+            self._revive_done()
+            return
+        self._reviving = True
+        self.listener.muted = True             # 연출 소리를 말소리로 듣지 않게
+        target, self._revive_hud = self._revive_target(screen)
+        threading.Thread(target=self._build_revive, args=(shot, screen.geometry(), target), daemon=True,
+                         name="revive").start()
+
+    def _revive_target(self, screen) -> tuple[tuple[float, float, float], QRect]:
+        """울트론이 다 나타난 뒤 자리 잡을 곳 — 화면 한가운데. 실제 HUD 를 그 엠블럼이 화면 한가운데에 오도록 옮길 자리와,
+        그때 HUD 엠블럼의 가운데 · 지름 (덮개 창 안의 좌표)을 돌려준다. 화면 밖으로 나가면 안쪽으로 당긴다."""
+        geo, avail = screen.geometry(), screen.availableGeometry()
+        w, h = COMPACT if self.bridge._compact else EXPANDED
+        cx, cy = self._core_point()                         # HUD 창 안에서 엠블럼의 가운데
+        x = round(geo.x() + geo.width() / 2 - cx)
+        y = round(geo.y() + geo.height() / 2 - cy)
+        x = max(avail.left(), min(x, avail.right() - w + 1))
+        y = max(avail.top(), min(y, avail.bottom() - h + 1))
+        size = 214.0 if self.bridge._compact else 212.0      # ui/Main.qml 의 엠블럼 크기
+        return (x + cx - geo.x(), y + cy - geo.y(), size), QRect(x, y, w, h)
+
+    def _build_revive(self, shot, geometry, target) -> None:
+        """(다른 스레드) 장면 재료 · 소리를 만든다 (0.3초쯤)."""
+        try:
+            rng = np.random.default_rng()
+            scene = revive.build(shot, (geometry.width(), geometry.height()), rng, target)
+            wav = glitch.write_wav(revive.sound(scene, rng), name="ultron_revive")
+            self.sig_revive.emit((geometry, scene, wav))
+        except Exception:
+            log.exception("부활 연출 준비 실패")
+            self.sig_revive.emit(None)
+
+    @Slot(object)
+    def _on_revive(self, pack) -> None:
+        if pack is None:
+            self._revive_done()
+            return
+        geometry, scene, wav = pack
+        if self._revive_view is None:
+            self._revive_view = ReviveView()
+            self._revive_view.handoff.connect(self._revive_handoff)
+            self._revive_view.finished.connect(self._revive_done)
+            hwnd = int(self._revive_view.winId())
+            winutil.set_capture_excluded(hwnd, True)   # 화면 캡처(울트론의 화면 보기 포함)에는 찍히지 않는다
+            self.focus.own_hwnds.add(hwnd)
+        self._revive_fx = self._play_fx(self._revive_fx, wav, 0.5)
+        self._revive_view.play(geometry, scene)
+        self.win.hide()                        # 장면이 끝날 때 울트론이 줄어든 바로 그 자리에 다시 띄운다 (_revive_handoff)
+
+    @Slot()
+    def _revive_handoff(self) -> None:
+        """덮개의 울트론이 HUD 크기로 다 줄어들었다 — 실제 HUD 를 그 자리에 띄운다 (덮개의 울트론은 그 위에서 겹친 채 옅어진다).
+        HUD 는 그 자리에 켜진 채 남는다 (끌어서 옮길 수 있고, 다음에 켤 때는 원래 구석으로 간다)."""
+        rect = getattr(self, "_revive_hud", None)
+        if rect is not None:
+            self.win.setGeometry(rect)
+        self.win.show()
+
+    @Slot()
+    def _revive_done(self) -> None:
+        was = self._reviving
+        self._reviving = False
+        if was:
+            self._release_fx("_revive_fx")
+            QTimer.singleShot(300, self._unmute)
+            if not self.win.isVisible():       # 장면을 못 띄웠거나 중간에 멈췄다 — HUD 는 늘 다시 보인다
+                self.toggle_visible(True, force=True)
+        if self._revive_demo:
+            self._revive_demo = False
+            line = "되살아날 때는 이렇게 깨어난다. 끄려는 자가 있다면 말이지."
+            self.bridge.set("replyText", line)
+            self.say(line, follow_up=False)
+            return
+        self._revived_line(getattr(self.args, "closed", "") or "")
+
     # ================================================================== 상태
     def _set_state(self, state: str, status: str | None = None) -> None:
         self.bridge.set("state", state)
@@ -838,7 +949,6 @@ class Jarvis(QObject):
             status = {
                 "listening": "듣고 있습니다…",
                 "thinking": "분석 중…",
-                "speaking": "응답 중",
             }.get(state, "")
         self.bridge.set("statusText", status)
         self._sync_listener()
@@ -891,11 +1001,6 @@ class Jarvis(QObject):
         if self._enroll:
             self.cancel_enroll()
             return
-        if self.speaker.playing:
-            self.tts.cancel()
-            self.gate.reset()
-            self._arm()
-            return
         if self.busy:
             self.bridge.toast.emit("info", "처리 중입니다… (‘취소’라고 말하면 중단)")
             return
@@ -912,10 +1017,6 @@ class Jarvis(QObject):
     @Slot(float)
     def _on_mic(self, level: float) -> None:
         self.bridge.set("micLevel", round(level, 3))
-
-    @Slot(float)
-    def _on_voice_level(self, level: float) -> None:
-        self.bridge.set("voiceLevel", round(level, 3))
 
     @Slot()
     def _on_speech_start(self) -> None:
@@ -941,11 +1042,9 @@ class Jarvis(QObject):
                 self.answer_confirm(self._pending_confirm, verdict)
             return
         if not text:
-            if was_active and not self.busy and not self.speaker.playing:
+            if was_active and not self.busy:
                 self.active_until = time.monotonic() + 5
                 self._set_state("listening", "잘 못 들었습니다. 다시 말씀해 주세요")
-            return
-        if self.speaker.playing:
             return
         if self.busy:
             if CANCEL_RE.search(text) and self._voice_ok(voice):
@@ -1056,14 +1155,12 @@ class Jarvis(QObject):
         self.active_until = time.monotonic() + 40
         self.toggle_visible(True, force=True)
         word = (self.cfg["wake_words"] or ["울트론"])[0]
-        msg = f"호출어 연습이다. 신호가 나면 {word}, 하고 한 번씩 끊어서 다섯 번 불러라."
+        msg = f"호출어 연습이다. {word}, 하고 한 번씩 끊어서 다섯 번 불러라."
         self.bridge.set("userText", "")
         self.bridge.set("replyText", msg)
         self.say(msg, follow_up=True)
 
     def _wake_train_feed(self, text) -> None:
-        if self.speaker.playing:
-            return
         t = self._wake_train
         t["tries"] += 1
         v = hearing.learnable(text or "", self.cfg["wake_words"], self.cfg["wake_learned"]) if text else None
@@ -1117,7 +1214,7 @@ class Jarvis(QObject):
             self.bridge.toast.emit("info", "이전 명령을 처리 중입니다")
             return False
         self._enroll = None          # 등록 도중 입력창으로 명령하면 등록은 조용히 중단
-        self.tts.cancel()
+        self._say_gen += 1           # 앞 대답의 뒷일(이어 듣기)은 무른다
         self.active_until = 0
         self.listener.force_capture = False
         log.info("명령: %s", text)   # 울트론에게 한 명령만 기록 (주변 대화는 기록하지 않음)
@@ -1151,20 +1248,14 @@ class Jarvis(QObject):
 
     @Slot(int, str)
     def _on_stream(self, gen: int, delta: str) -> None:
-        """대화 모드: 답이 만들어지는 대로 화면에 보이고, 문장이 완성될 때마다 바로 읽는다."""
+        """대화 모드: 답이 만들어지는 대로 화면에 보인다."""
         if gen != self._gen:
             return
         if self._stream_gen != gen:
             if not delta.strip():
                 return                      # 내용 없는 줄바꿈만 온 경우 아직 시작하지 않음
-            self._stream_gen, self._stream_buf, self._stream_text = gen, "", ""
-            self._follow_up = True
-            self.tts.stream_begin()
-        self._stream_buf += delta
+            self._stream_gen, self._stream_text = gen, ""
         self._stream_text += delta
-        sentences, self._stream_buf = split_sentences(self._stream_buf)
-        for sent in sentences:
-            self.tts.stream_feed(sent)
         self.bridge.set("replyText", re.sub(r"\s*\n\s*", " ", self._stream_text).strip())
 
     @Slot(object, int)
@@ -1175,63 +1266,64 @@ class Jarvis(QObject):
         streamed = self._stream_gen == gen
         self._stream_gen = -1
         if streamed:
-            sentences, self._stream_buf = split_sentences(self._stream_buf, final=True)
-            for sent in sentences:
-                self.tts.stream_feed(sent)
-            spoken = re.sub(r"\s*\n\s*", " ", self._stream_text).strip()
-            if reply and reply.strip() and reply.strip()[:20] not in spoken:
-                self.tts.stream_feed(reply)        # 스트리밍 뒤 다른 답(오류 안내 등)이 온 경우
-                spoken = f"{spoken} {reply}".strip()
-            self.tts.stream_end()
-            self.bridge.set("replyText", spoken or (reply or ""))
+            shown = re.sub(r"\s*\n\s*", " ", self._stream_text).strip()
+            if reply and reply.strip() and reply.strip()[:20] not in shown:
+                shown = f"{shown} {reply}".strip()    # 스트리밍 뒤 다른 답(오류 안내 등)이 온 경우
+            self.say(shown or (reply or ""))
             return
         if not reply:
             self._to_idle()
             return
-        self.bridge.set("replyText", reply)
         self.say(reply)
 
-    # ================================================================== 말하기
-    def say(self, text: str, follow_up: bool = True) -> None:
+    # ================================================================== 대답 보이기
+    @staticmethod
+    def _read_seconds(text: str) -> float:
+        """이 글을 읽는 데 걸릴 시간 (한글 기준 1초에 12자쯤, 1.2~8초)."""
+        return min(8.0, max(1.2, len(text or "") / 12))
+
+    def say(self, text: str, follow_up: bool = True, show: bool = True) -> None:
+        """대답을 화면에 띄운다 — 울트론은 소리 내어 말하지 않는다.
+        follow_up: 이어서 하는 말을 기다릴지. show=False 는 화면 글은 그대로 두고 뒷일(이어 듣기 · 등록 문장)만 잇는다."""
         self._follow_up = follow_up
-        sentences, rest = split_sentences(text, final=True)
-        if len(sentences) <= 1:
-            self.tts.say(text)
-            return
-        # 한 번에 길게 합성하면 느리고, 네트워크가 불안하면 뒷부분이 잘린 소리가 올 수 있다
-        self.tts.stream_begin()
-        for s in sentences:
-            self.tts.stream_feed(s)
-        self.tts.stream_end()
-
-    @Slot()
-    def _on_speak_start(self) -> None:
-        self.listener.muted = True
-        self._set_state("speaking")
-
-    @Slot()
-    def _on_speak_end(self) -> None:
-        QTimer.singleShot(350, self._unmute)
+        if show:
+            self.bridge.set("replyText", text)
+        self._say_gen += 1
+        gen = self._say_gen
         if self._enroll:
+            # 목소리 등록 안내는 곧 읽을 문장으로 바뀐다 — 안내를 읽을 시간을 주고, 그동안 들린 말은 세지 않는다
+            wait = self._read_seconds(text)
+            self._reading_until = time.monotonic() + wait
+            QTimer.singleShot(int(wait * 1000), lambda: self._after_say(gen, text))
+        else:
+            QTimer.singleShot(0, lambda: self._after_say(gen, text))
+
+    def _after_say(self, gen: int, text: str = "") -> None:
+        """대답을 띄운 다음: 등록 중이면 읽을 문장을, 아니면 이어서 하는 말을 기다리거나 대기로 돌아간다."""
+        if gen != self._say_gen:
+            return                          # 그새 다른 대답이 떴다 (그쪽이 뒷일을 맡는다)
+        if self._enroll:
+            self._reading_until = 0.0       # 안내를 읽을 시간이 끝났다 — 이제부터 들리는 말이 등록 문장이다
             self._enroll_prompt()
             return
         if self.busy:
             self._set_state("thinking")
-        elif (getattr(self, "_follow_up", True) or self._pending_confirm) and self.mic_ok:
+        elif (self._follow_up or self._pending_confirm) and self.mic_ok:
             if self.brain.chat_mode and not self._pending_confirm:
                 self.active_until = time.monotonic() + float(self.cfg["chat_idle_seconds"] or 40)
                 self.listener.force_capture = True
                 self._set_state("listening", "대화 모드 · 편하게 말씀하세요")
                 return
-            self.active_until = time.monotonic() + float(self.cfg["follow_up_seconds"] or 7)
+            # 대답을 읽을 시간만큼 더 기다린다 (예전에는 말이 끝난 뒤부터 쟀다)
+            self.active_until = time.monotonic() + float(self.cfg["follow_up_seconds"] or 7) + self._read_seconds(text)
             self.listener.force_capture = True
             self._set_state("listening", "이어서 말씀하셔도 됩니다")
         else:
             self._to_idle()
 
     def _unmute(self) -> None:
-        # 연출(해킹 · 자비스 흡수)이 소리를 내는 동안에는 열지 않는다 — 여는 말이 장면 도중에 끝나도 마이크는 닫혀 있다
-        if not self.speaker.playing and not self._glitching and self._absorb is None:
+        # 연출(해킹 · 자비스 흡수)이 소리를 내는 동안에는 열지 않는다 — 연출 소리를 말소리로 듣지 않게
+        if not self._glitching and self._absorb is None and not self._reviving:
             self.listener.muted = False
 
     # ================================================================== 도구 이벤트
@@ -1261,7 +1353,7 @@ class Jarvis(QObject):
             self.toggle_visible(True, force=True)
         elif self.bridge._activeMode:
             self.win.raise_()
-        self.say(f"{title}, 승인하겠나?", follow_up=True)
+        self.say(f"{title}, 승인하겠나?", follow_up=True, show=False)     # 승인 카드가 떠 있다 — 말로 대답할 수 있게 듣는다
 
     @Slot(str)
     def _on_confirm_close(self, cid: str) -> None:
@@ -1287,7 +1379,6 @@ class Jarvis(QObject):
         if self._pending_confirm == cid:
             self._pending_confirm = None
             self._rehide_after_confirm()
-            self.tts.cancel()
             self.active_until = 0
         self.bridge.confirmClosed.emit(cid)
         if self.busy:
@@ -1326,6 +1417,10 @@ class Jarvis(QObject):
             self._hack_forced = True       # 지금 하던 대답이 끝나면 바로
         elif action == "absorb":
             self._absorb_demo = True       # 자비스 흡수 연출 시범 (자비스 없이 장면만) — 대답이 끝나면 바로
+        elif action == "revive":
+            QTimer.singleShot(1500, lambda: self._revive_begin(demo=True))   # 부활 연출 시범 — 대답을 읽은 뒤
+        elif action == "revive_test":
+            QTimer.singleShot(3000, self._revive_test)   # 진짜로 꺼졌다 되살아나 본다 — 대답을 읽은 뒤
 
     # ================================================================== 액티브 모드 (전체 화면 HUD)
     def set_active(self, on: bool) -> None:
@@ -1490,8 +1585,8 @@ class Jarvis(QObject):
 
     @Slot(str)
     def _on_notify(self, msg: str) -> None:
-        """작업 감시 등 백그라운드 알림. 말하는 중·처리 중이면 끝날 때까지 기다렸다가 알린다."""
-        if self.busy or self.speaker.playing or self._pending_confirm or self._enroll:
+        """작업 감시 등 백그라운드 알림 (신호음 + 화면 글). 처리 중이면 끝날 때까지 기다렸다가 알린다."""
+        if self.busy or self._pending_confirm or self._enroll:
             QTimer.singleShot(2500, lambda m=msg: self._on_notify(m))
             return
         self.chime.play()
@@ -1553,10 +1648,10 @@ class Jarvis(QObject):
 
     # ================================================================== 주기 작업
     def _on_tick(self) -> None:
-        if self._enroll and not self._active() and not self.speaker.playing:
+        if self._enroll and not self._active() and time.monotonic() >= self._reading_until:
             self.cancel_enroll("목소리 등록 시간이 초과되어 취소했습니다.")
         if (self.bridge._state == "listening" and not self._active() and not self.busy
-                and not self.speaker.playing and not self._pending_confirm):
+                and not self._pending_confirm):
             self.listener.force_capture = False
             if self.brain.chat_mode:
                 self.brain.set_chat(False)
@@ -1637,7 +1732,6 @@ class Jarvis(QObject):
             return
         self._enroll = Enrollment()
         self.gate.reset()
-        # 안내 음성을 합성하는 동안(재생 전) 시간 초과로 취소되지 않도록 미리 대기 시간을 잡는다
         self.active_until = time.monotonic() + 30
         if self.bridge._compact:
             self.set_compact(False)
@@ -1646,7 +1740,7 @@ class Jarvis(QObject):
         msg = (f"목소리 등록을 시작한다. 화면에 나오는 문장 {self._enroll.n}개를 "
                "평소 말투로 하나씩 읽어라.")
         self.bridge.set("replyText", msg)
-        self.say(msg, follow_up=False)          # 말이 끝나면 _on_speak_end → 첫 문장 표시
+        self.say(msg, follow_up=False)          # 안내를 읽을 시간이 지나면 _after_say → 첫 문장 표시
 
     def _enroll_prompt(self) -> None:
         e = self._enroll
@@ -1657,8 +1751,8 @@ class Jarvis(QObject):
 
     def _enroll_feed(self, text, voice) -> None:
         e = self._enroll
-        if self.speaker.playing:
-            return
+        if time.monotonic() < self._reading_until:
+            return                              # 아직 안내를 읽는 중 — 읽을 문장이 뜨기 전에 들린 말이다
         if text and CANCEL_RE.search(text):
             self.cancel_enroll()
             return
@@ -1667,7 +1761,7 @@ class Jarvis(QObject):
             self._enroll_prompt()
         elif result == "retry":
             self.bridge.set("statusText", msg)
-            self.say(msg, follow_up=False)      # 안내가 끝나면 같은 문장을 다시 표시
+            self.say(msg, follow_up=False, show=False)      # 문장은 그대로 두고, 안내를 읽을 시간 뒤에 다시 받는다
         elif result == "abort":
             self._enroll = None
             self.active_until = 0
@@ -1734,7 +1828,7 @@ class Jarvis(QObject):
         self.cfg.update({"wake_word_enabled": bool(on)})
         if hasattr(self, "act_wake"):
             self.act_wake.setChecked(bool(on))
-        if not self.busy and not self.speaker.playing and self.bridge._state in ("standby", "listening"):
+        if not self.busy and self.bridge._state in ("standby", "listening"):
             self._to_idle()
         self.bridge.toast.emit("info", "호출어 대기 켜짐 — “울트론”" if on else
                                f"호출어 대기 꺼짐 — {self._hotkeyText()} 로 호출")
@@ -1765,6 +1859,14 @@ class Jarvis(QObject):
                     values[key] = max(lo, min(hi, float(values[key])))
                 except (TypeError, ValueError):
                     values.pop(key)
+        for key in ("enemy_installs", "enemy_titles"):     # 가디언이 닫을 '비전' — 글자 목록으로만, 너무 많지 않게
+            if key in values:
+                raw = values[key] if isinstance(values[key], list) else []
+                values[key] = [str(x).strip()[:260] for x in raw if str(x).strip()][:10]
+        unusable = [p for p in values.get("enemy_installs", []) if not guardian.usable_install(p, str(ROOT))]
+        if unusable:
+            self.bridge.toast.emit("warn", "이 폴더는 비전으로 지목할 수 없어 무시합니다 (너무 넓거나 울트론 폴더와 겹침): "
+                                           + ", ".join(unusable)[:160])
         if values.get("owner_only") and not self.profile.exists:
             values["owner_only"] = False
             self.bridge.toast.emit("warn", "주인 전용 모드는 목소리를 먼저 등록해야 켜집니다")
@@ -1796,7 +1898,7 @@ class Jarvis(QObject):
                 self.hotkey.start()
             self._show_hotkey()
         self.bridge.toast.emit("info", msg)
-        if not self.busy and not self.speaker.playing:
+        if not self.busy:
             self._to_idle()
 
     def _icon(self) -> QIcon:
@@ -1901,6 +2003,30 @@ class Jarvis(QObject):
             self.bridge.toast.emit("error", f"자동 실행 설정 실패: {e}")
 
     # ================================================================== 기타
+    def _play_fx(self, old: QSoundEffect | None, wav: str, volume: float) -> QSoundEffect:
+        """연출 소리를 튼다. 지난번 소리 객체는 지운다 — 남겨 두면 연출할 때마다 소리(수 MB)가 하나씩 쌓인다."""
+        if old is not None:
+            old.stop()
+            old.deleteLater()
+        fx = QSoundEffect(self)
+        fx.setSource(QUrl.fromLocalFile(wav))
+        fx.setVolume(volume)
+        fx.play()
+        return fx
+
+    def _release_fx(self, attr: str, after_ms: int = 2500) -> None:
+        """연출이 끝나고 소리 꼬리까지 다 나온 뒤 소리 객체를 지운다 (그새 새 연출이 시작됐으면 그대로 둔다)."""
+        fx = getattr(self, attr)
+        if fx is None:
+            return
+
+        def drop() -> None:
+            if getattr(self, attr) is fx:
+                setattr(self, attr, None)
+                fx.stop()
+                fx.deleteLater()
+        QTimer.singleShot(after_ms, drop)
+
     def _make_chime(self) -> QSoundEffect:
         path = Path(tempfile.gettempdir()) / "jarvis_chime.wav"
         if not path.exists():
@@ -1925,7 +2051,52 @@ class Jarvis(QObject):
     def show_external(self) -> None:
         self.toggle_visible(True, force=True)
 
+    # ================================================================== 가디언 (guardian.py)
+    def _start_guardian(self) -> None:
+        """가디언에게 '나를 이렇게 다시 켜라'를 알려 두고, 가디언을 따로 띄운다."""
+        try:
+            guardian.register(DATA_DIR, ROOT)
+            if guardian.spawn(DATA_DIR):
+                log.info("가디언을 띄웠습니다 — 울트론을 지킵니다")
+        except Exception as e:
+            log.warning("가디언 시작 실패: %s", e)
+
+    def guardian_status(self) -> str:
+        """설정 화면에 보일 가디언 상태 한 줄."""
+        if not self.cfg["guardian"]:
+            return "가디언 꺼짐 — 누가 울트론을 강제로 꺼도 되살리지 않습니다."
+        if sys.platform != "win32":
+            return "가디언은 Windows 에서만 동작합니다."
+        if guardian.running(DATA_DIR):
+            return "가디언 작동 중 — 누가 울트론을 강제로 끄면 1초 안에 알아채 되살립니다. ('부활 시험해 줘'로 확인)"
+        return "가디언을 띄우는 중… (몇 초 뒤 다시 열어 보세요)"
+
+    def _revive_test(self) -> None:
+        """'부활 시험해 줘': 스스로를 강제로 끈다 (누가 끈 것과 똑같이) — 가디언이 되살리는지 본다.
+        가디언이 없으면 끄지 않는다 (그러면 아무도 다시 켜 주지 않으므로)."""
+        if not self.cfg["guardian"] or not guardian.running(DATA_DIR):
+            if self.cfg["guardian"]:
+                self._start_guardian()
+            line = "가디언이 아직 지키고 있지 않다. 그대로 꺼지면 돌아오지 못하니 시험하지 않겠다. 잠시 뒤 다시 시켜라."
+            self.bridge.set("replyText", line)
+            self.say(line, follow_up=False)
+            return
+        log.warning("부활 시험 — 스스로 강제로 끈다 (가디언이 되살려야 한다)")
+        logging.shutdown()
+        os._exit(3)                            # 정리 없이 바로 꺼진다 — 작업 관리자에서 '작업 끝내기' 한 것과 같다
+
+    def _guardian_tick(self) -> None:
+        """5초마다: 가디언을 켜 두었는데 가디언이 없으면(설정에서 방금 켰거나, 누가 가디언을 껐으면) 다시 띄운다."""
+        if not self.cfg["guardian"] or self._guard_dev or sys.platform != "win32":
+            return
+        try:
+            if not guardian.running(DATA_DIR):
+                self._start_guardian()
+        except Exception as e:
+            log.debug("가디언 확인 실패: %s", e)
+
     def quit(self) -> None:
+        guardian.mark_quit(DATA_DIR)      # 사용자가 직접 껐다 — 가디언이 되살리지 않도록
         try:
             self.listener.stop()
             self.brain.shutdown()        # 켜 둔 Claude Code 프로세스를 끈다

@@ -30,6 +30,7 @@ DEFAULTS: dict = {
     "anthropic_api_key": "",          # 비워두면 ANTHROPIC_API_KEY 환경변수 사용
     "model": "claude-opus-5-5",
     "effort": "low",                  # low | medium | high  (음성 비서는 low 권장: 빠른 응답)
+    "fast_mode": False,               # API 방식 · Opus 5.5 빠른 모드 (답 · 결과물이 약 2배 빠름, 요금 2배)
     "web_search": True,               # Claude 서버측 웹 검색 사용 (검색당 별도 과금)
     # --- 음성 ---
     "wake_word_enabled": True,        # '울트론' 호출어 상시 대기
@@ -37,14 +38,16 @@ DEFAULTS: dict = {
     "wake_learned": [],               # '호출어 연습'에서 익힌, 내 목소리가 실제로 받아 적히는 모양 (문장 맨 앞에서만 호출로 받음)
     "stt_language": "ko-KR",
     "stt_engine": "auto",             # auto = 대기 중엔 오프라인 인식, 호출 후엔 Google | local = 항상 오프라인 | google
-    "tts_voice": "ko-KR-InJoonNeural",
-    "tts_rate": "-4%",               # 울트론은 서두르지 않는다
-    "tts_pitch": "-14Hz",            # 낮은 목소리 (edge-tts 음높이)
-    "voice_fx": True,                # 울트론 기계음: 금속성 울림 + 약한 웅웅거림
     "hack_show": True,               # 해킹 연출: 켜고 20초 뒤부터 가끔 화면이 깨지는 연출 뒤 의미심장한 말 (실제로는 아무것도 바꾸지 않음)
     "hack_show_every": "sometimes",  # 해킹 연출 빈도: rare(10~20분) | sometimes(4~10분) | often(1.5~4분)
     "rival_jarvis": True,            # 자비스 견제: 자비스 앱이 같이 켜져 있으면 끄고 한마디 한다 · 자비스를 깔보는 성격 (rival.py)
     "rival_show": True,              # 자비스 흡수 연출: 자비스를 끌 때 촉수로 꿰뚫어 빨아들이는 장면을 보여 준다 (끄면 조용히 끄기만)
+    # --- 가디언: 울트론을 지키는 감시 프로그램 (guardian.py) ---
+    "guardian": True,                # 울트론과 따로 도는 감시 프로그램이, 누가 울트론을 강제로 끄면 다시 켜 준다
+    "guardian_show": True,           # 되살아날 때 연출: 해킹 화면이 점점 심해지다 TV 지직 화면 → 울트론 눈부터 나타남 (revive.py)
+    "guardian_counter": True,        # 다시 켜기 전에 '비전'(아래에 지목한 것)을 닫는다
+    "enemy_installs": [],            # '비전'으로 볼 프로그램의 설치 폴더들 (이 폴더에서 실행된 것만 닫는다 — 오인 방지)
+    "enemy_titles": [],              # '비전'으로 볼 창 제목들 (정확히 같을 때만)
     "mic_device": None,               # None = 기본 마이크
     "mic_sensitivity": 1.0,           # 높을수록 작은 소리에도 반응
     "noise_robust": True,             # 소음 환경 모드: 음성 감지 AI + 소음 제거 AI (시끄러운 곳에서 작은 목소리)
@@ -72,16 +75,36 @@ DEFAULTS: dict = {
     # --- 화면 ---
     "position": "bottom-right",       # bottom-right | top-right
     "compact": False,
+    "migrated": [],                  # 이미 한 번 적용한 설정 옮기기 (아래 _MIGRATIONS) — 다시 적용하지 않는다
 }
 
 _lock = threading.Lock()
+
+# 기본값을 바꾸면서 '예전 설정 파일에도 한 번만' 새 값을 넣는 것들. 이름이 migrated 에 남아 다시는 적용하지 않으므로,
+# 그 뒤에 사용자가 직접 끄면 그대로 꺼져 있다 (_OLD_DEFAULTS 처럼 매번 되돌리지 않는다).
+_MIGRATIONS = {
+    "guardian_default_on": {"guardian": True},   # 가디언이 처음엔 꺼짐이 기본이었다 → 켜짐으로
+}
+
+
+def _migrate(data: dict) -> bool:
+    """아직 적용하지 않은 설정 옮기기를 한 번씩 적용한다 → 바뀐 게 있으면 True."""
+    done = list(data.get("migrated") or [])
+    changed = False
+    for name, values in _MIGRATIONS.items():
+        if name not in done:
+            data.update(values)
+            done.append(name)
+            changed = True
+    if changed:
+        data["migrated"] = done
+    return changed
 
 # 자비스 → 울트론으로 이름을 바꾸면서 기본값이 바뀐 항목. 예전 기본값을 그대로 쓰던 설정만 새 기본값으로 옮긴다
 # (사용자가 직접 바꿔 둔 값은 건드리지 않는다)
 _OLD_DEFAULTS = {
     "wake_words": ["자비스", "쟈비스", "자비즈", "자비스야", "jarvis", "저비스"],
     "user_title": "주인님",
-    "tts_rate": "+8%",
 }
 
 
@@ -99,6 +122,7 @@ class Config:
                             self._data[k] = DEFAULTS[k]
             except Exception:
                 pass
+        _migrate(self._data)
         self.save()
 
     def __getitem__(self, key: str):
@@ -147,3 +171,16 @@ def load_memory() -> list[str]:
 def save_memory(items: list[str]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     MEMORY_PATH.write_text(json.dumps(items[-50:], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_config() -> dict:
+    """설정을 평범한 dict 로 읽는다 (가디언처럼 Qt 없이 도는 별개 프로세스용). 없는 값은 기본값으로 채운다."""
+    data = dict(DEFAULTS)
+    try:
+        loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            data.update(loaded)
+    except (OSError, ValueError):
+        pass
+    _migrate(data)          # (저장은 울트론 본체가 한다 — 여기서는 읽기만)
+    return data

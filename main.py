@@ -21,7 +21,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
-from jarvis.config import DATA_DIR, LOG_PATH
+from jarvis.config import DATA_DIR, LOG_PATH, ROOT, load_config
 
 INSTANCE_KEY = "ultron-hud-" + os.environ.get("USERNAME", "user")
 
@@ -54,6 +54,8 @@ def main() -> int:
     parser.add_argument("--shot", metavar="PNG", help="(개발용) N초 후 HUD 화면을 PNG로 저장하고 종료")
     parser.add_argument("--shot-delay", type=float, default=4.0)
     parser.add_argument("--demo", action="store_true", help="(개발용) 상태 데모")
+    parser.add_argument("--revived", action="store_true", help=argparse.SUPPRESS)   # 가디언이 되살려 준 울트론
+    parser.add_argument("--closed", default="", help=argparse.SUPPRESS)            # 가디언이 닫은 '비전'
     args = parser.parse_args()
 
     setup_logging()
@@ -65,6 +67,16 @@ def main() -> int:
     if not args.shot and already_running():
         print("U.L.T.R.O.N 이 이미 실행 중입니다.")
         return 0
+
+    # 가디언(울트론을 지키는 감시 프로그램)에게 '지금 이 울트론을 지켜라'를 가장 먼저 알린다.
+    # 화면 · 모델을 다 불러온 뒤에 알리면, 그 사이 가디언이 아직 꺼져 있는 줄 알고 울트론을 한 번 더 켤 수 있다.
+    if not (args.shot or args.demo) and sys.platform == "win32":
+        try:
+            if load_config().get("guardian"):
+                from jarvis import guardian
+                guardian.register(DATA_DIR, ROOT)
+        except Exception as e:
+            logging.getLogger("main").warning("가디언 등록 실패: %s", e)
 
     from jarvis.app import Jarvis
     core = Jarvis(app, args)

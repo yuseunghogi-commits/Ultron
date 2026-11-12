@@ -23,10 +23,10 @@ Window {
     readonly property color dead: "#9aa4b0"      // 마이크 꺼짐: 빛이 꺼진 금속
     property color accent: st === "thinking" ? amber : st === "offline" ? dead : st === "listening" ? "#ff7468" : crimson
     Behavior on accent { ColorAnimation { duration: 450 } }
-    readonly property real level: Math.max(jarvis.micLevel, jarvis.voiceLevel)
+    readonly property real level: jarvis.micLevel
     readonly property var stats: JSON.parse(jarvis.statsJson)
     readonly property var stateLabels: ({ boot: "AWAKENING", standby: "WATCHING", listening: "LISTENING",
-                                          thinking: "CALCULATING", speaking: "TRANSMITTING", offline: "MIC OFFLINE" })
+                                          thinking: "CALCULATING", offline: "MIC OFFLINE" })
     property var cpuHist: []
     onStatsChanged: { const h = cpuHist.slice(-59); h.push(stats.cpu || 0); cpuHist = h }
 
@@ -354,8 +354,8 @@ Window {
                     thickness: 5
                     startAngle: 50; span: -100
                     color: win.accent
-                    level: jarvis.voiceLevel
-                    label: "VOX"
+                    level: Math.min(1, (win.stats.cpu || 0) / 100)
+                    label: "CPU"
                 }
 
                 Emblem {

@@ -1,4 +1,4 @@
-// 원호 레벨 미터 — 코어 양옆을 감싸는 분절 호 (MIC / VOX)
+// 원호 레벨 미터 — 코어 양옆을 감싸는 분절 호 (MIC / CPU)
 // 이 Item 의 중심을 코어 중심에 맞춰 배치한다.
 import QtQuick
 import QtQuick.Shapes

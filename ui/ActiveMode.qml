@@ -27,10 +27,10 @@ Window {
     readonly property color shade: Qt.rgba(0.06, 0, 0.01, 0.9)     // 글자 테두리 · 받침 (밝은 화면 위에서도 읽히게)
     property color accent: st === "thinking" ? "#ffb347" : st === "offline" ? "#9aa4b0" : st === "listening" ? "#ff7468" : crimson
     Behavior on accent { ColorAnimation { duration: 450 } }
-    readonly property real level: Math.max(jarvis.micLevel, jarvis.voiceLevel)
+    readonly property real level: jarvis.micLevel
     readonly property var stats: JSON.parse(jarvis.statsJson)
     readonly property var stateLabels: ({ boot: "AWAKENING", standby: "WATCHING", listening: "LISTENING",
-                                          thinking: "CALCULATING", speaking: "TRANSMITTING", offline: "MIC OFFLINE" })
+                                          thinking: "CALCULATING", offline: "MIC OFFLINE" })
     property var cpuHist: []
     readonly property var timers: JSON.parse(jarvis.timersJson)     // 돌고 있는 타이머 (가까운 순)
     readonly property var procs: JSON.parse(jarvis.procsJson)       // 무거운 프로그램 상위 5개

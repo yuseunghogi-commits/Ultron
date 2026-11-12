@@ -18,8 +18,8 @@ import QtQuick.Effects
 Item {
     id: e
     property color accent: "#ff2d3f"
-    property real level: 0             // 0..1 (마이크/음성)
-    property string mode: "standby"    // boot | standby | listening | thinking | speaking | offline
+    property real level: 0             // 0..1 (마이크)
+    property string mode: "standby"    // boot | standby | listening | thinking | offline
     property real size: 214
     property bool voiceBars: false     // 워드마크 아래 음성 파형 (전체 모드)
     width: size; height: size
@@ -30,9 +30,9 @@ Item {
 
     // ---------------- 상태별 목표값 ----------------
     readonly property real speedTarget: mode === "thinking" ? 4.5 : mode === "listening" ? 1.6
-                                      : mode === "speaking" ? 1.4 : mode === "offline" ? 0.25 : 1.0
+                                      : mode === "offline" ? 0.25 : 1.0
     readonly property real energyTarget: mode === "thinking" ? 1.0 : mode === "listening" ? 0.85
-                                       : mode === "speaking" ? 0.7 : mode === "boot" ? 0.5 : mode === "offline" ? 0.3 : 0.2
+                                       : mode === "boot" ? 0.5 : mode === "offline" ? 0.3 : 0.2
     readonly property real tintTarget: (mode === "thinking" || mode === "offline") ? 0.8 : 0.0
     readonly property real eyeTarget: mode === "listening" ? 1.25 : mode === "thinking" ? 0.6
                                     : mode === "offline" ? 0.4 : mode === "boot" ? 0.8 : 1.0
@@ -90,7 +90,7 @@ Item {
         running: e.visible && e.mode !== "offline"
         onTriggered: {
             interval = 3500 + Math.random() * 5500
-            if (e.mode === "standby" || e.mode === "speaking") blinkAnim.restart()
+            if (e.mode === "standby") blinkAnim.restart()
         }
     }
     SequentialAnimation {

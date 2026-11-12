@@ -83,9 +83,27 @@ def wrap(draw, text: str, font, width: float) -> list[str]:
     return [line for line in lines if line.strip()] or [""]
 
 
+def balance(draw, text: str, font, width: float, lines: list[str]) -> list[str]:
+    """줄 수는 그대로 두고 줄 길이를 고르게 — '2026 가을 과학 / 축제' 처럼 마지막 줄에 한 낱말만 남지 않게.
+    같은 줄 수가 유지되는 가장 좁은 폭으로 다시 줄을 바꾼다."""
+    n = len(lines)
+    if n < 2:
+        return lines
+    lo, hi = width * 0.45, width
+    for _ in range(14):
+        mid = (lo + hi) / 2
+        if len(wrap(draw, text, font, mid)) <= n:
+            hi = mid
+        else:
+            lo = mid
+    out = wrap(draw, text, font, hi)
+    return out if len(out) == n else lines
+
+
 def fit(draw, text: str, weight: str, width: float, height: float, big: float, small: float,
-        gap: float = 1.25, max_lines: int | None = None) -> tuple[object, list[str], float]:
-    """상자에 들어가는 가장 큰 글자 → (글꼴, 줄들, 크기). 가장 작게 해도 넘치면 남는 줄을 '…' 로 줄인다."""
+        gap: float = 1.25, max_lines: int | None = None, even: bool = False) -> tuple[object, list[str], float]:
+    """상자에 들어가는 가장 큰 글자 → (글꼴, 줄들, 크기). 가장 작게 해도 넘치면 남는 줄을 '…' 로 줄인다.
+    even=True 면 줄 길이를 고르게 나눈다 (큰 제목용)."""
     size = big
     while True:
         f = _font(weight, size)
@@ -99,6 +117,8 @@ def fit(draw, text: str, weight: str, width: float, height: float, big: float, s
         while lines[-1] and draw.textlength(lines[-1] + "…", font=f) > width:
             lines[-1] = lines[-1][:-1]
         lines[-1] += "…"
+    elif even:
+        lines = balance(draw, text, f, width, lines)
     return f, lines, size
 
 
@@ -163,8 +183,11 @@ def _canvas(w: int, h: int, color):
 
 def _save(img, w: int, h: int, path: Path) -> object:
     from PIL import Image
-    out = img.resize((w, h), Image.LANCZOS)
-    out.save(path)                      # (optimize 는 몇 배 느려 쓰지 않는다)
+    if img.size == (w * SS, h * SS):
+        out = img.reduce(SS)            # 정확히 절반: 상자 평균으로 줄인다 (LANCZOS 와 거의 같은 결과, 몇 배 빠름)
+    else:
+        out = img.resize((w, h), Image.LANCZOS)
+    out.save(path, compress_level=3)    # 압축은 가볍게 (기본 6 보다 훨씬 빠르고 파일은 조금 큼 · optimize 는 쓰지 않음)
     return out
 
 
@@ -179,7 +202,7 @@ def _cover(th: Theme, title: str, tag: str, total: int):
         tw = d.textlength(tag, font=f)
         d.rounded_rectangle((90 * S, 110 * S, 90 * S + tw + 56 * S, 170 * S), radius=30 * S, outline=_rgb(th.on_accent), width=3 * S)
         d.text((118 * S, 122 * S), tag, font=f, fill=_rgb(th.on_accent))
-    f, lines, size = fit(d, title, "bold", 880 * S, 470 * S, 118 * S, 62 * S, gap=1.18, max_lines=4)
+    f, lines, size = fit(d, title, "bold", 880 * S, 470 * S, 118 * S, 62 * S, gap=1.18, max_lines=4, even=True)
     h = len(lines) * size * 1.18
     text_block(d, (90 * S, 300 * S + (470 * S - h) / 2), lines, f, size, _rgb(th.on_accent), gap=1.18)
     d.rectangle((90 * S, 880 * S, 170 * S, 888 * S), fill=_rgb(th.on_accent))
@@ -197,7 +220,7 @@ def _card(th: Theme, n: int, total: int, title: str, items: list[str], highlight
     num = f"{n:02d}"
     d.text((90 * S, 70 * S), num, font=_font("bold", 96 * S), fill=_rgb(th.accent))
     d.rectangle((90 * S, 205 * S, 160 * S, 212 * S), fill=_rgb(th.accent))
-    f, lines, size = fit(d, title, "bold", 900 * S, 190 * S, 70 * S, 44 * S, gap=1.2, max_lines=3)
+    f, lines, size = fit(d, title, "bold", 900 * S, 190 * S, 70 * S, 44 * S, gap=1.2, max_lines=3, even=True)
     used = text_block(d, (90 * S, 240 * S), lines, f, size, _rgb(th.title), gap=1.2)
     top = 240 * S + used + 40 * S
     bottom = (775 if highlight else 930) * S
@@ -220,7 +243,7 @@ def _closing(th: Theme, message: str, lines: list[str], refs: list[str], total: 
     S = SS
     img, d = _canvas(CARD, CARD, _rgb(th.surface))
     d.ellipse((-260 * S, 640 * S, 420 * S, 1320 * S), fill=_rgb(th.soft))
-    f, ml, size = fit(d, message or "감사합니다", "bold", 900 * S, 330 * S, 96 * S, 52 * S, gap=1.2, max_lines=3)
+    f, ml, size = fit(d, message or "감사합니다", "bold", 900 * S, 330 * S, 96 * S, 52 * S, gap=1.2, max_lines=3, even=True)
     h = len(ml) * size * 1.2
     y = 270 * S + (330 * S - h) / 2
     text_block(d, (90 * S, y), ml, f, size, _rgb(th.title), gap=1.2, align="center", width=900 * S)
@@ -263,11 +286,10 @@ def build_cardnews(folder: Path, title: str, cards: list, subtitle: str = "", cl
     end = closing if isinstance(closing, str) else ""
     first, *rest = (end.splitlines() or ["감사합니다"]) if end.strip() else ["감사합니다"]
     imgs.append(_closing(th, _text(first), [_text(x) for x in rest if x.strip()], refs, total))
-    files, saved = [], []
-    for i, img in enumerate(imgs, 1):
-        p = folder / f"{i:02d}.png"
-        saved.append(_save(img, CARD, CARD, p))
-        files.append(p)
+    files = [folder / f"{i:02d}.png" for i in range(1, len(imgs) + 1)]
+    from concurrent.futures import ThreadPoolExecutor      # 줄이기 · PNG 저장은 여러 장을 동시에 (Pillow 가 그동안 GIL 을 놓는다)
+    with ThreadPoolExecutor(max_workers=min(4, len(imgs))) as pool:
+        saved = list(pool.map(lambda pair: _save(pair[0], CARD, CARD, pair[1]), zip(imgs, files)))
     pdf = folder / f"{folder.name}.pdf"
     saved[0].save(pdf, save_all=True, append_images=saved[1:], resolution=150)
     return {"cards": len(files), "pdf": pdf, "files": files}
@@ -294,7 +316,7 @@ def build_poster(path: Path, title: str, sections: list, subtitle: str = "", hig
     d.rectangle((0, 0, W * SS, head * S), fill=_rgb(th.accent))
     d.ellipse((860 * S, -240 * S, 1480 * S, 380 * S), fill=_mix(th.accent, th.on_accent, 0.12))
     d.ellipse((1010 * S, 300 * S, 1360 * S, 650 * S), fill=_mix(th.accent, th.on_accent, 0.07))
-    f, lines, sz = fit(d, title, "bold", 1040 * S, 330 * S, 128 * S, 64 * S, gap=1.15, max_lines=3)
+    f, lines, sz = fit(d, title, "bold", 1040 * S, 330 * S, 128 * S, 64 * S, gap=1.15, max_lines=3, even=True)
     block = len(lines) * sz * 1.15
     if _text(subtitle):
         sf, sl, ss = fit(d, _text(subtitle), "regular", 1040 * S, 120 * S, 42 * S, 28 * S, gap=1.3, max_lines=2)
@@ -310,7 +332,7 @@ def build_poster(path: Path, title: str, sections: list, subtitle: str = "", hig
         d.rounded_rectangle((hb[0] + 8 * S, hb[1] + 10 * S, hb[2] + 8 * S, hb[3] + 10 * S), radius=28 * S,
                             fill=_mix(th.bg, th.title, 0.10))
         d.rounded_rectangle(hb, radius=28 * S, fill=_rgb(th.bg), outline=_rgb(th.accent), width=4 * int(S))
-        hf, hl, hs = fit(d, _text(highlight), "bold", 960 * S, 140 * S, 52 * S, 30 * S, gap=1.25, max_lines=2)
+        hf, hl, hs = fit(d, _text(highlight), "bold", 960 * S, 140 * S, 52 * S, 30 * S, gap=1.25, max_lines=2, even=True)
         hh = len(hl) * hs * 1.25
         text_block(d, (140 * S, hb[1] + (hb[3] - hb[1] - hh) / 2), hl, hf, hs, _rgb(th.accent), gap=1.25,
                    align="center", width=960 * S)
@@ -324,14 +346,16 @@ def build_poster(path: Path, title: str, sections: list, subtitle: str = "", hig
     for i, sec in enumerate(secs):
         r, c = divmod(i, cols)
         x0, y0 = 100 * S + c * (cw + gap), y + r * (ch + gap)
-        d.rounded_rectangle((x0, y0, x0 + cw, y0 + ch), radius=26 * S, fill=_rgb(th.surface))
+        # 구역이 홀수면 마지막 구역이 한 줄을 다 쓴다 (오른쪽 아래가 비지 않게)
+        sw = 1040 * S if cols == 2 and i == len(secs) - 1 and len(secs) % 2 else cw
+        d.rounded_rectangle((x0, y0, x0 + sw, y0 + ch), radius=26 * S, fill=_rgb(th.surface))
         d.rectangle((x0 + 34 * S, y0 + 34 * S, x0 + 94 * S, y0 + 41 * S), fill=_rgb(th.accent))
         top = y0 + 60 * S
         heading = _text(sec.get("heading"))
         if heading:
-            hf, hl, hs = fit(d, heading, "bold", cw - 68 * S, 120 * S, 46 * S, 30 * S, gap=1.2, max_lines=2)
+            hf, hl, hs = fit(d, heading, "bold", sw - 68 * S, 120 * S, 46 * S, 30 * S, gap=1.2, max_lines=2)
             top += text_block(d, (x0 + 34 * S, top), hl, hf, hs, _rgb(th.title), gap=1.2) + 18 * S
-        bullet_block(d, (x0 + 36 * S, top, x0 + cw - 34 * S, y0 + ch - 30 * S),
+        bullet_block(d, (x0 + 36 * S, top, x0 + sw - 34 * S, y0 + ch - 30 * S),
                      _strings(sec.get("bullets") or sec.get("text")), th, 36 * S, 22 * S)
     d.rectangle((100 * S, foot_top + 30 * S, 1140 * S, foot_top + 33 * S), fill=_rgb(th.soft))
     small = _font("regular", 24 * S)

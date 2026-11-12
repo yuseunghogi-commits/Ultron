@@ -64,6 +64,7 @@ class GlitchView(QWidget):
     def stop(self) -> None:
         self._timer.stop()
         self._guard.stop()
+        self._frames, self._i = [], -1           # 전체 화면 크기 장면 8~10장(수십 MB) — 끝나면 바로 놓아 준다
         if self.isVisible():
             self._img = None
             self.hide()

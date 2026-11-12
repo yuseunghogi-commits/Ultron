@@ -98,6 +98,21 @@ _SITE_TAIL = re.compile(r"(홈\s*화면|기본\s*화면|메인\s*화면|첫\s*�
 _MORE = re.compile(r"(?:좀\s*|조금\s*|약간\s*|훨씬\s*|아주\s*)?(?:더|더욱|한\s*번\s*더|한번\s*더)"
                    r"\s*(?:좀\s*|조금\s*|많이\s*)?(\S{1,6})?")
 _KIND = {"volume": re.compile(r"볼륨|소리|음량"), "brightness": re.compile(r"밝기|화면|모니터")}
+_ORDINAL = {"첫": 1, "한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8}
+# 'OO 설정 열어' 의 OO (공백 없이) → Windows 설정 화면
+_SETTINGS = [
+    (r"와이파이|wifi|무선랜|무선인터넷", "wifi"), (r"블루투스|bluetooth", "bluetooth"), (r"네트워크|인터넷|랜", "network"),
+    (r"디스플레이|화면|모니터|해상도", "display"), (r"야간모드|야간조명|야간|블루라이트", "night_light"),
+    (r"소리|사운드|오디오|스피커|음향", "sound"), (r"알림", "notifications"), (r"방해금지|집중지원", "focus"),
+    (r"전원|절전", "power"), (r"배터리", "battery"), (r"저장공간|저장소|용량", "storage"), (r"앱|프로그램", "apps"),
+    (r"기본앱|기본프로그램", "default_apps"), (r"시작프로그램", "startup_apps"), (r"(윈도우|windows)?업데이트", "update"),
+    (r"개인|개인설정", "personalization"), (r"배경|배경화면|바탕화면", "background"), (r"색|색상|테마", "colors"),
+    (r"잠금화면", "lock_screen"), (r"작업표시줄", "taskbar"), (r"마우스|터치패드", "mouse"), (r"키보드|입력", "keyboard"),
+    (r"프린터|인쇄", "printers"), (r"날짜|시간|날짜와시간", "date_time"), (r"언어", "language"),
+    (r"개인정보|프라이버시", "privacy"), (r"마이크", "microphone"), (r"카메라|웹캠", "camera"),
+    (r"계정", "accounts"), (r"로그인", "sign_in"), (r"멀티태스킹", "multitasking"), (r"클립보드", "clipboard"),
+    (r"게임모드|게임", "game_mode"), (r"pc정보|컴퓨터정보|시스템정보|정보", "about"),
+]
 
 
 def _squash(s: str) -> str:
@@ -280,8 +295,22 @@ class LocalRouter:
             out, _err = self._run("sentinel_status", {})
             return out.split("\n")[0]
 
+        # ---- 창 나란히 놓기 ('크롬이랑 메모장 나란히' — '랑 · 하고' 가 들어 있어 복합 문장 검사보다 먼저 본다) ----
+        m = re.fullmatch(r"(.{1,12}?)\s*(?:이랑|랑|하고|와|과)\s*(.{1,12}?)\s*(?:을|를)?\s*(?:창\s*)?(?:을\s*)?"
+                         r"(?:나란히|반반|반반씩|반씩|양쪽에|양옆에|좌우로)(?:\s*(?:놓아|놔|배치|배치해|띄워|보여|정렬|정렬해|붙여|해))?", c)
+        if m:
+            out, err = self._run("arrange_windows", {"apps": [m.group(1).strip(), m.group(2).strip()]})
+            if err:
+                return None if fallback else out
+            return f"{m.group(1).strip()}{'과' if has_batchim(m.group(1).strip()) else '와'} {m.group(2).strip()}{'을' if has_batchim(m.group(2).strip()) else '를'} 나란히 놓았다."
+
         if _COMPOUND.search(c):
             return None
+
+        # ---- 브라우저 탭 · 창 · 편집 단축 · 설정 · 폴더 정리 ----
+        r = self._control(c, lc, fallback)
+        if r is not None:
+            return r
 
         # ---- 시간/날짜 ----
         if len(c) <= 15 and re.search(r"몇\s*시(?!간)|지금\s*시간|시간\s*알려|현재\s*시각", c):
@@ -451,6 +480,162 @@ class LocalRouter:
                     return f"{obj(c)} 열었다."
             if site and key not in BARE_SITE_SKIP:
                 return self._open_site(site)
+        return None
+
+    # ------------------------------------------------------------------ 컴퓨터 조작 (탭 · 창 · 편집 · 설정 · 폴더)
+    def _key(self, keys: str, said: str, fallback: bool) -> str | None:
+        out, err = self._run("press_keys", {"keys": keys})
+        return (None if fallback else out) if err else said
+
+    def _control(self, c: str, lc: str, fallback: bool) -> str | None:
+        """AI 를 거치지 않고 바로 하는 조작. 맞는 말이 없으면 None (→ 다음 규칙으로)."""
+        def browser(args: dict, said: str) -> str | None:
+            out, err = self._run("browser", args)
+            return (None if fallback else out) if err else said
+
+        def window(action: str, said: str) -> str | None:
+            out, err = self._run("window_action", {"action": action})
+            return (None if fallback else out) if err else said
+
+        go = r"(?:\s*(?:가|가자|이동|이동해|넘겨|넘어가|전환|전환해|바꿔|보여|열어))?"
+        # ---- 탭 ----
+        if re.fullmatch(r"새\s*탭(?:\s*(?:하나|한\s*개))?(?:\s*(?:열어|켜|만들어|띄워|추가|추가해))?", c):
+            return browser({"action": "new_tab"}, "새 탭을 열었다.")
+        if re.fullmatch(r"(?:방금\s*)?(?:닫은|닫힌|닫았던|끈|꺼진)\s*탭\s*(?:다시\s*)?(?:열어|살려|복구|복구해|켜|되살려)"
+                        r"|탭\s*(?:다시\s*열어|복구|복구해|되살려)", c):
+            return browser({"action": "reopen_tab"}, "닫은 탭을 되살렸다.")
+        if re.fullmatch(r"(?:(?:이|지금|현재)\s*)?탭\s*(?:좀\s*)?(?:닫아|꺼|없애)", c):
+            return browser({"action": "close_tab"}, "탭을 닫았다.")
+        # '인스타그램 탭 닫아' · '지메일 창 닫아' — 지금 보고 있는 탭이 아니어도 이름으로 찾아 닫는다
+        m = re.fullmatch(r"(.{1,15}?)\s*(탭|창|페이지|사이트)\s*(?:을|를)?\s*(?:좀\s*)?(?:다\s*|전부\s*|모두\s*)?(?:닫아|꺼|없애|종료|종료해)", c)
+        if m and m.group(1).strip() not in ("이", "그", "저", "지금", "현재", "새", "다른", "모든", "전체", "열린", "브라우저", "인터넷"):
+            name = m.group(1).strip()
+            if m.group(2) == "탭":
+                out, err = self._run("browser", {"action": "close_tab", "name": name})
+            else:
+                out, err = self._run("close_app", {"name": name})
+            if err:
+                kind = m.group(2)
+                return (f"열려 있는 {name} {kind}{'이' if has_batchim(kind) else '가'} 없다."
+                        if "열려 있지 않" in out or "열린 창이 없" in out else (None if fallback else out))
+            return f"{obj(name)} 닫았다."
+        m = re.fullmatch(r"(다음|옆|오른쪽|이전|왼쪽)\s*탭(?:으로)?" + go, c)
+        if m:
+            nxt = m.group(1) in ("다음", "옆", "오른쪽")
+            return browser({"action": "next_tab" if nxt else "prev_tab"}, "다음 탭이다." if nxt else "이전 탭이다.")
+        m = re.fullmatch(r"(?:(\d)|(첫|한|두|세|네|다섯|여섯|일곱|여덟))\s*번\s*(?:째)?\s*탭(?:으로)?" + go + r"|(마지막|맨\s*끝)\s*탭(?:으로)?" + go, c)
+        if m:
+            n = -1 if m.group(3) else int(m.group(1)) if m.group(1) else _ORDINAL[m.group(2)]
+            return browser({"action": "switch_tab", "number": n}, "마지막 탭이다." if n == -1 else f"{n}번째 탭이다.")
+        m = re.fullmatch(r"(.{1,15}?)\s*탭(?:으로|에)?\s*(?:가|가자|이동|이동해|넘겨|넘어가|전환|전환해|바꿔|보여)", c)
+        if m and m.group(1).strip() not in ("새", "이", "그", "저", "다른", "아무"):
+            name = m.group(1).strip()
+            out, err = self._run("browser", {"action": "switch_tab", "name": name})
+            return (None if fallback else out) if err else f"{name} 탭으로 갔다."
+        # ---- 뒤로 · 앞으로 · 새로 고침 (브라우저가 아니어도 통하는 단축키라 지금 쓰는 창에 보낸다) ----
+        if re.fullmatch(r"뒤로(?:\s*(?:가|가기|돌아가))?|이전\s*(?:페이지|화면)(?:로|으로)?(?:\s*(?:가|돌아가))?", c):
+            return self._key("alt+left", "뒤로 갔다.", fallback)
+        if re.fullmatch(r"앞으로(?:\s*(?:가|가기))?|다음\s*페이지(?:로)?(?:\s*(?:가|넘겨))?", c):
+            return self._key("alt+right", "앞으로 갔다.", fallback)
+        if re.fullmatch(r"(?:(?:페이지|화면|이거)\s*)?(?:새로\s*고침|새로\s*고쳐|리프레시|리로드|refresh)(?:\s*해)?", lc):
+            return self._key("f5", "새로 고쳤다.", fallback)
+        m = re.fullmatch(r"(?:페이지|글씨|글자|화면)\s*(?:를|을|좀)?\s*(확대|크게|키워|축소|작게|줄여)(?:\s*해)?", c)
+        if m and not (c.startswith("화면") and m.group(1) in ("키워", "줄여")):      # '화면 키워 · 줄여' 는 밝기
+            big = m.group(1) in ("확대", "크게", "키워")
+            return self._key("ctrl+plus" if big else "ctrl+minus", "확대했다." if big else "축소했다.", fallback)
+        # ---- 스크롤 ----
+        m = re.fullmatch(r"(?:페이지\s*)?맨\s*(위|처음|아래|밑|끝)(?:로|으로)?"
+                         r"(?:\s*(?:가|올려|내려|올라가|내려가|이동|이동해|스크롤|스크롤해))?", c)
+        if m:
+            top = m.group(1) in ("위", "처음")
+            out, err = self._run("scroll", {"direction": "top" if top else "bottom"})
+            return (None if fallback else out) if err else ("맨 위다." if top else "맨 아래다.")
+        m = re.fullmatch(r"(?:스크롤\s*)?(?:좀\s*)?(?:더\s*)?(아래|밑|위)(?:로|으로)\s*(?:좀\s*)?(?:더\s*)?"
+                         r"(?:스크롤|스크롤해|내려|올려|내려가|올라가)|스크롤\s*(?:좀\s*)?(?:더\s*)?(내려|올려|다운|업)", c)
+        if m:
+            up = (m.group(1) or "") == "위" or (m.group(2) or "") in ("올려", "업")
+            out, err = self._run("scroll", {"direction": "up" if up else "down", "amount": 5})
+            return (None if fallback else out) if err else ("올렸다." if up else "내렸다.")
+        # ---- 창 ----
+        this = r"(?:(?:이|지금|현재)\s*)?"
+        if re.fullmatch(this + r"창\s*(?:을\s*)?(?:좀\s*)?(?:최대화|최대로|크게|키워|꽉\s*차게)(?:\s*해)?|최대화(?:\s*해)?", c):
+            return window("maximize", "창을 최대로 키웠다.")
+        if re.fullmatch(this + r"창\s*(?:을\s*)?(?:좀\s*)?(?:최소화|내려|숨겨)(?:\s*해)?|최소화(?:\s*해)?", c):
+            return window("minimize", "창을 내렸다.")
+        if re.fullmatch(this + r"창\s*(?:을\s*)?(?:원래대로|원래\s*크기(?:로)?|복원)(?:\s*(?:해|돌려))?", c):
+            return window("restore", "창을 원래 크기로 돌렸다.")
+        m = re.fullmatch(this + r"창\s*(?:을\s*)?(왼쪽|좌측|오른쪽|우측)(?:으로|에|로)?"
+                         r"(?:\s*(?:붙여|놓아|놔|보내|옮겨|이동|이동해|정렬|정렬해))?", c)
+        if m:
+            left = m.group(1) in ("왼쪽", "좌측")
+            return window("snap_left" if left else "snap_right", f"창을 {'왼쪽' if left else '오른쪽'}에 붙였다.")
+        if re.fullmatch(r"전체\s*화면(?:으로|\s*모드)?(?:\s*(?:해|켜|꺼|전환|전환해|바꿔|나가|종료|해제|해제해))?", c):
+            return window("fullscreen", "전체 화면을 바꿨다.")
+        if re.fullmatch(r"(?:다른|다음|이전)\s*창(?:으로)?(?:\s*(?:가|전환|전환해|바꿔|넘겨|넘어가))?|창\s*(?:전환|바꿔)(?:\s*해)?|알트\s*탭", c):
+            return window("switch_next", "창을 바꿨다.")
+        if re.fullmatch(r"(?:이|지금|현재)\s*창\s*(?:좀\s*)?(?:닫아|꺼)|창\s*닫아", c):
+            return window("close_active", "창을 닫았다.")
+        if re.fullmatch(this + r"(?:창\s*(?:을\s*)?)?(?:다른|옆|다음|반대쪽|두\s*번째|보조)\s*(?:모니터|화면)(?:으로|로|에)\s*"
+                        r"(?:보내|옮겨|이동|이동해|넘겨)", c):
+            return window("move_to_next_monitor", "창을 다른 모니터로 보냈다.")
+        if re.fullmatch(r"창\s*(?:두\s*개\s*)?(?:을\s*)?(?:나란히|반반|반반씩)(?:\s*(?:놓아|놔|배치|배치해|띄워|정렬|정렬해|해))?", c):
+            out, err = self._run("arrange_windows", {})
+            return (None if fallback else out) if err else "최근에 쓴 두 창을 나란히 놓았다."
+        # ---- 편집 단축 ----
+        for pat, keys, said in (
+                (r"복사(?:해)?", "ctrl+c", "복사했다."),
+                (r"붙여\s*넣(?:어|기|어라)?(?:\s*해)?|페이스트", "ctrl+v", "붙여 넣었다."),
+                (r"잘라\s*내(?:기|어)?(?:\s*해)?", "ctrl+x", "잘라 냈다."),
+                (r"(?:전체|모두|전부)\s*선택(?:해)?", "ctrl+a", "전부 골랐다."),
+                (r"실행\s*취소(?:해)?|언두|undo", "ctrl+z", "방금 것을 취소했다."),
+                (r"다시\s*실행(?:해)?|리두|redo", "ctrl+y", "다시 실행했다."),
+                (r"(?:이거\s*)?저장(?:해)?", "ctrl+s", "저장했다."),
+                (r"인쇄(?:해)?|프린트(?:해)?", "ctrl+p", "인쇄 창을 열었다.")):
+            if re.fullmatch(pat, lc):
+                return self._key(keys, said, fallback)
+        # ---- 설정 ----
+        if re.fullmatch(r"다크\s*모드\s*(?:꺼|끄기|해제|해제해)|(?:라이트|화이트|밝은)\s*(?:모드|테마)(?:로)?(?:\s*(?:켜|해|바꿔|전환|전환해))?", c):
+            out, err = self._run("settings", {"action": "light_mode"})
+            return (None if fallback else out) if err else "라이트 모드로 바꿨다."
+        if re.fullmatch(r"(?:다크|어두운|검은)\s*(?:모드|테마)(?:로)?(?:\s*(?:켜|해|바꿔|전환|전환해|설정|설정해))?", c):
+            out, err = self._run("settings", {"action": "dark_mode"})
+            return (None if fallback else out) if err else "다크 모드로 바꿨다. 어둠이 더 어울리지."
+        m = re.fullmatch(r"(와이파이|wifi|wi-fi|블루투스|bluetooth)\s*(?:를|을)?\s*(?:좀\s*)?(켜|켜기|연결|연결해|꺼|끄기|끊어|해제|해제해)", lc)
+        if m:
+            kind = "wifi" if m.group(1) in ("와이파이", "wifi", "wi-fi") else "bluetooth"
+            on = m.group(2) in ("켜", "켜기", "연결", "연결해")
+            out, err = self._run("settings", {"action": f"{kind}_{'on' if on else 'off'}"})
+            if err:
+                return None if fallback else out
+            ko = "와이파이" if kind == "wifi" else "블루투스"
+            if "설정 화면을 열었" in out:
+                return f"{ko}는 직접 바꾸지 못했다. 설정 화면을 열어 두었으니 스위치를 눌러라."
+            return f"{ko}를 {'켰' if on else '껐'}다."
+        m = re.fullmatch(r"(.{1,10}?)\s*설정\s*(?:창|화면|페이지)?\s*(?:좀\s*)?(?:열어|보여|켜|띄워|들어가|가)", c)
+        if m:
+            page = next((p for pat, p in _SETTINGS if re.fullmatch(pat, _squash(m.group(1)))), None)
+            if page:
+                out, err = self._run("settings", {"action": "open", "page": page})
+                return (None if fallback else out) if err else f"{m.group(1).strip()} 설정을 열었다."
+        # ---- 폴더 정리 ----
+        m = re.fullmatch(r"(다운로드|내\s*문서|문서|바탕\s*화면|사진|음악|동영상|비디오)\s*(?:폴더)?\s*(?:를|을)?\s*(?:좀\s*)?"
+                         r"(?:(종류|유형|형식|날짜|달|월)\s*별로\s*)?(?:정리|정돈)(?:해)?", c)
+        if m:
+            name = m.group(1).replace(" ", "")
+            by = "month" if m.group(2) in ("날짜", "달", "월") else "type"
+            out, err = self._run("file_action", {"action": "organize", "folder": name, "by": by})
+            if err:
+                return "정리하지 않았다." if "거부" in out else (None if fallback else out)
+            n = re.search(r"파일 (\d+)개", out)
+            if not n:
+                return f"{name} 폴더에는 정리할 파일이 없다."
+            return f"{name} 폴더의 파일 {n.group(1)}개를 {'달' if by == 'month' else '종류'}별로 정리했다. 마음에 안 들면 되돌리라고 해라."
+        if re.fullmatch(r"(?:방금\s*)?(?:폴더\s*)?(?:정리|파일\s*(?:이동|옮긴\s*(?:거|것))|옮긴\s*(?:거|것))\s*(?:한\s*(?:거|것)\s*)?"
+                        r"(?:되돌려|취소|취소해|원래대로|원상\s*복구|복구해)(?:\s*(?:놔|놓아|해|돌려))?", c):
+            out, err = self._run("file_action", {"action": "undo"})
+            if err:
+                return "되돌릴 것이 없다." if "되돌릴 작업이 없" in out else (None if fallback else out)
+            return "원래 자리로 되돌렸다."
         return None
 
     # ------------------------------------------------------------------ 직전 동작 이어서

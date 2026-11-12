@@ -3,7 +3,6 @@ PySide6-Addons>=6.8
 anthropic>=2.0
 SpeechRecognition>=3.11
 sounddevice>=0.5
-edge-tts>=7.0
 pycaw>=20240316
 Pillow>=10
 psutil>=5.9

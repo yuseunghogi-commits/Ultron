@@ -410,6 +410,7 @@ def fake_app(monkeypatch, **cfg):
         _absorb_how, _absorb_claim, _absorb_hook = J._absorb_how, J._absorb_claim, J._absorb_hook
         _absorb_impact, _absorb_kill, _absorb_killed = J._absorb_impact, J._absorb_kill, J._absorb_killed
         _absorb_ended, _absorb_finish, _absorb_fallback = J._absorb_ended, J._absorb_finish, J._absorb_fallback
+        _release_fx = J._release_fx
 
         def __init__(self):
             self.cfg = Cfg(cfg)
@@ -420,6 +421,7 @@ def fake_app(monkeypatch, **cfg):
             self.sig_absorb_go, self.sig_absorb_hit, self.sig_rival = Emit(), Emit(), Emit()
             self._absorb_lock, self._absorb, self._absorb_last, self._absorb_wait = threading.Lock(), None, -1e9, 0
             self._glitching, self._pending_line, self._absorb_view = False, None, FakeView(self)
+            self._absorb_fx = None
             self.said, self.shown, self.reclaimed = [], [], 0
 
         def _quiet(self, listening_ok=False):

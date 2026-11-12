@@ -52,11 +52,6 @@ Item {
         { v: "local", t: "오프라인 전용 — 소리가 PC 밖으로 안 나감" },
         { v: "google", t: "Google 전용 — 가장 정확, 인터넷 필요" }
     ]
-    readonly property var voices: [
-        { v: "ko-KR-InJoonNeural", t: "인준 — 남성 (기본)" },
-        { v: "ko-KR-HyunsuMultilingualNeural", t: "현수 — 남성" },
-        { v: "ko-KR-SunHiNeural", t: "선희 — 여성" }
-    ]
 
     function show() {
         cfg = JSON.parse(jarvis.settingsJson())
@@ -73,12 +68,16 @@ Item {
         screenModelBox.currentIndex = Math.max(0, screenModels.findIndex(m => m.v === (cfg.pro_screen_model || "")))
         screenSmallSw.checked = cfg.screen_detail === "standard"
         effortBox.currentIndex = Math.max(0, efforts.findIndex(m => m.v === cfg.effort))
-        voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
-        fxSw.checked = cfg.voice_fx !== false
+        fastSw.checked = cfg.fast_mode === true
         rivalSw.checked = cfg.rival_jarvis !== false
         rivalShowSw.checked = cfg.rival_show !== false
         hackSw.checked = cfg.hack_show !== false
         hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
+        guardSw.checked = cfg.guardian !== false
+        reviveSw.checked = cfg.guardian_show !== false
+        counterSw.checked = cfg.guardian_counter !== false
+        enemyField.text = (cfg.enemy_installs || []).join("; ")
+        enemyTitleField.text = (cfg.enemy_titles || []).join("; ")
         sentinelServerField.text = cfg.sentinel_server || ""
         sentinelKeyField.text = ""
         sentinelReqField.text = cfg.sentinel_requester || ""
@@ -96,6 +95,11 @@ Item {
         delBtn.armed = false
         open = true
     }
+    // '; ' 나 줄바꿈으로 나눈 목록 → 배열 (빈 칸은 뺀다)
+    function splitList(text) {
+        return text.split(/[;\n]/).map(s => s.trim()).filter(s => s.length > 0)
+    }
+
     function save() {
         const out = {
             user_title: titleField.text.trim() || "창조자",
@@ -110,12 +114,16 @@ Item {
             screen_detail: screenSmallSw.checked ? "standard" : "auto",
             model: models[modelBox.currentIndex].v,
             effort: efforts[effortBox.currentIndex].v,
-            tts_voice: voices[voiceBox.currentIndex].v,
-            voice_fx: fxSw.checked,
+            fast_mode: fastSw.checked,
             rival_jarvis: rivalSw.checked,
             rival_show: rivalShowSw.checked,
             hack_show: hackSw.checked,
             hack_show_every: hackFreqs[hackBox.currentIndex].v,
+            guardian: guardSw.checked,
+            guardian_show: reviveSw.checked,
+            guardian_counter: counterSw.checked,
+            enemy_installs: splitList(enemyField.text),
+            enemy_titles: splitList(enemyTitleField.text),
             sentinel_server: sentinelServerField.text.trim() || "http://127.0.0.1:8000",
             sentinel_api_key: sentinelKeyField.text.trim(),
             sentinel_requester: sentinelReqField.text.trim(),
@@ -289,15 +297,55 @@ Item {
                     visible: !sp.isLocal
                     text: "화면 캡처를 작게 보내기 (토큰 절약 · 작은 글씨는 덜 선명)"
                 }
+                Toggle {
+                    id: fastSw
+                    visible: !sp.isPro && !sp.isLocal
+                    text: "빠른 모드 — Opus 5.5 답 · 결과물이 약 2배 빨라짐 (요금 2배, 막히면 보통 속도로)"
+                }
                 Label2 { text: "RESPONSE DEPTH" }
                 Combo { id: effortBox; model: sp.efforts }
-                Label2 { text: "VOICE" }
-                Combo { id: voiceBox; model: sp.voices }
-                Toggle { id: fxSw; text: "울트론 기계음 (낮고 금속성인 목소리)" }
+                Label2 { text: "SHOW" }
                 Toggle { id: rivalSw; text: "자비스 견제 (자비스가 같이 켜져 있으면 끄고 한마디 한다)" }
                 Toggle { id: rivalShowSw; text: "자비스 흡수 연출 (끌 때 촉수로 꿰뚫어 빨아들이는 장면)" }
                 Toggle { id: hackSw; text: "해킹 연출 (가끔 화면이 깨지고 의미심장한 한마디)" }
                 Combo { id: hackBox; visible: hackSw.checked; model: sp.hackFreqs }
+                Label2 { text: "GUARDIAN" }
+                Toggle { id: guardSw; text: "가디언 — 누가 울트론을 강제로 끄면 바로 되살린다" }
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Qt.rgba(0.9, 0.87, 0.89, 0.6)
+                    font.pixelSize: 10
+                    text: (sp.cfg.guardian_status || "") + "  · 트레이 · HUD 의 '종료'로 끄면 되살리지 않습니다"
+                }
+                Toggle {
+                    id: reviveSw
+                    visible: guardSw.checked
+                    text: "되살아날 때 연출 — 화면이 해킹당하듯 깨지다 TV 지직 화면 뒤 울트론 눈부터 나타난다"
+                }
+                Toggle {
+                    id: counterSw
+                    visible: guardSw.checked
+                    text: "되받아치기 — 되살리기 전에 아래에 지목한 '비전'을 닫는다"
+                }
+                Field {
+                    id: enemyField
+                    visible: guardSw.checked && counterSw.checked
+                    placeholderText: "비전 설치 폴더 (예: C:\\Users\\나\\vision) — 여러 개는 ; 로"
+                }
+                Field {
+                    id: enemyTitleField
+                    visible: guardSw.checked && counterSw.checked
+                    placeholderText: "비전 창 제목 (정확히 같을 때만, 예: V.I.S.I.O.N) — 여러 개는 ; 로"
+                }
+                Text {
+                    visible: guardSw.checked && counterSw.checked
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Qt.rgba(0.9, 0.87, 0.89, 0.55)
+                    font.pixelSize: 10
+                    text: "지목한 것만 닫는다. 울트론 자신 · 드라이브 전체 · Windows · Program Files · 사용자 폴더 자체는 지목해도 무시한다."
+                }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8

@@ -1,6 +1,7 @@
 """Windows 저수준 유틸: 키 입력, 창 제어, 클립보드, 포커스, 알려진 폴더."""
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.wintypes as wt
 import os
@@ -31,10 +32,12 @@ VK = {
     "volumeup": 0xAF, "volumedown": 0xAE, "volumemute": 0xAD,
     "playpause": 0xB3, "nexttrack": 0xB0, "prevtrack": 0xB1, "stop": 0xB2,
     "hangul": 0x15, "hanja": 0x19,
+    "plus": 0xBB, "minus": 0xBD, "comma": 0xBC, "period": 0xBE, "menu": 0x5D, "apps": 0x5D, "pause": 0x13,
+    "browserback": 0xA6, "browserforward": 0xA7, "browserrefresh": 0xA8,
     **{f"f{i}": 0x6F + i for i in range(1, 25)},
 }
-EXTENDED = {0x2E, 0x2D, 0x24, 0x23, 0x21, 0x22, 0x26, 0x28, 0x25, 0x27, 0x5B,
-            0xAF, 0xAE, 0xAD, 0xB3, 0xB0, 0xB1, 0xB2}
+EXTENDED = {0x2E, 0x2D, 0x24, 0x23, 0x21, 0x22, 0x26, 0x28, 0x25, 0x27, 0x5B, 0x5D,
+            0xAF, 0xAE, 0xAD, 0xB3, 0xB0, 0xB1, 0xB2, 0xA6, 0xA7, 0xA8}
 
 
 def _vk(name: str) -> int:
@@ -60,13 +63,85 @@ def tap(vk: int, times: int = 1) -> None:
 
 def press_combo(combo: str) -> None:
     """'ctrl+shift+esc', 'alt+tab', 'win+d', 'enter' 형식의 단축키 입력."""
-    keys = [_vk(k) for k in combo.replace(" ", "").split("+") if k]
+    combo = combo.replace(" ", "")
+    if combo.endswith("++") or combo == "+":       # 'ctrl++' 의 마지막 + 는 키 이름이다 (나누는 기호가 아니라)
+        combo = combo[:-1] + "plus"
+    keys = [_vk(k) for k in combo.split("+") if k]
+    if not keys:
+        raise ValueError("누를 키가 없습니다")
     for vk in keys:
         _key(vk, False)
         time.sleep(0.02)
     for vk in reversed(keys):
         _key(vk, True)
         time.sleep(0.02)
+
+
+@contextlib.contextmanager
+def held(keys: str):
+    """'ctrl' · 'shift' · 'ctrl+shift' 를 누른 채로 안의 동작을 한다 (여러 개 고르기 · 범위 고르기 클릭)."""
+    vks = [_vk(k) for k in (keys or "").replace(" ", "").split("+") if k]
+    for vk in vks:
+        _key(vk, False)
+    try:
+        if vks:
+            time.sleep(0.03)
+        yield
+    finally:
+        for vk in reversed(vks):
+            _key(vk, True)
+
+
+# ---- 글자를 키 입력으로 직접 보내기 (붙여넣기가 막힌 프로그램용) ----
+ULONG_PTR = ctypes.c_size_t
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD), ("time", wt.DWORD),
+                ("dwExtraInfo", ULONG_PTR)]
+
+
+class _MOUSEINPUT(ctypes.Structure):       # (쓰지 않지만 INPUT 의 크기를 맞추려면 있어야 한다)
+    _fields_ = [("dx", wt.LONG), ("dy", wt.LONG), ("mouseData", wt.DWORD), ("dwFlags", wt.DWORD),
+                ("time", wt.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wt.DWORD), ("u", _INPUTUNION)]
+
+
+KEYEVENTF_UNICODE = 0x0004
+
+
+def utf16_units(text: str) -> list[int]:
+    """글자를 UTF-16 단위로 (이모지처럼 두 단위짜리 글자도 그대로 보낼 수 있게)."""
+    raw = text.encode("utf-16-le")
+    return [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)]
+
+
+def type_unicode(text: str, delay: float = 0.004) -> int:
+    """글자를 하나씩 키 입력으로 보낸다 (한글 포함 · 입력기 상태와 무관). 줄바꿈은 Enter, 탭은 Tab 키로. → 보낸 글자 수"""
+    n = 0
+    for ch in text.replace("\r\n", "\n"):
+        if ch == "\n":
+            tap(0x0D)
+        elif ch == "\t":
+            tap(0x09)
+        else:
+            for unit in utf16_units(ch):
+                for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
+                    inp = _INPUT(type=1)
+                    inp.ki = _KEYBDINPUT(0, unit, flags, 0, 0)
+                    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
+        n += 1
+        if delay:
+            time.sleep(delay)
+    return n
 
 
 # ---------------- 포커스 추적 ----------------
@@ -116,6 +191,22 @@ def window_title(hwnd: int) -> str:
     buf = ctypes.create_unicode_buffer(n + 1)
     user32.GetWindowTextW(hwnd, buf, n + 1)
     return buf.value
+
+
+def foreground() -> int:
+    """지금 맨 앞에 있는 창."""
+    try:
+        return int(user32.GetForegroundWindow() or 0)
+    except Exception:
+        return 0
+
+
+def broadcast_setting(name: str) -> None:
+    """열려 있는 프로그램들에게 설정이 바뀌었다고 알린다 (WM_SETTINGCHANGE — 예: 'ImmersiveColorSet' = 색 · 다크 모드)."""
+    try:
+        user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, ctypes.c_wchar_p(name), 0x0002, 300, None)
+    except Exception:
+        pass
 
 
 def force_foreground(hwnd: int) -> bool:
@@ -181,6 +272,14 @@ def get_clipboard_text() -> str:
         except Exception:
             time.sleep(0.05)
     return ""
+
+
+def clipboard_seq() -> int:
+    """클립보드 내용이 바뀔 때마다 올라가는 번호 (복사가 실제로 일어났는지 볼 때 쓴다)."""
+    try:
+        return int(user32.GetClipboardSequenceNumber())
+    except Exception:
+        return 0
 
 
 def set_clipboard_text(text: str) -> None:
@@ -280,6 +379,79 @@ def monitor_rect(hwnd: int = 0) -> tuple[int, int, int, int] | None:
         return (m.left, m.top, m.right, m.bottom)
     except Exception:
         return None
+
+
+def work_rect(hwnd: int = 0) -> tuple[int, int, int, int] | None:
+    """hwnd 창이 있는 모니터에서 작업 표시줄을 뺀 영역 (창을 놓을 수 있는 곳). 모르면 None."""
+    try:
+        fn = user32.MonitorFromWindow
+        fn.restype = ctypes.c_void_p
+        fn.argtypes = [wt.HWND, wt.DWORD]
+        mon = fn(wt.HWND(hwnd or 0), 2 if hwnd else 1)
+        if not mon:
+            return None
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(info)
+        get = user32.GetMonitorInfoW
+        get.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)]
+        get.restype = wt.BOOL
+        if not get(mon, ctypes.byref(info)):
+            return None
+        w = info.rcWork
+        if w.right - w.left < 100 or w.bottom - w.top < 100:
+            return None
+        return (w.left, w.top, w.right, w.bottom)
+    except Exception:
+        return None
+
+
+def tile(area: tuple[int, int, int, int], n: int, layout: str = "columns") -> list[tuple[int, int, int, int]]:
+    """area 를 창 n개가 나눠 쓸 자리들로 (왼, 위, 오, 아래). columns = 옆으로 나란히, rows = 위아래, grid = 바둑판."""
+    left, top, right, bottom = area
+    w, h = right - left, bottom - top
+    n = max(1, int(n))
+    if layout == "rows":
+        return [(left, top + h * i // n, right, top + h * (i + 1) // n) for i in range(n)]
+    if layout == "grid" and n >= 3:
+        cols = 2 if n <= 4 else 3
+        rows = -(-n // cols)
+        out = []
+        for i in range(n):
+            r, c = divmod(i, cols)
+            last_row = r == rows - 1
+            in_row = n - r * cols if last_row else cols        # 마지막 줄에 남는 칸은 그 줄 창들이 나눠 쓴다
+            out.append((left + w * c // in_row, top + h * r // rows, left + w * (c + 1) // in_row, top + h * (r + 1) // rows))
+        return out
+    return [(left + w * i // n, top, left + w * (i + 1) // n, bottom) for i in range(n)]
+
+
+def place_window(hwnd: int, rect: tuple[int, int, int, int]) -> bool:
+    """창을 rect(눈에 보이는 테두리 기준) 자리에 놓는다. 최대화 · 최소화돼 있으면 먼저 푼다."""
+    try:
+        user32.ShowWindow(wt.HWND(hwnd), 9)                     # SW_RESTORE
+        left, top, right, bottom = rect
+        # 보이지 않는 그림자 테두리(약 7px)만큼 넓혀야 창끼리 틈 없이 붙는다
+        outer, seen = wt.RECT(), window_rect(hwnd)
+        if seen and user32.GetWindowRect(wt.HWND(hwnd), ctypes.byref(outer)):
+            dl, dt_, dr, db = seen[0] - outer.left, seen[1] - outer.top, outer.right - seen[2], outer.bottom - seen[3]
+            if all(0 <= d <= 20 for d in (dl, dt_, dr, db)):
+                left, top, right, bottom = left - dl, top - dt_, right + dr, bottom + db
+        return bool(user32.SetWindowPos(wt.HWND(hwnd), 0, int(left), int(top), int(right - left), int(bottom - top),
+                                        0x0004 | 0x0040))     # SWP_NOZORDER | SWP_SHOWWINDOW
+    except Exception:
+        return False
+
+
+def set_window_state(hwnd: int, state: str) -> bool:
+    """maximize · minimize · restore — 단축키(win+↑)와 달리 창이 어디에 붙어 있든 뜻대로 된다."""
+    code = {"maximize": 3, "minimize": 6, "restore": 9}.get(state)
+    try:
+        if not code or not hwnd or not user32.IsWindow(wt.HWND(hwnd)):
+            return False
+        user32.ShowWindow(wt.HWND(hwnd), code)
+        return True
+    except Exception:
+        return False
 
 
 def blocks_clicks(hwnd: int, x: int, y: int) -> bool:
