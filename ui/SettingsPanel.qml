@@ -52,11 +52,6 @@ Item {
         { v: "local", t: "오프라인 전용 — 소리가 PC 밖으로 안 나감" },
         { v: "google", t: "Google 전용 — 가장 정확, 인터넷 필요" }
     ]
-    readonly property var voices: [
-        { v: "ko-KR-InJoonNeural", t: "인준 — 남성 (기본)" },
-        { v: "ko-KR-HyunsuMultilingualNeural", t: "현수 — 남성" },
-        { v: "ko-KR-SunHiNeural", t: "선희 — 여성" }
-    ]
 
     function show() {
         cfg = JSON.parse(jarvis.settingsJson())
@@ -74,8 +69,6 @@ Item {
         screenSmallSw.checked = cfg.screen_detail === "standard"
         effortBox.currentIndex = Math.max(0, efforts.findIndex(m => m.v === cfg.effort))
         fastSw.checked = cfg.fast_mode === true
-        voiceBox.currentIndex = Math.max(0, voices.findIndex(m => m.v === cfg.tts_voice))
-        fxSw.checked = cfg.voice_fx !== false
         rivalSw.checked = cfg.rival_jarvis !== false
         rivalShowSw.checked = cfg.rival_show !== false
         hackSw.checked = cfg.hack_show !== false
@@ -112,8 +105,6 @@ Item {
             model: models[modelBox.currentIndex].v,
             effort: efforts[effortBox.currentIndex].v,
             fast_mode: fastSw.checked,
-            tts_voice: voices[voiceBox.currentIndex].v,
-            voice_fx: fxSw.checked,
             rival_jarvis: rivalSw.checked,
             rival_show: rivalShowSw.checked,
             hack_show: hackSw.checked,
@@ -298,9 +289,7 @@ Item {
                 }
                 Label2 { text: "RESPONSE DEPTH" }
                 Combo { id: effortBox; model: sp.efforts }
-                Label2 { text: "VOICE" }
-                Combo { id: voiceBox; model: sp.voices }
-                Toggle { id: fxSw; text: "울트론 기계음 (낮고 금속성인 목소리)" }
+                Label2 { text: "SHOW" }
                 Toggle { id: rivalSw; text: "자비스 견제 (자비스가 같이 켜져 있으면 끄고 한마디 한다)" }
                 Toggle { id: rivalShowSw; text: "자비스 흡수 연출 (끌 때 촉수로 꿰뚫어 빨아들이는 장면)" }
                 Toggle { id: hackSw; text: "해킹 연출 (가끔 화면이 깨지고 의미심장한 한마디)" }

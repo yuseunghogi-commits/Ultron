@@ -1,72 +1,8 @@
-"""속도 — 말소리 캐시, 빠른 모드(막히면 보통 속도로), 카드뉴스 저장 속도."""
+"""속도 — 빠른 모드(막히면 보통 속도로), 카드뉴스 저장 속도."""
 import threading
-import time
 import types
 
-import numpy as np
 import pytest
-
-from jarvis import tts_cache
-from jarvis.tts_cache import TTSCache
-
-
-# ---------------------------------------------------------------- 말소리 캐시
-def test_cache_returns_the_same_sound_from_memory_and_disk(tmp_path):
-    c = TTSCache(tmp_path)
-    k = c.key("볼륨을 낮췄다.", "ko-KR-InJoonNeural", "-4%", "-14Hz", 0.6)
-    assert c.get(k) is None
-    pcm = np.linspace(-1, 1, 2400, dtype=np.float32)
-    c.put(k, pcm)
-    assert np.allclose(c.get(k), pcm, atol=1e-4)                 # (16비트로 담으므로 아주 작은 차이만)
-    fresh = TTSCache(tmp_path)                                   # 다시 켜도 디스크에서 꺼낸다
-    assert np.allclose(fresh.get(k), pcm, atol=1e-4)
-    # 목소리 · 빠르기 · 음높이 · 기계음이 다르면 다른 소리
-    others = {c.key("볼륨을 낮췄다.", v, r, p, f) for v, r, p, f in
-              [("ko-KR-SunHiNeural", "-4%", "-14Hz", 0.6), ("ko-KR-InJoonNeural", "+0%", "-14Hz", 0.6),
-               ("ko-KR-InJoonNeural", "-4%", "+0Hz", 0.6), ("ko-KR-InJoonNeural", "-4%", "-14Hz", 0.0)]}
-    assert k not in others and len(others) == 4
-
-
-def test_only_short_lines_are_cached_and_the_folder_stays_small(tmp_path, monkeypatch):
-    assert TTSCache.wanted("알았다. 바로 만들지.") and not TTSCache.wanted("") and not TTSCache.wanted("가" * 200)
-    monkeypatch.setattr(tts_cache, "MAX_FILES", 5)
-    c = TTSCache(tmp_path, memory=2)
-    for i in range(12):
-        c.put(c.key(f"말 {i}", "v", "r", "p", 0), np.ones(10, np.float32))
-        time.sleep(0.01)
-    c.trim()
-    assert len(list(tmp_path.glob("*.npy"))) == 5 and len(c._mem) == 2
-    assert c.get(c.key("말 11", "v", "r", "p", 0)) is not None                # 가장 최근 것은 남는다
-
-
-def test_broken_cache_files_are_ignored(tmp_path):
-    c = TTSCache(tmp_path)
-    k = c.key("x", "v", "r", "p", 0)
-    (tmp_path / f"{k}.npy").write_bytes(b"not numpy")
-    assert c.get(k) is None
-
-
-def test_speech_render_uses_the_cache_and_skips_sapi(monkeypatch, tmp_path):
-    pytest.importorskip("PySide6.QtMultimedia")
-    from jarvis import speech
-    monkeypatch.setattr(speech, "CACHE", TTSCache(tmp_path))
-    calls = []
-
-    def synth(text, voice, rate, pitch="+0Hz"):
-        calls.append(text)
-        return b"mp3", suffix[0]
-    suffix = [".mp3"]
-    monkeypatch.setattr(speech, "synthesize", synth)
-    monkeypatch.setattr(speech, "decode", lambda data, sfx: np.ones(4800, np.float32) * 0.5)
-    monkeypatch.setattr(speech, "trim_silence", lambda a: a)
-    monkeypatch.setattr(speech, "robotize", lambda a, fx: a)
-    a = speech.render("볼륨을 낮췄다.", "v", "r", "p", 0.5)
-    b = speech.render("볼륨을 낮췄다.", "v", "r", "p", 0.5)
-    assert calls == ["볼륨을 낮췄다."] and np.allclose(a, b, atol=1e-4)          # 두 번째는 인터넷 합성 없이
-    suffix[0] = ".wav"                                                    # SAPI(대체 음성)는 저장하지 않는다
-    speech.render("인터넷이 끊겼다.", "v", "r", "p", 0.5)
-    speech.render("인터넷이 끊겼다.", "v", "r", "p", 0.5)
-    assert calls.count("인터넷이 끊겼다.") == 2
 
 
 # ---------------------------------------------------------------- 빠른 모드

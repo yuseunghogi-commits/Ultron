@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter
 
 def run_demo(core, args) -> None:
     b = core.bridge
-    state = os.environ.get("JARVIS_DEMO_STATE", "speaking")
+    state = os.environ.get("JARVIS_DEMO_STATE", "listening")
     t0 = time.monotonic()
 
     def fill():
@@ -35,16 +35,14 @@ def run_demo(core, args) -> None:
             core._set_state("standby", "“울트론”이라고 불러주세요")
         elif state == "confirm":
             b.confirmRequest.emit("democ", "PowerShell 실행", "임시 파일 정리\n\nRemove-Item $env:TEMP\\*.log -Force")
-            core._set_state("speaking")
+            core._set_state("thinking")
         else:
             core._set_state(state, {"standby": "“울트론”이라고 불러주세요"}.get(state))
 
     def wobble():
         t = time.monotonic() - t0
         lvl = 0.45 + 0.35 * abs(math.sin(t * 5.1)) * abs(math.sin(t * 1.7))
-        if state in ("speaking", "confirm"):
-            b.set("voiceLevel", lvl)
-        elif state == "listening":
+        if state == "listening":
             b.set("micLevel", lvl)
 
     QTimer.singleShot(2600, fill)

@@ -6,7 +6,6 @@ import pytest
 from jarvis.brain import CHAT_OFF, CHAT_ON
 from jarvis.local_ai import to_command
 from jarvis.local_router import LocalRouter, dedupe, normalize
-from jarvis.speech import split_sentences
 
 
 class Fake:
@@ -163,22 +162,3 @@ def test_chat_mode_skips_canned_replies():
     assert r.try_handle("고마워") is None
     r, _ = router(chat=True)
     assert r.try_handle("볼륨 30으로")             # 분명한 명령은 대화 중에도 바로 처리
-
-
-# ---- 답을 문장 단위로 끊어 바로 읽기 ----
-def test_split_sentences_streaming():
-    buf, spoken = "", []
-    for piece in ["안녕", "하세요! 오늘", " 기온은 3.", "5도예요. 산책", "하기 좋겠네요"]:
-        out, buf = split_sentences(buf + piece)
-        spoken += out
-    out, buf = split_sentences(buf, final=True)
-    spoken += out
-    assert spoken == ["안녕하세요! 오늘 기온은 3.5도예요.", "산책하기 좋겠네요"] or \
-        spoken == ["안녕하세요!", "오늘 기온은 3.5도예요.", "산책하기 좋겠네요"]
-    assert buf == ""
-    assert "".join(spoken).replace(" ", "") == "안녕하세요!오늘기온은3.5도예요.산책하기좋겠네요"
-
-
-def test_split_sentences_merges_tiny():
-    out, rest = split_sentences("네. 알겠습니다. 바로 할게요 ")
-    assert out and all(len(o) >= 8 for o in out)

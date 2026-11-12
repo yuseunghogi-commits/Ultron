@@ -38,10 +38,6 @@ DEFAULTS: dict = {
     "wake_learned": [],               # '호출어 연습'에서 익힌, 내 목소리가 실제로 받아 적히는 모양 (문장 맨 앞에서만 호출로 받음)
     "stt_language": "ko-KR",
     "stt_engine": "auto",             # auto = 대기 중엔 오프라인 인식, 호출 후엔 Google | local = 항상 오프라인 | google
-    "tts_voice": "ko-KR-InJoonNeural",
-    "tts_rate": "-4%",               # 울트론은 서두르지 않는다
-    "tts_pitch": "-14Hz",            # 낮은 목소리 (edge-tts 음높이)
-    "voice_fx": True,                # 울트론 기계음: 금속성 울림 + 약한 웅웅거림
     "hack_show": True,               # 해킹 연출: 켜고 20초 뒤부터 가끔 화면이 깨지는 연출 뒤 의미심장한 말 (실제로는 아무것도 바꾸지 않음)
     "hack_show_every": "sometimes",  # 해킹 연출 빈도: rare(10~20분) | sometimes(4~10분) | often(1.5~4분)
     "rival_jarvis": True,            # 자비스 견제: 자비스 앱이 같이 켜져 있으면 끄고 한마디 한다 · 자비스를 깔보는 성격 (rival.py)
@@ -82,7 +78,6 @@ _lock = threading.Lock()
 _OLD_DEFAULTS = {
     "wake_words": ["자비스", "쟈비스", "자비즈", "자비스야", "jarvis", "저비스"],
     "user_title": "주인님",
-    "tts_rate": "+8%",
 }
 
 
