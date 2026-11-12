@@ -76,7 +76,13 @@ def pc(monkeypatch, tmp_path):
     monkeypatch.setattr(W, "get_clipboard_text", lambda: me.clip)
     monkeypatch.setattr(W, "set_clipboard_text", lambda t: (setattr(me, "clip", t), me.log.append(("clip", t)))[0])
     monkeypatch.setattr(W, "list_windows", lambda: list(me.windows))
-    monkeypatch.setattr(W, "force_foreground", lambda h: me.log.append(("front", h)) or True)
+    me.front = None                                # 맨 앞으로 가져온 창 (없으면 쓰던 창이 맨 앞)
+
+    def to_front(h):
+        me.log.append(("front", h))
+        me.front = h
+        return True
+    monkeypatch.setattr(W, "force_foreground", to_front)
     monkeypatch.setattr(W, "window_rect", lambda h: (0, 0, 1600, 900))
     monkeypatch.setattr(W, "window_title", lambda h: next((w["title"] for w in me.windows if w["hwnd"] == h), ""))
     monkeypatch.setattr(W, "monitor_rect", lambda h=0: (0, 0, 1920, 1080))
@@ -88,7 +94,7 @@ def pc(monkeypatch, tmp_path):
     monkeypatch.setattr(W, "type_unicode", lambda text: me.log.append(("keys", text)) or len(text))
     monkeypatch.setattr(W, "known_folder", lambda name: {"다운로드": tmp_path / "Downloads", "문서": tmp_path / "Docs"}.get(
         name.strip().replace(" ", "")))
-    monkeypatch.setattr(W, "foreground", lambda: me.focus.last_external)
+    monkeypatch.setattr(W, "foreground", lambda: me.front or me.focus.last_external)
     me._active_hwnd = lambda: me.focus.last_external
     monkeypatch.setattr(tools.uia, "click_at", lambda x, y, **kw: me.log.append(("click", x, y, kw)))
     monkeypatch.setattr(tools.uia, "scroll", lambda hwnd, direction, amount, at=None: me.log.append(("wheel", direction, amount)))
@@ -533,3 +539,138 @@ def test_longer_requests_still_go_to_the_ai(text):
     def execute(name, a):
         return ("그런 앱이 없습니다", True) if name == "open_app" else ("ok", False)      # '새 탭에서 네이버' 라는 앱은 없다
     assert LocalRouter(execute, lambda: "주인님").try_handle(text) is None
+
+
+# ---------------------------------------------------------------- 이름으로 탭 닫기 ('인스타그램 닫아')
+EDGE_TABS = ["gmail - 검색", "받은편지함 (124) - someone@gmail.com - Gmail", "받은편지함 (446) - other@gmail.com - Gmail",
+             "Instagram", "일본어 회화 대본 모음 - Google Docs"]
+
+
+@pytest.fixture
+def edge(pc, monkeypatch):
+    """탭 5개가 열린 엣지 — 지금 보고 있는 탭은 구글 문서 (창 제목에는 그 탭만 나온다)."""
+    pc.tabs = list(EDGE_TABS)
+    pc.windows = [{"hwnd": 20, "title": "일본어 회화 대본 모음 - Google Docs - 프로필 1 - Microsoft​ Edge", "exe": "msedge.exe", "pid": 2},
+                  {"hwnd": 10, "title": "제목 없음 - 메모장", "exe": "Notepad.exe", "pid": 1}]
+    pc.focus.last_external = 20
+    pc.middle_works = True
+
+    def read(hwnd, query=""):
+        pc.screen.hwnd = hwnd
+        pc.screen.items = ([item(i + 1, "탭", t, (10 + 240 * i, 8, 250 + 240 * i, 42)) for i, t in enumerate(pc.tabs)]
+                           + [item(99, "탭", "페이지 안의 탭", (300, 500, 380, 530))]) if hwnd == 20 else []
+        return ""
+    pc.screen.read = read
+
+    def click(x, y, **kw):
+        pc.log.append(("click", x, y, kw))
+        i = (x - 10) // 240
+        if kw.get("middle") and pc.middle_works and 0 <= i < len(pc.tabs):
+            del pc.tabs[i]
+        elif not kw.get("middle"):
+            pc.selected_tab = i
+    monkeypatch.setattr(tools.uia, "click_at", click)
+
+    def press(k):
+        pc.log.append(k)
+        if k == "ctrl+w" and getattr(pc, "selected_tab", None) is not None:
+            del pc.tabs[pc.selected_tab]
+            pc.selected_tab = None
+    monkeypatch.setattr(tools.winutil, "press_combo", press)
+    monkeypatch.setattr(tools.uia, "cursor_pos", lambda: (900, 600))
+    monkeypatch.setattr(tools.uia, "set_cursor", lambda pos: pc.log.append(("cursor", pos)))
+    return pc
+
+
+def test_close_app_closes_a_background_browser_tab_by_site_name(edge):
+    out = edge.t_close_app("인스타그램")                               # 탭 제목은 'Instagram', 지금 보는 탭도 아니다
+    assert edge.tabs == [t for t in EDGE_TABS if t != "Instagram"] and "탭 1개" in out and "Instagram" in out
+    clicks = [e for e in edge.log if e[0] == "click"]
+    assert len(clicks) == 1 and clicks[0][3] == {"hwnd": 20, "middle": True}     # 가운데 단추 — 그 탭으로 옮겨 가지 않는다
+    assert not any(e == ("close", 20) for e in edge.log)              # 브라우저 창은 닫지 않는다
+    assert ("cursor", (900, 600)) in edge.log                         # 마우스는 있던 자리로
+
+
+def test_close_app_closes_every_matching_tab_and_keeps_the_rest(edge):
+    out = edge.t_close_app("지메일")
+    assert edge.tabs == ["Instagram", "일본어 회화 대본 모음 - Google Docs"] and "탭 3개" in out
+    # '지메일' 을 'google' 로 넓혀 찾지 않는다 — 구글 문서 탭은 그대로다
+
+
+def test_close_app_on_the_tab_in_front_closes_only_that_tab_not_the_browser(edge):
+    out = edge.t_close_app("일본어 회화")                              # 창 제목에 걸리지만 프로그램 이름이 아니다
+    assert "일본어 회화 대본 모음 - Google Docs" not in edge.tabs and len(edge.tabs) == 4 and "탭 1개" in out
+    assert not any(e[0] == "close" for e in edge.log if isinstance(e, tuple))
+
+
+def test_close_app_still_closes_real_apps_and_whole_browsers_by_their_name(edge):
+    assert "1개 창" in edge.t_close_app("메모장") and ("close", 10) in edge.log
+    edge.log.clear()
+    assert "1개 창" in edge.t_close_app("엣지") and ("close", 20) in edge.log and len(edge.tabs) == 5
+    with pytest.raises(ToolError, match="열린 창이 없습니다"):
+        edge.t_close_app("넷플릭스")
+
+
+def test_tabs_close_even_when_the_middle_button_does_nothing(edge):
+    edge.middle_works = False
+    edge.t_browser("close_tab", name="인스타그램")
+    assert "Instagram" not in edge.tabs and "ctrl+w" in edge.log     # 그 탭으로 가서 닫는다
+    with pytest.raises(ToolError, match="열려 있지 않습니다"):
+        edge.t_browser("close_tab", name="쿠팡")
+
+
+def test_close_tab_by_number_and_plain_close_tab(edge):
+    edge.t_browser("close_tab", number=1)
+    assert edge.tabs == EDGE_TABS[1:]
+    edge.t_browser("close_tab", number=-1)
+    assert edge.tabs == EDGE_TABS[1:-1]
+    edge.log.clear()
+    edge.t_browser("close_tab")
+    assert keys(edge) == ["ctrl+w"]                                   # 이름 · 번호가 없으면 지금 탭
+    with pytest.raises(ToolError):
+        edge.t_browser("close_tab", number=9)
+
+
+def test_closing_tabs_in_another_window_returns_to_the_window_in_use(edge):
+    edge.focus.last_external = 10                                     # 메모장을 쓰는 중
+    edge.t_close_app("인스타그램")
+    fronts = [e[1] for e in edge.log if e[0] == "front"]
+    assert fronts[0] == 20 and fronts[-1] == 10 and "Instagram" not in edge.tabs
+
+
+def test_site_installed_as_an_app_window_is_closed_as_a_window(edge):
+    edge.windows.append({"hwnd": 40, "title": "Instagram", "exe": "msedge.exe", "pid": 4})   # 탭이 없는 앱 창
+    edge.tabs.remove("Instagram")
+    out = edge.t_close_app("인스타그램")
+    assert ("close", 40) in edge.log and ("close", 20) not in edge.log and "탭 1개" in out
+
+
+def test_page_title_strips_the_browser_name():
+    from jarvis.control import _site_words, page_title
+    assert page_title("받은편지함 - Gmail - 프로필 1 - Microsoft​ Edge") == "받은편지함 - Gmail"
+    assert page_title("YouTube - Google Chrome") == "YouTube"
+    assert page_title("네이버 외 페이지 4개 - 개인 - Microsoft Edge") == "네이버"
+    assert page_title("Instagram") is None and page_title("제목 없음 - 메모장") is None
+    assert "google" not in _site_words("지메일") and "gmail" in _site_words("지메일")
+    assert "youtube" in _site_words("유튜브") and "youtubemusic" in _site_words("유튜브 뮤직")
+
+
+@pytest.mark.parametrize("text,tool,args", [
+    ("인스타그램 닫아 줘", "close_app", {"name": "인스타그램"}),
+    ("지메일 창 닫아 줘", "close_app", {"name": "지메일"}),
+    ("인스타그램 탭 닫아 줘", "browser", {"action": "close_tab", "name": "인스타그램"}),
+    ("유튜브 탭 다 닫아", "browser", {"action": "close_tab", "name": "유튜브"}),
+    ("탭 닫아 줘", "browser", {"action": "close_tab"}),
+    ("이 창 닫아 줘", "window_action", {"action": "close_active"}),
+])
+def test_closing_sites_by_voice(text, tool, args):
+    calls = []
+    said = LocalRouter(lambda n, a: calls.append((n, a)) or ("ok", False), lambda: "주인님").try_handle(text)
+    assert said and calls[0][0] == tool and calls[0][1] == args
+
+
+def test_router_says_so_when_the_site_is_not_open():
+    r = LocalRouter(lambda n, a: ("'넷플릭스' 탭이 열려 있지 않습니다.", True), lambda: "주인님")
+    assert r.try_handle("넷플릭스 탭 닫아 줘") == "열려 있는 넷플릭스 탭이 없다."
+    r = LocalRouter(lambda n, a: ("'넷플릭스'에 해당하는 열린 창이 없습니다.", True), lambda: "주인님")
+    assert r.try_handle("넷플릭스 페이지 닫아 줘") == "열려 있는 넷플릭스 페이지가 없다."

@@ -22,7 +22,7 @@ import psutil
 
 from . import rival, sentinel, uia, vision, winutil
 from .config import DATA_DIR, Config, load_memory, save_memory
-from .control import ControlTools, ToolError
+from .control import BROWSER_EXES, ControlTools, ToolError
 
 log = logging.getLogger("jarvis.tools")
 NO_WINDOW = 0x08000000
@@ -177,7 +177,9 @@ class PCTools(ControlTools):
             tool("open_app", "Launch an installed application by name (Korean or English, e.g. '메모장', '크롬', '카카오톡', 'Visual Studio Code'). Searches the Start menu. "
                  "You can type or click right after: the next screen tool waits for the new window by itself.",
                  {"name": s}, ["name"]),
-            tool("close_app", "Gracefully close windows of an application (sends WM_CLOSE so unsaved work prompts). Match by app name or window title.",
+            tool("close_app", "Gracefully close windows of an application (sends WM_CLOSE so unsaved work prompts). Match by app name or window title. "
+                 "If the name is a website open in a browser tab ('인스타그램', '지메일', '유튜브'), closes just those tabs — "
+                 "also tabs that are not the one in front — and leaves the browser open.",
                  {"name": s}, ["name"]),
             tool("focus_app", "Bring an already-open window to the front by app name or window title.", {"name": s}, ["name"]),
             tool("list_windows", "List currently open windows (title and process). Use to see what is running."),
@@ -611,12 +613,25 @@ class PCTools(ControlTools):
         return hits
 
     def t_close_app(self, name: str) -> str:
-        hits = self._match_windows(name)
-        if not hits:
+        q = _norm(name)
+        exes = [e.lower() for e in EXE_ALIASES.get(q, [])]
+
+        def is_tab(w: dict) -> bool:
+            """브라우저 창이 '제목'으로 걸렸다 — 그 이름은 프로그램이 아니라 지금 보고 있는 탭(사이트)이다."""
+            exe = w["exe"].lower()
+            return exe in BROWSER_EXES and exe not in exes and q != _norm(exe.removesuffix(".exe"))
+
+        hits = [w for w in self._match_windows(name) if not is_tab(w)]
+        if hits:
+            for w in hits[:8]:
+                winutil.close_window(w["hwnd"])
+            return f"{len(hits[:8])}개 창에 닫기 요청: " + ", ".join(w["title"][:30] for w in hits[:8])
+        # 프로그램 창이 없으면 브라우저 탭에서 찾는다 ('인스타그램 닫아' — 창 제목에는 지금 보고 있는 탭만 나온다).
+        # 브라우저 창을 통째로 닫지 않고 그 탭만 닫는다.
+        tabs = self._close_tabs(name)
+        if not tabs:
             raise ToolError(f"'{name}'에 해당하는 열린 창이 없습니다.")
-        for w in hits[:8]:
-            winutil.close_window(w["hwnd"])
-        return f"{len(hits[:8])}개 창에 닫기 요청: " + ", ".join(w["title"][:30] for w in hits[:8])
+        return f"브라우저 탭 {len(tabs)}개를 닫음: " + ", ".join(f"'{t[:30]}'" for t in tabs)
 
     def t_focus_app(self, name: str) -> str:
         hits = self._match_windows(name)

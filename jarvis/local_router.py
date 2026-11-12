@@ -506,6 +506,19 @@ class LocalRouter:
             return browser({"action": "reopen_tab"}, "닫은 탭을 되살렸다.")
         if re.fullmatch(r"(?:(?:이|지금|현재)\s*)?탭\s*(?:좀\s*)?(?:닫아|꺼|없애)", c):
             return browser({"action": "close_tab"}, "탭을 닫았다.")
+        # '인스타그램 탭 닫아' · '지메일 창 닫아' — 지금 보고 있는 탭이 아니어도 이름으로 찾아 닫는다
+        m = re.fullmatch(r"(.{1,15}?)\s*(탭|창|페이지|사이트)\s*(?:을|를)?\s*(?:좀\s*)?(?:다\s*|전부\s*|모두\s*)?(?:닫아|꺼|없애|종료|종료해)", c)
+        if m and m.group(1).strip() not in ("이", "그", "저", "지금", "현재", "새", "다른", "모든", "전체", "열린", "브라우저", "인터넷"):
+            name = m.group(1).strip()
+            if m.group(2) == "탭":
+                out, err = self._run("browser", {"action": "close_tab", "name": name})
+            else:
+                out, err = self._run("close_app", {"name": name})
+            if err:
+                kind = m.group(2)
+                return (f"열려 있는 {name} {kind}{'이' if has_batchim(kind) else '가'} 없다."
+                        if "열려 있지 않" in out or "열린 창이 없" in out else (None if fallback else out))
+            return f"{obj(name)} 닫았다."
         m = re.fullmatch(r"(다음|옆|오른쪽|이전|왼쪽)\s*탭(?:으로)?" + go, c)
         if m:
             nxt = m.group(1) in ("다음", "옆", "오른쪽")

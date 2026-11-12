@@ -91,6 +91,22 @@ if (-not $r) { Write-Output 'NONE'; exit 0 }
 $res = Await ($r.SetStateAsync('__STATE__')) ([Windows.Devices.Radios.RadioAccessStatus])
 Write-Output $res
 """
+# 브라우저 창 제목의 꼬리 (' - 프로필 1 - Microsoft Edge') — 떼어 내면 지금 보고 있는 탭의 제목이 남는다
+_BROWSER_TAIL = re.compile(
+    r"(?:\s[-–—]\s(?:프로필\s*\d*|profile\s*\d*|개인|회사|personal|work))?"
+    r"\s[-–—]\s(?:google chrome|chrome|microsoft[\u200b\s]*edge|mozilla firefox|firefox|네이버 웨일|naver whale|whale|"
+    r"brave|opera|vivaldi)\s*$", re.I)
+MAX_CLOSE_TABS = 8
+
+
+def page_title(window_title: str) -> str | None:
+    """브라우저 창 제목에서 지금 보고 있는 탭의 제목만. 브라우저 창 제목처럼 생기지 않았으면 None (앱처럼 띄운 창)."""
+    m = _BROWSER_TAIL.search(window_title or "")
+    if not m:
+        return None
+    return re.sub(r"\s외\s*페이지\s*\d+개$|\sand \d+ more pages?$", "", window_title[:m.start()]).strip()
+
+
 _SECRET = re.compile(r"비밀\s*번호|비번|암호|패스워드|password|passcode|\bpin\b|인증\s*번호|보안\s*코드|cvc|cvv|카드\s*번호", re.I)
 MAX_SELECTION = 6000
 
@@ -108,7 +124,9 @@ def _site_words(name: str) -> list[str]:
         label, url = site
         host = urllib.parse.urlparse(url).hostname or ""
         parts = [p for p in host.split(".") if p not in ("www", "com", "net", "org", "co", "kr", "ai", "io", "m")]
-        words += [uia._norm(label)] + [uia._norm(p) for p in parts[-1:]]
+        # youtube.com → 'youtube'. 하위 사이트(mail.google.com · music.youtube.com)는 'google' 만으로 찾으면 구글의 다른
+        # 탭까지 걸리므로 'googlemail' · 'youtubemusic' 처럼 붙여서만 쓴다 (탭 제목 'YouTube Music' · 'Google Docs')
+        words += [uia._norm(label), uia._norm("".join(reversed(parts)))]
         words += [uia._norm(k) for k, v in WEBSITES.items() if v == site and len(k) >= 3]   # 다른 이름들 (지메일 = gmail)
     return [w for w in dict.fromkeys(words) if w]
 
@@ -125,15 +143,17 @@ class ControlTools:
         return [
             tool("browser", "Control the web browser (Chrome · Edge · Whale · Firefox) directly — faster and more reliable "
                  "than key presses or clicking. Brings the browser to the front first. "
-                 "new_tab (optionally with url), close_tab, reopen_tab, next_tab, prev_tab, switch_tab (name = part of the "
+                 "new_tab (optionally with url), close_tab (the current tab; or give name / number to close other tabs "
+                 "without leaving the current one — name closes every tab whose title matches, e.g. '인스타그램', '지메일'), "
+                 "reopen_tab, next_tab, prev_tab, switch_tab (name = part of the "
                  "tab title or site name like '유튜브', or number = position from the left), list_tabs, back, forward, "
                  "reload, go (open url in the CURRENT tab), find (find text in the page), top / bottom (jump to the start / "
                  "end of the page), zoom_in / zoom_out / zoom_reset, fullscreen, downloads, history, new_window, incognito.",
                  {"action": {"type": "string", "enum": BROWSER_ACTIONS},
                   "url": {"type": "string", "description": "for go / new_tab"},
                   "text": {"type": "string", "description": "for find"},
-                  "name": {"type": "string", "description": "for switch_tab: tab title or site name"},
-                  "number": {"type": "integer", "description": "for switch_tab: 1 = leftmost tab, -1 = last tab"}},
+                  "name": {"type": "string", "description": "for switch_tab / close_tab: tab title or site name"},
+                  "number": {"type": "integer", "description": "for switch_tab / close_tab: 1 = leftmost tab, -1 = last tab"}},
                  ["action"]),
             tool("arrange_windows", "Place windows next to each other on the screen so the user can see them at once "
                  "('크롬이랑 메모장 나란히 놓아 줘'). apps = app names or window titles in left-to-right order (2-6); "
@@ -236,9 +256,108 @@ class ControlTools:
         row = [it for it in tabs if abs(it.rect[1] - top) <= 12]
         return sorted(row, key=lambda it: it.rect[0])
 
+    def _tab_click(self, hwnd: int, it, middle: bool = False) -> None:
+        left, top, right, bottom = it.rect
+        x = left + max(8, min((right - left) // 3, 60))     # 탭 오른쪽 끝의 닫기(x) 단추를 피해서 왼쪽을 누른다
+        y = (top + bottom) // 2
+        with self._hud_aside(x, y):
+            uia.click_at(x, y, hwnd=hwnd, **({"middle": True} if middle else {}))
+
+    def _tabs_or_none(self, hwnd: int) -> list:
+        try:
+            return self._tabs(hwnd)
+        except Exception as e:                  # 창이 닫혔다 (마지막 탭이었다)
+            log.debug("탭 읽기 실패: %s", e)
+            return []
+
+    def _close_tabs_in(self, win: dict, words: list[str], limit: int) -> list[str]:
+        """브라우저 창 하나에서 제목에 words 가 든 탭을 닫는다 → 닫은 탭 제목들.
+        가운데 단추로 눌러 닫으므로 지금 보고 있는 탭은 그대로다 (안 먹으면 그 탭으로 가서 ctrl+w)."""
+        hwnd = win["hwnd"]
+
+        def match(s: str) -> bool:
+            n = uia._norm(s)
+            return any(w in n for w in words)
+
+        hidden = winutil.window_rect(hwnd) is None      # 최소화돼 있으면 탭을 읽을 수 없다 — 잠깐 꺼내서 본다
+        if hidden:
+            winutil.force_foreground(hwnd)
+            time.sleep(0.3)
+        tabs = self._tabs(hwnd)
+        if not any(match(t.name) for t in tabs):
+            if hidden:
+                winutil.set_window_state(hwnd, "minimize")      # 찾는 탭이 없었다 — 다시 내려 둔다
+            if tabs:
+                return []
+            # 탭 줄을 읽지 못했다: 앱처럼 띄운 창이거나(탭이 없다), 세로 탭이다
+            page = page_title(win["title"])
+            if page is None:
+                if not any(it.kind == "탭" for it in self.screen.items) and match(win["title"]):
+                    winutil.close_window(hwnd)  # 사이트를 앱으로 설치한 창 (제목이 곧 사이트 이름)
+                    return [win["title"]]
+                return []
+            if match(page):                     # 찾는 사이트가 바로 지금 보고 있는 탭이다 → 그 탭만 닫는다
+                winutil.force_foreground(hwnd)
+                time.sleep(0.2)
+                winutil.press_combo("ctrl+w")
+                time.sleep(0.3)
+                return [page]
+            return []
+        if winutil.foreground() != hwnd:        # 탭을 누르려면 창이 보여야 한다
+            winutil.force_foreground(hwnd)
+            time.sleep(0.25)
+            tabs = self._tabs_or_none(hwnd)
+        closed: list[str] = []
+        while tabs and len(closed) < limit:
+            hits = [t for t in tabs if match(t.name)]
+            if not hits:
+                break
+            tab, before = hits[-1], len(tabs)   # 오른쪽 것부터 — 왼쪽 탭들의 자리가 덜 바뀐다
+            self._tab_click(hwnd, tab, middle=True)
+            time.sleep(0.35)
+            tabs = self._tabs_or_none(hwnd)
+            if len(tabs) >= before:             # 가운데 단추가 안 먹는 브라우저 — 그 탭으로 가서 닫는다
+                self._tab_click(hwnd, tab)
+                time.sleep(0.2)
+                winutil.press_combo("ctrl+w")
+                time.sleep(0.35)
+                tabs = self._tabs_or_none(hwnd)
+                if len(tabs) >= before:
+                    break
+            closed.append(tab.name)
+        return closed
+
+    def _close_tabs(self, name: str, only: int = 0) -> list[str]:
+        """열려 있는 브라우저 창들에서 이름이 맞는 탭을 모두 닫는다 (최대 8개) → 닫은 탭 제목들.
+        '인스타그램 닫아' — 인스타그램이 지금 보고 있는 탭이 아니어도, 탭 제목이 'Instagram' 이어도 찾는다."""
+        words = _site_words(name)
+        if not words:
+            return []
+        front, mouse = winutil.foreground(), uia.cursor_pos()
+        closed: list[str] = []
+        for win in winutil.list_windows():
+            if win["exe"].lower() not in BROWSER_EXES or (only and win["hwnd"] != only):
+                continue
+            try:
+                closed += self._close_tabs_in(win, words, MAX_CLOSE_TABS - len(closed))
+            except Exception as e:
+                log.debug("탭 닫기 실패 (%s): %s", win["title"][:30], e)
+            if len(closed) >= MAX_CLOSE_TABS:
+                break
+        if closed:
+            uia.set_cursor(mouse)               # 마우스를 탭 위에 두면 탭 미리 보기가 떠서 화면을 가린다
+            if front and winutil.foreground() != front:
+                winutil.force_foreground(front)  # 쓰던 창으로 돌아간다
+        return closed
+
     def t_browser(self, action: str, url: str = "", text: str = "", name: str = "", number: int = 0):
         if action not in BROWSER_ACTIONS:
             raise ToolError(f"지원하지 않는 동작입니다: {action}")
+        if action == "close_tab" and name:      # 이름으로 닫기: 그 탭으로 옮겨 가지 않고 닫는다
+            closed = self._close_tabs(name)
+            if not closed:
+                raise ToolError(f"'{name}' 탭이 열려 있지 않습니다. browser 의 list_tabs 로 열린 탭을 확인하세요.")
+            return f"탭 {len(closed)}개를 닫았습니다: " + ", ".join(f"'{t[:30]}'" for t in closed)
         if action == "new_tab" and url:
             try:
                 win = self._browser()
@@ -278,14 +397,17 @@ class ControlTools:
                     raise ToolError(f"{n}번째 탭이 없습니다 (열린 탭 {len(tabs)}개).")
             else:
                 raise ToolError("switch_tab 에는 name 이나 number 가 필요합니다.")
-            left, top, right, bottom = it.rect
-            x = left + max(8, min((right - left) // 3, 60))     # 탭 오른쪽 끝의 닫기(x) 단추를 피해서 왼쪽을 누른다
-            y = (top + bottom) // 2
-            with self._hud_aside(x, y):
-                uia.click_at(x, y, hwnd=hwnd)
+            self._tab_click(hwnd, it)
             return f"'{it.name[:40]}' 탭으로 갔습니다" + self._after(before, timeout=1.5, nochange_wait=0.5)
 
         before = self._small()
+        if action == "close_tab" and number:    # 번호로 닫기
+            tabs = self._tabs(hwnd)
+            n = len(tabs) if int(number) == -1 else int(number)
+            if not 1 <= n <= len(tabs):
+                raise ToolError(f"{number}번째 탭이 없습니다 (열린 탭 {len(tabs)}개).")
+            self._tab_click(hwnd, tabs[n - 1], middle=True)
+            return f"'{tabs[n - 1].name[:40]}' 탭을 닫았습니다" + self._after(before, timeout=1.5, nochange_wait=0.5)
         if action == "go":
             if not url:
                 raise ToolError("go 에는 url 이 필요합니다.")
