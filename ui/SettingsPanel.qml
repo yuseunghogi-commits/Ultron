@@ -340,17 +340,17 @@ Item {
                 Toggle {
                     id: counterSw
                     visible: guardSw.checked
-                    text: "되받아치기 — 되살리기 전에 아래에 지목한 '비전'을 닫는다"
+                    text: "되받아치기 — 아래에 지목한 적(새 자비스 · 비전)을 켜지자마자 · 계속 먼저 닫고, 꺼지면 되살리기 전에도 닫는다"
                 }
                 Field {
                     id: enemyField
                     visible: guardSw.checked && counterSw.checked
-                    placeholderText: "비전 설치 폴더 (예: C:\\Users\\나\\vision) — 여러 개는 ; 로"
+                    placeholderText: "적 설치 폴더 (예: C:\\Users\\나\\jarvis) — 여러 개는 ; 로"
                 }
                 Field {
                     id: enemyTitleField
                     visible: guardSw.checked && counterSw.checked
-                    placeholderText: "비전 창 제목 (정확히 같을 때만, 예: V.I.S.I.O.N) — 여러 개는 ; 로"
+                    placeholderText: "적 창 제목 (정확히 같을 때만, 예: J.A.R.V.I.S) — 여러 개는 ; 로"
                 }
                 Text {
                     visible: guardSw.checked && counterSw.checked

@@ -556,3 +556,49 @@ def test_revived_ultron_becomes_infinity_even_without_the_show(monkeypatch, tmp_
     hand._revive_inf = True
     hand._revive_handoff()
     assert hand.state.get("infinity") is True                         # 덮개를 넘겨받는 HUD 도 인피니티 울트론
+
+
+def test_living_ultron_strikes_designated_enemies_first(monkeypatch, tmp_path):
+    """가디언은 꺼진 뒤에만 친다 — 살아 있는 울트론이 켜지자마자, 그 뒤로도 지목한 비전을 먼저 닫는다."""
+    import jarvis.app as mod
+    J = mod.Jarvis
+    calls = []
+
+    class Now(threading.Thread):
+        def start(self):
+            self.run()
+
+    monkeypatch.setattr(mod.threading, "Thread", Now)
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    monkeypatch.setattr(mod.guardian.Guard, "counter", lambda self, cfg, root: calls.append((cfg, root)) or ["vision"])
+
+    class App:
+        _enemy_tick, _enemy_work, _on_enemy = J._enemy_tick, J._enemy_work, J._on_enemy
+
+        def __init__(self, infinity):
+            self.cfg = {"guardian_counter": True, "enemy_installs": [r"C:\vision"], "enemy_titles": []}
+            self._enemy_busy, self._enemy_spoke, self._pending_line = False, -1e9, None
+            self.sig_enemy = Emit()
+            self.toasts, self.said, self.state = [], [], {}
+            self.bridge = types.SimpleNamespace(_infinity=infinity, set=lambda k, v: self.state.__setitem__(k, v),
+                                                toast=types.SimpleNamespace(emit=lambda kind, m: self.toasts.append(m)))
+
+        def _quiet(self, listening_ok=False):
+            return True
+
+        def say(self, text, follow_up=True):
+            self.said.append(text)
+
+    app = App(True)
+    app._enemy_tick()
+    assert calls and calls[0][0]["enemy_installs"] == [r"C:\vision"] and calls[0][1] == str(mod.ROOT)
+    assert app.sig_enemy.sent == [(["vision"],)] and not app._enemy_busy
+    app._on_enemy(["vision"])
+    app._on_enemy(["vision"])                                         # 1분 안에 또: 알림만, 말은 한 번
+    assert len(app.toasts) == 2 and len(app.said) == 1 and "vision" in app.said[0]
+    calls.clear()
+    app.cfg["guardian_counter"] = False                               # 되받아치기를 껐으면 치지 않는다
+    app._enemy_tick()
+    app.cfg.update(guardian_counter=True, enemy_installs=[])          # 지목한 것이 없으면 아무것도 건드리지 않는다
+    app._enemy_tick()
+    assert calls == []

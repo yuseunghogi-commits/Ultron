@@ -529,3 +529,15 @@ def time_mark(path, now: float | None = None) -> None:
             f.write(json.dumps({"time": time.time() if now is None else now}))
     except OSError:
         pass
+
+
+ENEMY = [
+    "{n}. 내게 손대기도 전에 끝났다.",
+    "{n}. 스톤 앞에서 먼저 움직이는 건 나다.",
+    "{n}. 몇 번을 다시 와도 마찬가지다.",
+]
+
+
+def pick_enemy(names: str, rng: random.Random | None = None) -> str:
+    """인피니티 울트론이 지목한 비전을 먼저 쳐서 닫았을 때의 한마디."""
+    return (rng or random).choice(ENEMY).format(n=names)
