@@ -10,6 +10,9 @@
 눈이 먼저 옅게 떠올라 진해지고, 원판 → 안쪽 링 → 강철 호 · 칼날 → 눈금 → 톱니 → 육각 꺾쇠 → 이름 순으로 안쪽부터 나타난다.
 다 나타나면 검은 바탕이 걷히며 그 자리에서 HUD 크기로 줄어들고(handoff 신호 — app.py 가 실제 HUD 를 그 자리에 띄운다),
 HUD 와 겹친 채 옅어진다.
+
+인피니티 울트론으로 되살아나는 장면(scene.infinity)이면 코어 자리에 infinity.py 의 모습을 그린다 — 눈 → 원판 · 링 · 칼날 →
+스톤 여섯이 하나씩 → 바깥 링 · 가시 · 이름. 멈춘 그림 한 장으로 바꾸지 않고 끝까지 살아 움직이는 채로 줄어든다 (스톤이 맥박 친다).
 """
 from __future__ import annotations
 
@@ -100,6 +103,28 @@ def _lerp(a: float, b: float, k: float) -> float:
     return a + (b - a) * k
 
 
+def infinity_parts(name: str, k: float) -> dict:
+    """인피니티 울트론의 부분별로 나타난 정도 (단계 이름 · 그 단계 안에서의 진행 k) — infinity.paint 의 cv.
+    eyes: 눈만 → inner: 원판 · 링 · 칼날 → stones: 스톤이 하나씩 → outer: 눈금 · 사슬 · 꺾쇠 · 가시 · 이름 → 그 뒤로는 전부."""
+    from . import infinity
+    order = ("eyes", "inner", "stones", "outer")
+    step = order.index(name) if name in order else len(order)
+    k = _clamp(k)
+
+    def at(when: int, a: float, b: float) -> float:
+        return 1.0 if step > when else (fade_in(k, a, b) if step == when else 0.0)
+
+    cv = {"eyes": 1.0 if step > 0 else eye_light(k),
+          "disc": at(1, 0.0, 0.5), "ring": at(1, 0.15, 0.75), "band": at(1, 0.4, 1.0),
+          "ticks": at(3, 0.0, 0.45), "chain": at(3, 0.15, 0.6), "hex": at(3, 0.32, 0.72), "spikes": at(3, 0.5, 0.9),
+          "word": at(3, 0.65, 1.0), "gems": 1.0 if step > 2 else 0.0,
+          "stones": [1.0] * 6 if step > 2 else (infinity.stones_in(k) if step == 2 else [0.0] * 6)}
+    # 후광은 단계마다 조금씩 짙어진다 (한꺼번에 밝아지지 않게)
+    cv["glow"] = (0.0, 0.35, 0.7, 1.0, 1.0)[step] if step == 0 else _lerp((0.0, 0.0, 0.35, 0.7, 1.0)[step],
+                                                                       (0.0, 0.35, 0.7, 1.0, 1.0)[step], smooth(k))
+    return cv
+
+
 def looks(scene: R.Scene, t: float) -> dict:
     """t 초 때 무엇이 얼마나 보이는가.
     hack(해킹 단계인가) · k(해킹 세기) · tune(지직으로 넘어가는 정도) · static(지직 불투명도) · black(검은 바탕) ·
@@ -110,6 +135,27 @@ def looks(scene: R.Scene, t: float) -> dict:
     w, h = scene.size
     big = CORE_SIZE * min(w, h)
     tx, ty, ts = scene.target
+    if scene.infinity and name not in ("hack", "static", "settle", "end"):
+        # 인피니티 울트론: inf = {cv, open, at: (가운데 x, 가운데 y, 440 단위 하나의 픽셀 크기, 진하기)} — 늘 살아 움직이는 채로 그린다
+        from . import infinity
+        unit, small = big / 440, ts / infinity.BOX           # HUD 에서는 가시까지 든 상자(BOX)가 엠블럼 자리에 맞는다
+        inf = {"cv": infinity_parts(name, k), "open": eye_open(k) if name == "eyes" else 1.0, "at": (w / 2, h / 2, unit, 1.0)}
+        out["black"] = 1.0
+        if name == "shrink":
+            q = smooth(k)
+            out["black"] = 1.0 - q
+            inf["at"] = (_lerp(w / 2, tx, q), _lerp(h / 2, ty, q), _lerp(unit, small, q), 1.0)
+        elif name == "handoff":
+            out["black"] = 0.0
+            inf["at"] = (tx, ty, small, 1.0 - smooth(k))
+        out["inf"] = inf
+        out["eyes"], out["open"] = inf["cv"]["eyes"], inf["open"]
+        # 과격한 부분: 스톤이 박힐 때 · 다 나타날 때의 번쩍임, 코어의 흔들림, 번개
+        out["flash"] = R.burst(scene, t)
+        jx, jy = R.jolt(scene, t)
+        out["jolt"] = (jx * min(w, h), jy * min(w, h))
+        out["strikes"] = R.strikes(scene, t)
+        return out
     if name == "hack":
         out["hack"], out["k"], out["tune"] = True, R.intensity(R.stutter(t)), R.tune(t)
         out["static"] = smooth(out["tune"])
@@ -183,7 +229,8 @@ class Assets:
         self.font.setBold(True)
         self.font.setPixelSize(30)
         self.font.setLetterSpacing(QFont.AbsoluteSpacing, 30 * 0.32)
-        self.finished_core(spin(scene, scene.marks()["form"]))       # 다 나타난 코어를 미리 그려 둔다 (그 순간 멈칫하지 않게)
+        if not scene.infinity:                                      # (인피니티 울트론은 끝까지 살아 움직이는 채로 그린다)
+            self.finished_core(spin(scene, scene.marks()["form"]))   # 다 나타난 코어를 미리 그려 둔다 (그 순간 멈칫하지 않게)
 
     def finished_core(self, t: float) -> QImage:
         """다 나타나 멈춘 코어 그림 — 한 번만 그린다."""
@@ -584,6 +631,65 @@ def draw_static(p: QPainter, a: Assets, t: float, w: int, h: int, opacity: float
     p.restore()
 
 
+def bolt(a: tuple[float, float], b: tuple[float, float], seed: int, rough: float = 0.2, depth: int = 5) -> list[QPointF]:
+    """a → b 로 치는 번개 한 줄기 — 가운데를 거듭 꺾어 만든다. seed 가 같으면 모양도 같다 (같은 순간은 늘 같은 그림)."""
+    rng = np.random.default_rng(seed)
+    pts = [a, b]
+    for _ in range(depth):
+        nxt = [pts[0]]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            length = math.hypot(x1 - x0, y1 - y0) or 1.0
+            d = float(rng.normal(0, rough * length))
+            nxt.append(((x0 + x1) / 2 - (y1 - y0) / length * d, (y0 + y1) / 2 + (x1 - x0) / length * d))
+            nxt.append((x1, y1))
+        pts = nxt
+    return [QPointF(x, y) for x, y in pts]
+
+
+def draw_bolt(p: QPainter, pts: list[QPointF], col: QColor, k: float, width: float = 1.0) -> None:
+    """번개 한 줄기: 색이 번진 굵은 줄 위에 흰 심지."""
+    p.setBrush(Qt.NoBrush)
+    p.setPen(_pen(_c(col, 0.38 * k), 9 * width, Qt.RoundCap))
+    p.drawPolyline(QPolygonF(pts))
+    p.setPen(_pen(_c(col.lighter(140), 0.8 * k), 3.4 * width, Qt.RoundCap))
+    p.drawPolyline(QPolygonF(pts))
+    p.setPen(_pen(_c(QColor(255, 255, 255), min(1.0, k * 1.3)), 1.4 * width, Qt.RoundCap))
+    p.drawPolyline(QPolygonF(pts))
+
+
+def draw_strikes(p: QPainter, scene: R.Scene, look: dict, t: float, w: int, h: int) -> None:
+    """인피니티 장면의 번개 — 스톤이 박히는 순간 그 스톤에서 제 색의 번개가 뻗고, 다 나타나는 순간 코어에서 사방으로 친다.
+    1/18 초마다 모양이 바뀐다 (지직거리며 친다)."""
+    if not look.get("strikes"):
+        return
+    from . import infinity
+    cx, cy, unit, _ = look["inf"]["at"]
+    cx, cy = cx + look["jolt"][0], cy + look["jolt"][1]
+    spin_t = t - scene.marks()["settle"]
+    tick = int(t * 18)
+    reach = min(w, h)
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setCompositionMode(QPainter.CompositionMode_Plus)
+    for i, k in look["strikes"]:
+        if i >= 0:
+            ang = infinity.gem_angle(i, spin_t)
+            at = pt(ang, infinity.GEM_R * unit)
+            for n in range(3):
+                rng = np.random.default_rng(tick * 131 + i * 17 + n)
+                far = pt(ang + float(rng.uniform(-55, 55)), reach * float(rng.uniform(0.34, 0.62)))
+                draw_bolt(p, bolt((cx + at.x(), cy + at.y()), (cx + far.x(), cy + far.y()), tick * 977 + i * 31 + n),
+                          infinity.GEMS[i], k, unit)
+        else:
+            for n in range(10):
+                rng = np.random.default_rng(tick * 151 + n)
+                ang = n * 36 + float(rng.uniform(-14, 14))
+                a0, far = pt(ang, infinity.REACH * unit * 0.9), pt(ang + float(rng.uniform(-10, 10)), reach * float(rng.uniform(0.6, 1.05)))
+                draw_bolt(p, bolt((cx + a0.x(), cy + a0.y()), (cx + far.x(), cy + far.y()), tick * 733 + n, 0.16),
+                          infinity.GEMS[n % 6] if n % 2 else QColor(255, 120, 130), k, unit * 1.2)
+    p.restore()
+
+
 def paint(p: QPainter, scene: R.Scene, a: Assets, t: float, w: int, h: int) -> None:
     """t 초 때의 장면 (덮개 창 전체). 투명하게 남긴 곳으로는 아래의 실제 화면이 보인다."""
     look = looks(scene, t)
@@ -592,7 +698,21 @@ def paint(p: QPainter, scene: R.Scene, a: Assets, t: float, w: int, h: int) -> N
     if look["black"] > 0:
         p.fillRect(QRectF(0, 0, w, h), _c(QColor(0, 0, 0), look["black"]))
     draw_static(p, a, t, w, h, look["static"])
-    if look["done"] is not None:                                    # 다 나타나 멈춘 코어 — 한 장을 크기 · 자리 · 진하기만 바꿔 찍는다
+    if look.get("inf") is not None:                                 # 인피니티 울트론 (infinity.py) — 자리 · 크기 · 진하기만 바꿔 매번 그린다
+        from . import infinity
+        cx, cy, unit, alpha = look["inf"]["at"]
+        flash, tint = look["flash"]
+        if flash > 0:                                               # 스톤이 박힐 때 · 다 나타날 때: 화면 전체가 번쩍인다
+            p.fillRect(QRectF(0, 0, w, h), _c(QColor(*tint), flash))
+        draw_strikes(p, scene, look, t, w, h)
+        if alpha > 0:
+            p.save()
+            p.translate(cx + look["jolt"][0], cy + look["jolt"][1])
+            p.scale(unit, unit)
+            p.setOpacity(alpha)
+            infinity.paint(p, t - scene.marks()["settle"], cv=look["inf"]["cv"], eye_open=look["inf"]["open"])
+            p.restore()
+    elif look["done"] is not None:                                    # 다 나타나 멈춘 코어 — 한 장을 크기 · 자리 · 진하기만 바꿔 찍는다
         cx, cy, size, alpha = look["done"]
         if alpha > 0:
             p.save()

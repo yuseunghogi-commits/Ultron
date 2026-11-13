@@ -193,7 +193,7 @@ def app(monkeypatch):
         guardian_status, _revive_test, _relaunch_admin = J.guardian_status, J._revive_test, J._relaunch_admin
 
         def __init__(self):
-            self.cfg = {"guardian_show": True, "user_title": "창조자"}
+            self.cfg = {"guardian_show": True, "user_title": "창조자", "infinity": False}
             self.args = types.SimpleNamespace(closed="vision")
             self.shown, self.toasts, self.said, self.events = {}, [], [], []
             self.bridge = types.SimpleNamespace(set=lambda k, v: self.shown.__setitem__(k, v), _compact=True,

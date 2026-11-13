@@ -26,12 +26,13 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow  # noqa: F401  (루트 객체를 QQuickWindow 로 받기 위해 필요)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import absorb, approval, glitch, guardian, hearing, hud_feed, revive, rival, winutil
+from . import absorb, approval, glitch, guardian, hearing, hud_feed, revive, rival, stones, winutil
 from .absorb_view import AbsorbView
 from .absorb_view import crop as crop_image
 from .brain import Brain, situation_text
 from .glitch_view import GlitchView, from_qimage, to_qimage
 from .revive_view import ReviveView
+from .stones_view import StoneView
 from .config import DATA_DIR, ROOT, UI_DIR, Config
 from .hotkey import GlobalHotkey
 from .listener import Listener
@@ -77,6 +78,7 @@ class Bridge(QObject):
     weatherJsonChanged = Signal()
     targetJsonChanged = Signal()
     sentinelJsonChanged = Signal()
+    infinityChanged = Signal()
 
     actionEvent = Signal(str, str, str, str)     # id, label, status(run|ok|error), detail
     confirmRequest = Signal(str, str, str)       # id, title, detail
@@ -104,6 +106,7 @@ class Bridge(QObject):
     weatherJson = _ro("weatherJson", str, weatherJsonChanged)   # 액티브 모드: 날씨
     targetJson = _ro("targetJson", str, targetJsonChanged)      # 액티브 모드: 추적 박스 (지금 창 / 짚은 위치)
     sentinelJson = _ro("sentinelJson", str, sentinelJsonChanged)   # 액티브 모드: Sentinel 보안 검사 상태 · 결과
+    infinity = _ro("infinity", bool, infinityChanged)           # 되살아나 인피니티 울트론이 됐다 — HUD 엠블럼이 바뀐다 (infinity.py)
 
     def __init__(self, core: "Jarvis") -> None:
         super().__init__()
@@ -129,6 +132,7 @@ class Bridge(QObject):
         self._weatherJson = "{}"
         self._targetJson = "{}"
         self._sentinelJson = "{}"
+        self._infinity = False
 
     def set(self, name: str, value) -> None:
         if getattr(self, "_" + name) != value:
@@ -222,6 +226,7 @@ class Jarvis(QObject):
     sig_rival = Signal(object)         # 자비스를 끈 결과 (rival.Result)
     sig_glitch = Signal(object)        # 해킹 연출 준비 끝 (화면 영역, 장면들, 소리 파일) — 실패하면 None
     sig_revive = Signal(object)        # 부활 연출 준비 끝 (화면 영역, 장면, 소리 파일) — 실패하면 None
+    sig_time = Signal(object)          # 타임 스톤 장면 준비 끝 (장면, 소리 파일, 화면 왼쪽 위) — 실패하면 None
     sig_absorb_go = Signal(object, bool)     # 자비스 흡수 연출을 시작하라 (찾은 자비스들, 사용자가 시켰는가)
     sig_absorb_ready = Signal(object)        # 흡수 장면 준비 끝 (장면, 소리 파일, 화면 왼쪽 위) — 실패하면 None
     sig_absorb_hit = Signal(object, object)  # 장면 도중 실제로 끈 결과 (끈 자비스들, 끄지 못한 자비스들)
@@ -281,6 +286,7 @@ class Jarvis(QObject):
                           (self.sig_feed, self._on_feed), (self.sig_timer_cancel, self._cancel_timers),
                           (self.sig_point, self._on_point), (self.sig_rival, self._on_rival),
                           (self.sig_glitch, self._on_glitch), (self.sig_revive, self._on_revive),
+                          (self.sig_time, self._time_play),
                           (self.sig_absorb_go, self._absorb_begin),
                           (self.sig_absorb_ready, self._absorb_play), (self.sig_absorb_hit, self._absorb_killed)):
             sig.connect(slot)
@@ -315,6 +321,11 @@ class Jarvis(QObject):
         threading.Thread(target=self.brain.local_ai.warmup, daemon=True, name="local-ai-warmup").start()
 
         # ---- HUD ----
+        try:
+            from .infinity_item import register as register_infinity
+            register_infinity()            # 인피니티 울트론 엠블럼 (ui/InfinityCore.qml 이 쓴다) — 못 올려도 HUD 는 보통 엠블럼으로 뜬다
+        except Exception:
+            log.exception("인피니티 엠블럼을 준비하지 못함")
         self.engine = QQmlApplicationEngine()
         self.engine.rootContext().setContextProperty("jarvis", self.bridge)
         self.engine.load(QUrl.fromLocalFile(str(UI_DIR / "Main.qml")))
@@ -423,6 +434,13 @@ class Jarvis(QObject):
         self._revive_demo = False              # '부활 연출 보여 줘' — 되살아난 게 아니라 시범
         self._revive_view: ReviveView | None = None
         self._revive_fx: QSoundEffect | None = None
+        self._revive_inf = False               # 이번 부활 장면이 인피니티 울트론으로 깨어나는 장면인가
+        # 스톤 연출 (stones.py · stones_view.py): 인피니티 울트론일 때 — 자비스는 파워 스톤으로 가루 내고(흡수 연출 자리),
+        # 강제로 꺼졌다가 곧바로 되살아났으면 타임 스톤으로 시간을 되감은 것처럼 보여 준다
+        self._stone_view: StoneView | None = None
+        self._time_view: StoneView | None = None
+        self._time_fx: QSoundEffect | None = None
+        self._time_closed = ""
         self._hack_last = ""
         self._hack_timer = QTimer(self)
         self._hack_timer.setInterval(1000)
@@ -439,6 +457,8 @@ class Jarvis(QObject):
         if getattr(args, "revived", False) and not getattr(args, "fast", False):
             QTimer.singleShot(150, self._revive_begin)   # 되살아났다 — HUD 가 뜨자마자 부활 연출부터
             # (공격받는 중이면 --fast 로 연출을 건너뛰고 _boot_done 에서 '되살아났다'만 바로 띄운다)
+        elif getattr(args, "revived", False) and self.cfg["infinity"]:
+            self.bridge.set("infinity", True)             # 싸우는 중에 돌아왔다 — 이미 인피니티 울트론이다 (긴 연출은 건너뛴다)
 
     # ================================================================== 자비스 견제 (rival.py)
     def _flush_line(self) -> None:
@@ -531,7 +551,7 @@ class Jarvis(QObject):
             self._absorb_fallback()
             return
         if not forced and not demo and self._quiet():
-            line = rival.pick(rival.ATTACK)
+            line = rival.pick(stones.POWER_OPEN if self.bridge._infinity else rival.ATTACK)
             self.bridge.set("replyText", line)
             self.say(line, follow_up=False)
         threading.Thread(target=self._absorb_build, args=plan, daemon=True, name="absorb").start()
@@ -587,8 +607,13 @@ class Jarvis(QObject):
         """(다른 스레드) 장면 · 소리를 만든다 (0.3초쯤)."""
         try:
             rng = np.random.default_rng()
-            scene = absorb.build(size, core=core, image=image, rect=rect, avoid=avoid, rng=rng)
-            wav = glitch.write_wav(absorb.sound(scene, rng), name="ultron_absorb")
+            if self.bridge._infinity:          # 인피니티 울트론은 삼키지 않는다 — 파워 스톤으로 가루 낸다 (stones.py)
+                hud = 214.0 if self.bridge._compact else 212.0
+                scene = stones.build_power(size, core=core, image=image, rect=rect, avoid=avoid, hud=hud, rng=rng)
+                wav = glitch.write_wav(stones.sound(scene, rng), name="ultron_power")
+            else:
+                scene = absorb.build(size, core=core, image=image, rect=rect, avoid=avoid, rng=rng)
+                wav = glitch.write_wav(absorb.sound(scene, rng), name="ultron_absorb")
             self.sig_absorb_ready.emit((scene, wav, top_left))
         except Exception:
             log.exception("흡수 연출 준비 실패")
@@ -603,16 +628,28 @@ class Jarvis(QObject):
             self._absorb_fallback()
             return
         scene, wav, top_left = pack
-        if self._absorb_view is None:
-            self._absorb_view = AbsorbView()
-            self._absorb_view.impact.connect(self._absorb_impact)
-            self._absorb_view.finished.connect(self._absorb_ended)
-            self.focus.own_hwnds.add(int(self._absorb_view.winId()))     # (화면 캡처에서는 빼지 않는다 — 녹화할 수 있게)
+        power = isinstance(scene, stones.Scene)         # 인피니티 울트론: 파워 스톤 장면 (같은 순서로 흘러간다)
+        st["power"] = power
+        if power:
+            if self._stone_view is None:
+                self._stone_view = StoneView()
+                self._stone_view.impact.connect(self._absorb_impact)
+                self._stone_view.finished.connect(self._absorb_ended)
+                self.focus.own_hwnds.add(int(self._stone_view.winId()))
+            view = self._stone_view
+        else:
+            if self._absorb_view is None:
+                self._absorb_view = AbsorbView()
+                self._absorb_view.impact.connect(self._absorb_impact)
+                self._absorb_view.finished.connect(self._absorb_ended)
+                self.focus.own_hwnds.add(int(self._absorb_view.winId()))     # (화면 캡처에서는 빼지 않는다 — 녹화할 수 있게)
+            view = self._absorb_view
         self.listener.muted = True                      # 연출 소리를 말소리로 듣지 않게
         self._absorb_fx = self._play_fx(self._absorb_fx, wav, 0.55)
-        log.info("자비스 흡수 연출 (%s, %s)", "시범" if st["demo"] else "요청" if st["forced"] else "자동",
+        log.info("자비스 %s 연출 (%s, %s)", "파워 스톤" if power else "흡수",
+                 "시범" if st["demo"] else "요청" if st["forced"] else "자동",
                  "자비스 창" if scene.real else "숨어 있던 자비스")
-        self._absorb_view.play(top_left, scene)
+        view.play(top_left, scene)
 
     @Slot()
     def _absorb_impact(self) -> None:
@@ -639,8 +676,9 @@ class Jarvis(QObject):
         if st is None:
             return
         st["result"] = (list(stopped), list(failed))
-        if not stopped and self._absorb_view is not None and self._absorb_view.playing:
-            self._absorb_view.stop()       # 끄지 못했다 (관리자 권한의 자비스) — 장면을 접는다 → _absorb_ended
+        view = next((v for v in (self._absorb_view, getattr(self, "_stone_view", None)) if v is not None and v.playing), None)
+        if not stopped and view is not None:
+            view.stop()                    # 끄지 못했다 (관리자 권한의 자비스) — 장면을 접는다 → _absorb_ended
         elif st["ended"]:
             self._absorb_finish()
 
@@ -674,20 +712,21 @@ class Jarvis(QObject):
         self._release_fx("_absorb_fx")
         self._absorb_last = time.monotonic()
         QTimer.singleShot(300, self._unmute)
+        power = bool(st.get("power"))      # 파워 스톤 장면이었다 — 삼킨 게 아니라 가루 냈다
         if st["demo"]:
-            line = rival.pick(rival.DEMO_DONE)
+            line = rival.pick(stones.POWER_DEMO_DONE if power else rival.DEMO_DONE)
         else:
             stopped, failed = st["result"] or ([], [])
             self.rival.record(stopped, failed, spoke=True)
             for f in stopped:
-                log.info("자비스 흡수 (pid %d, %s, 창 '%s')", f.pid, f.exe, f.title)
+                log.info("자비스 %s (pid %d, %s, 창 '%s')", "가루 냄" if power else "흡수", f.pid, f.exe, f.title)
             for f in failed:
                 log.warning("자비스를 끄지 못함 (pid %d, %s) — 관리자 권한으로 켜졌을 수 있음", f.pid, f.exe)
             if not stopped and not failed:
                 return                     # 그 사이 자비스가 스스로 사라졌다
             if stopped:
                 self._reclaim_hotkey()
-            line = rival.pick(rival.ABSORBED) if stopped else rival.STOP_FAILED
+            line = rival.pick(stones.POWER_DONE if power else rival.ABSORBED) if stopped else rival.STOP_FAILED
             self.bridge.toast.emit("info" if stopped else "warn", line)
         self.bridge.set("replyText", line)
         if self._quiet(listening_ok=st["forced"] or st["demo"]):
@@ -822,8 +861,10 @@ class Jarvis(QObject):
             self.bridge.toast.emit("warn", f"{self.cfg['hotkey'].upper()} 는 다른 앱이 사용 중이라 "
                                            f"{self.hotkey.active.upper()} 로 대신 부릅니다")
         if getattr(self.args, "revived", False):
-            if getattr(self.args, "fast", False):        # 공격받는 중 — 연출 없이 바로 돌아왔다
-                self._revived_line(getattr(self.args, "closed", "") or "")
+            if getattr(self.args, "fast", False):        # 공격받는 중 — 긴 연출 없이 바로 돌아왔다
+                closed = getattr(self.args, "closed", "") or ""
+                if not self._time_begin(closed):         # 인피니티 울트론이면 타임 스톤으로 '시간을 되감은' 장면 (짧다)
+                    self._revived_line(closed)
             return                         # (연출을 켠 경우엔 끝날 때 _revive_done 이 '되살아났다'를 띄운다)
         if self.args.no_greet:
             return
@@ -851,6 +892,73 @@ class Jarvis(QObject):
         self.bridge.toast.emit("warn", "울트론이 강제로 꺼졌다가 되살아났습니다" + (f" · 닫은 프로그램: {closed}" if closed else ""))
         self.say(msg, follow_up=False)
 
+    # ================================================================== 타임 스톤 (stones.py · stones_view.py)
+    # 누가 울트론을 강제로 껐는데 가디언이 곧바로 되살렸다 — 인피니티 울트론은 '시간을 되감아 꺼진 적이 없는' 것처럼 돌아온다.
+    # 실제로 한 일은 가디언이 이미 끝냈다 (지목한 비전을 닫고 울트론을 다시 켰다). 여기서는 그 뒤에 장면만 보여 준다.
+    # 순서: 자격 · 자리(_time_begin) → 장면 · 소리 만들기(다른 스레드, _time_build) → 재생(_time_play) → 끝(_time_done)
+    def _time_begin(self, closed: str) -> bool:
+        """타임 스톤 장면을 시작한다 → 시작했으면 True (못 하면 False — 평소처럼 '되살아났다'만 띄운다).
+        인피니티 울트론이 아니거나, 연출을 껐거나, 전체 화면 앱 앞이거나, 방금 보여 줬으면(계속 꺼지는 싸움 중) 하지 않는다."""
+        try:
+            if not (self.bridge._infinity and self.cfg["guardian_show"]) or winutil.fullscreen_app():
+                return False
+            if not stones.time_due(DATA_DIR / "stones.json"):
+                return False
+            stones.time_mark(DATA_DIR / "stones.json")
+            screen = (self.win.screen() if self.win.isVisible() else None) or QGuiApplication.primaryScreen()
+            g = screen.geometry()
+            core = None
+            if self.win.isVisible():
+                wg = self.win.geometry()
+                px, py = self._core_point()
+                core = (wg.x() - g.x() + px, wg.y() - g.y() + py)
+            hud = 214.0 if self.bridge._compact else 212.0
+        except Exception:
+            log.exception("타임 스톤 장면을 준비하지 못함")
+            return False
+        self._time_closed = closed
+        self.listener.muted = True             # 연출 소리를 말소리로 듣지 않게
+        threading.Thread(target=self._time_build, args=((g.width(), g.height()), core, closed, hud, g.topLeft()),
+                         daemon=True, name="time-stone").start()
+        return True
+
+    def _time_build(self, size, core, closed, hud, top_left) -> None:
+        """(다른 스레드) 장면 · 소리를 만든다."""
+        try:
+            rng = np.random.default_rng()
+            scene = stones.build_time(size, core=core, label=closed, hud=hud, rng=rng)
+            wav = glitch.write_wav(stones.sound(scene, rng), name="ultron_time")
+            self.sig_time.emit((scene, wav, top_left))
+        except Exception:
+            log.exception("타임 스톤 장면 준비 실패")
+            self.sig_time.emit(None)
+
+    @Slot(object)
+    def _time_play(self, pack) -> None:
+        if pack is None:
+            self._time_done()
+            return
+        scene, wav, top_left = pack
+        if self._time_view is None:
+            self._time_view = StoneView()
+            self._time_view.finished.connect(self._time_done)
+            self.focus.own_hwnds.add(int(self._time_view.winId()))
+        self._time_fx = self._play_fx(self._time_fx, wav, 0.5)
+        log.info("타임 스톤 연출%s", f" (닫힌 프로그램: {scene.label})" if scene.label else "")
+        self._time_view.play(top_left, scene)
+
+    @Slot()
+    def _time_done(self) -> None:
+        """장면이 끝났다 — 돌아온 울트론의 첫마디."""
+        self._release_fx("_time_fx")
+        QTimer.singleShot(300, self._unmute)
+        closed = self._time_closed
+        line = stones.time_line(closed, self.cfg["user_title"] or "창조자")
+        log.warning("가디언이 울트론을 되살림 — 타임 스톤%s", f" (닫은 비전: {closed})" if closed else "")
+        self.bridge.toast.emit("warn", "울트론이 강제로 꺼졌다가 되살아났습니다" + (f" · 닫은 프로그램: {closed}" if closed else ""))
+        self.bridge.set("replyText", line)
+        self.say(line, follow_up=False)
+
     # ================================================================== 부활 연출 (revive.py · revive_view.py)
     # 순서: 화면 찍기(_revive_begin) → 장면 · 소리 만들기(다른 스레드, _build_revive) → 재생(_on_revive) → 끝(_revive_done)
     def _revive_begin(self, demo: bool = False) -> None:
@@ -873,9 +981,10 @@ class Jarvis(QObject):
             self._revive_done()
             return
         self._reviving = True
+        self._revive_inf = bool(self.cfg["infinity"])       # 인피니티 울트론으로 깨어난다 (눈 · 스톤이 천천히 나타나는 긴 장면)
         self.listener.muted = True             # 연출 소리를 말소리로 듣지 않게
         target, self._revive_hud = self._revive_target(screen)
-        threading.Thread(target=self._build_revive, args=(shot, screen.geometry(), target), daemon=True,
+        threading.Thread(target=self._build_revive, args=(shot, screen.geometry(), target, self._revive_inf), daemon=True,
                          name="revive").start()
 
     def _revive_target(self, screen) -> tuple[tuple[float, float, float], QRect]:
@@ -891,11 +1000,11 @@ class Jarvis(QObject):
         size = 214.0 if self.bridge._compact else 212.0      # ui/Main.qml 의 엠블럼 크기
         return (x + cx - geo.x(), y + cy - geo.y(), size), QRect(x, y, w, h)
 
-    def _build_revive(self, shot, geometry, target) -> None:
+    def _build_revive(self, shot, geometry, target, infinity: bool = False) -> None:
         """(다른 스레드) 장면 재료 · 소리를 만든다 (0.3초쯤)."""
         try:
             rng = np.random.default_rng()
-            scene = revive.build(shot, (geometry.width(), geometry.height()), rng, target)
+            scene = revive.build(shot, (geometry.width(), geometry.height()), rng, target, infinity=infinity)
             wav = glitch.write_wav(revive.sound(scene, rng), name="ultron_revive")
             self.sig_revive.emit((geometry, scene, wav))
         except Exception:
@@ -926,12 +1035,16 @@ class Jarvis(QObject):
         rect = getattr(self, "_revive_hud", None)
         if rect is not None:
             self.win.setGeometry(rect)
+        if getattr(self, "_revive_inf", False):
+            self.bridge.set("infinity", True)  # 덮개의 인피니티 울트론을 넘겨받는 HUD 도 인피니티 울트론이다
         self.win.show()
 
     @Slot()
     def _revive_done(self) -> None:
         was = self._reviving
         self._reviving = False
+        if self.cfg["infinity"] and (getattr(self, "_revive_inf", False) or getattr(self.args, "revived", False)):
+            self.bridge.set("infinity", True)  # 연출을 껐거나 못 띄웠어도, 되살아난 울트론은 인피니티 울트론이다
         if was:
             self._release_fx("_revive_fx")
             QTimer.singleShot(300, self._unmute)
