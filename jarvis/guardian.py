@@ -123,6 +123,17 @@ def is_enemy(title: str, paths, enemy_installs: list[str], enemy_titles: list[st
     return any(usable_install(inst, own_root) and any(is_within(p, inst) for p in paths) for inst in enemy_installs)
 
 
+def _lazy(proc, key: str):
+    """프로그램 정보 하나 — process_iter 가 이미 읽어 둔 것(info)이 있으면 그것, 없으면 그때 읽는다 (못 읽으면 None)."""
+    info = getattr(proc, "info", None) or {}
+    if key in info:
+        return info.get(key)
+    try:
+        return getattr(proc, key)()
+    except Exception:
+        return None
+
+
 def script_dir(cmdline: list[str]) -> str:
     """파이썬 프로그램이면 실행한 스크립트(main.py)가 있는 폴더. 비전도 울트론처럼 pythonw.exe 로 돌기 쉬워서,
     실행 파일(pythonw.exe) 위치만 보면 어느 폴더의 프로그램인지 알 수 없다 — 스크립트 위치로 본다."""
@@ -455,20 +466,25 @@ class Guard:
             return []
         by_title = _title_owners(titles) if titles else {}
         out = []
-        for proc in psutil.process_iter(["pid", "exe", "cmdline", "cwd", "name"]):
+        # 모든 프로그램의 명령줄 · 작업 폴더를 읽으면 느리다 (Windows 에선 프로그램마다 그 메모리를 들여다봐야 한다 — 발열).
+        # 이름 · 실행 파일만 먼저 읽고, 명령줄 · 작업 폴더는 파이썬 프로그램에서만 읽는다 (스크립트를 돌리는 건 파이썬뿐이다).
+        for proc in psutil.process_iter(["pid", "name", "exe"]):
             try:
                 if proc.pid == os.getpid():
                     continue
                 exe = proc.info.get("exe") or ""
-                cmd = proc.info.get("cmdline") or []
-                folder = script_dir(cmd)                             # 비전 본체: main.py 가 있는 폴더
-                paths = [exe]
-                if folder:
-                    paths.append(ntpath.join(folder, "main.py"))
                 name = (proc.info.get("name") or "").lower()
-                is_py = name.startswith("python") or exe.lower().endswith(("python.exe", "pythonw.exe", "python3.exe"))
-                if is_py and proc.info.get("cwd"):                   # 비전의 가디언: 'python -m jarvis.guardian' 은 스크립트가
-                    paths.append(proc.info["cwd"])                   # 없다 — 작업 폴더(비전 폴더)로 알아본다
+                is_py = (name.startswith("python") or name in ("py.exe", "pyw.exe")
+                         or exe.lower().endswith(("python.exe", "pythonw.exe", "python3.exe")))
+                paths = [exe]
+                folder = ""
+                if is_py:
+                    folder = script_dir(_lazy(proc, "cmdline") or [])   # 비전 본체: main.py 가 있는 폴더
+                    if folder:
+                        paths.append(ntpath.join(folder, "main.py"))
+                    cwd = _lazy(proc, "cwd")
+                    if cwd:                                          # 비전의 가디언: 'python -m jarvis.guardian' 은 스크립트가
+                        paths.append(cwd)                            # 없다 — 작업 폴더(비전 폴더)로 알아본다
                 title = by_title.get(proc.pid, "")
                 if is_enemy(title, paths, installs, titles, own_root):
                     label = title or (ntpath.basename(folder.rstrip("\\")) if folder else ntpath.basename(exe)) or "비전"

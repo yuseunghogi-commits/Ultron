@@ -59,10 +59,28 @@ Item {
     readonly property real breath: 0.5 + 0.5 * Math.sin(t * 1.15)
     readonly property real sway: 2.0 * Math.sin(t * 0.23) + 1.0 * Math.sin(t * 0.11 + 1.3)
 
-    FrameAnimation {
-        running: e.visible
+    // 움직임은 화면 주사율(60~144번/초)이 아니라 타이머로 정해진 빠르기로만 갱신한다 — 발열 줄이기.
+    // 대기 중엔 1초에 20번, 듣거나 생각할 땐 30번. 천천히 도는 문양이라 눈으로는 차이가 거의 없다.
+    // 숨었거나(paused — 창이 숨음 · 인피니티 울트론이 덮음) 안 보이면 아예 멈춘다.
+    property bool paused: false
+    // clocked: 스스로 돌지 않고 바깥 박자(tick)로만 움직인다. 한 창에 움직이는 것이 여럿이면 저마다 타이머를 돌릴 때
+    // 박자가 어긋나 화면을 더 자주 다시 그리게 된다 — 펼친 화면은 Main.qml 의 박자 하나로 함께 움직인다.
+    property bool clocked: false
+    readonly property int fps: (mode === "thinking" || mode === "listening") ? 30 : 20
+    Timer {
+        id: driver
+        interval: Math.round(1000 / e.fps)
+        repeat: true
+        running: e.visible && !e.paused && !e.clocked
+        property real last: 0
+        onRunningChanged: last = 0
         onTriggered: {
-            const dt = Math.min(frameTime, 0.05)
+            const now = Date.now() / 1000
+            e.tick(last > 0 ? Math.min(now - last, 0.1) : interval / 1000)
+            last = now
+        }
+    }
+    function tick(dt) {
             const f = k => 1 - Math.exp(-dt * k)
             e.t += dt
             e.spd += (e.speedTarget - e.spd) * f(1.6)
@@ -81,13 +99,12 @@ Item {
             e.aCore += dt * 5 * e.spd
             e.aOrbit += dt * (50 + 130 * e.thinkAmt)
             e.scanA += dt * (40 + 150 * e.listenAmt + 90 * e.thinkAmt)
-        }
     }
 
     // 가끔 깜빡임 (대기 · 말하는 중에만)
     Timer {
         interval: 4200; repeat: true
-        running: e.visible && e.mode !== "offline"
+        running: e.visible && !e.paused && e.mode !== "offline"
         onTriggered: {
             interval = 3500 + Math.random() * 5500
             if (e.mode === "standby") blinkAnim.restart()

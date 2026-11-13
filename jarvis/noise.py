@@ -91,6 +91,7 @@ class StreamVad:
         self._raw = self._make(model_path, threshold)
         self._clean = None
         self._den = None
+        self._den_idle = False         # 소음 제거 갈래를 쉬는 중 (조용한 곳)
         if denoise_path:
             import sherpa_onnx
             cfg = sherpa_onnx.OnlineSpeechDenoiserConfig(
@@ -125,12 +126,20 @@ class StreamVad:
             v.pop()
         return speech
 
-    def feed(self, block: np.ndarray) -> bool:
+    def feed(self, block: np.ndarray, denoise: bool = True) -> bool:
+        """denoise: 소음 제거 갈래(②)도 돌린다. 조용한 곳에선 ①만으로 정확하므로 꺼서 계산을 아낀다 (블록당 약 2ms — 발열).
+        꺼 두었다가 다시 켤 때는 그 갈래를 처음 상태로 되돌려 쓴다 (오래된 상태를 끌고 오지 않게)."""
         x = block.astype(np.float32) / 32768.0
         speech = self._step(self._raw, x)
-        if self._den is not None:
+        if self._den is not None and denoise:
+            if self._den_idle:
+                self._den.reset()
+                self._clean.reset()
+                self._den_idle = False
             y = np.asarray(self._den.run(x, RATE).samples, dtype=np.float32)
             speech = self._step(self._clean, y) or speech
+        elif self._den is not None:
+            self._den_idle = True
         return speech
 
     def reset(self) -> None:

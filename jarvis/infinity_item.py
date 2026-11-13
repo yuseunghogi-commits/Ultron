@@ -13,7 +13,12 @@ from PySide6.QtGui import QPainter
 from PySide6.QtQml import qmlRegisterType
 from PySide6.QtQuick import QQuickPaintedItem
 
-FRAME_MS = 50              # 1초에 20장 — 천천히 도는 문양이라 넉넉하다 (늘 도니 발열을 줄이려 30 → 20)
+FPS = {"thinking": 24, "listening": 24}   # 1초에 몇 장 그리는가 — 듣거나 생각할 땐 조금 더 부드럽게
+FPS_IDLE = 15              # 대기 중 — 천천히 도는 문양이라 15장이면 충분하다 (늘 켜져 있으니 발열을 줄인다)
+
+
+def fps(mode: str) -> int:
+    return FPS.get(mode, FPS_IDLE)
 SPEED = {"thinking": 3.2, "listening": 1.5, "offline": 0.3}      # 도는 빠르기 (보통 = 1)
 EYES = {"thinking": 0.62, "listening": 1.22, "offline": 0.45, "boot": 0.8}   # 눈을 뜬 정도 (보통 = 1)
 
@@ -34,17 +39,21 @@ def follow(now: float, target: float, dt: float, rate: float = 6.0) -> float:
 class InfinityEmblem(QQuickPaintedItem):
     modeChanged = Signal()
     levelChanged = Signal()
+    pausedChanged = Signal()
+    clockedChanged = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._mode = "standby"
         self._level = 0.0
+        self._paused = False       # 창이 숨었다 (Main.qml 이 !win.visible 로 묶는다) — 그리지 않는다
+        self._clocked = False      # 바깥 박자(tick)로만 움직인다 — 펼친 화면은 Main.qml 의 박자 하나로 함께 그린다
         self._t = 0.0              # 문양이 도는 데 쓰는 시간 (상태에 따라 빠르게 · 느리게 흐른다)
         self._spd = 1.0
         self._eye = 1.0
         self._clock = QElapsedTimer()
         self._timer = QTimer(self)
-        self._timer.setInterval(FRAME_MS)
+        self._timer.setInterval(round(1000 / fps(self._mode)))
         self._timer.timeout.connect(self._tick)
         self.setAntialiasing(True)
         self.visibleChanged.connect(self._sync)
@@ -57,6 +66,7 @@ class InfinityEmblem(QQuickPaintedItem):
         value = str(value or "standby")
         if value != self._mode:
             self._mode = value
+            self._timer.setInterval(round(1000 / fps(value)))   # 상태에 따라 빠르기를 바꾼다
             self.modeChanged.emit()
 
     def _get_level(self) -> float:
@@ -68,14 +78,36 @@ class InfinityEmblem(QQuickPaintedItem):
             self._level = value
             self.levelChanged.emit()
 
+    def _get_paused(self) -> bool:
+        return self._paused
+
+    def _set_paused(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._paused:
+            self._paused = value
+            self.pausedChanged.emit()
+            self._sync()
+
+    def _get_clocked(self) -> bool:
+        return self._clocked
+
+    def _set_clocked(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._clocked:
+            self._clocked = value
+            self.clockedChanged.emit()
+            self._sync()
+
+    clocked = Property(bool, _get_clocked, _set_clocked, notify=clockedChanged)
     mode = Property(str, _get_mode, _set_mode, notify=modeChanged)        # boot | standby | listening | thinking | offline
+    paused = Property(bool, _get_paused, _set_paused, notify=pausedChanged)   # 창이 숨었으면 True — 타이머도 멈춘다 (발열)
     level = Property(float, _get_level, _set_level, notify=levelChanged)  # 0..1 (마이크) — 들을 때 눈이 소리에 맞춰 조금 더 커진다
 
     # (_sync · _tick 에는 @Slot 을 꼭 붙인다 — 안 붙이면 QML 이 만든 항목에서는 신호가 연결돼도 불리지 않는다)
     @Slot()
     def _sync(self) -> None:
-        """보일 때만 움직인다 (숨어 있으면 그리지 않는다)."""
-        if self.isVisible():
+        """보이고 창이 떠 있을 때만 움직인다 (숨어 있으면 타이머까지 멈춰 아무 일도 하지 않는다)."""
+        if self.isVisible() and not self._paused and not self._clocked:
             self._clock.start()
             self._timer.start()
         else:
@@ -83,7 +115,14 @@ class InfinityEmblem(QQuickPaintedItem):
 
     @Slot()
     def _tick(self) -> None:
-        dt = min(0.1, self._clock.restart() / 1000)
+        self.tick(min(0.1, self._clock.restart() / 1000))
+
+    @Slot(float)
+    def tick(self, dt: float) -> None:
+        """한 박자만큼 움직이고 다시 그린다 (스스로의 타이머 또는 바깥 박자가 부른다)."""
+        if self._paused or not self.isVisible():
+            return
+        dt = min(0.1, max(0.0, float(dt)))
         self._spd = follow(self._spd, speed(self._mode), dt, 3.0)
         self._t += dt * self._spd
         wide = eye(self._mode) + (0.12 * min(1.0, self._level) if self._mode == "listening" else 0.0)

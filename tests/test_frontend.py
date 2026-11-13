@@ -137,7 +137,7 @@ def test_babble_mode_cuts_out_the_near_loud_voice(monkeypatch):
         threshold = L.vad_threshold(1.0)
 
         def __init__(self, *a): pass
-        def feed(self, block): return True
+        def feed(self, block, denoise=True): return True
         def reset(self): pass
 
     class Models:
@@ -255,3 +255,41 @@ def test_best_voice_picks_the_window_where_owner_speaks():
     assert not gate.check(gate.best_voice(all_other), wake=True).ok       # 주인이 없으면 여전히 거부
     gate.cfg["owner_only"] = False
     assert gate.best_voice(pcm) is None                                    # 주인 전용이 아니면 평소 방식
+
+
+def test_denoiser_runs_only_when_asked_and_starts_fresh_after_a_rest():
+    """조용한 곳에선 소음 제거 갈래를 쉬게 해 계산을 아낀다(발열). 다시 켤 땐 오래된 상태를 버리고 처음부터."""
+    import numpy as np
+    from jarvis.noise import StreamVad
+    calls = []
+
+    class Den:
+        def run(self, x, rate):
+            calls.append("run")
+            return type("R", (), {"samples": x})()
+
+        def reset(self):
+            calls.append("reset")
+
+    class Vad:
+        def accept_waveform(self, x): pass
+        def is_speech_detected(self): return False
+        def empty(self): return True
+        def reset(self): calls.append("vreset")
+
+    sv = StreamVad.__new__(StreamVad)
+    sv.threshold, sv._raw, sv._clean, sv._den, sv._den_idle = 0.5, Vad(), Vad(), Den(), False
+    block = np.zeros(480, np.int16)
+    sv.feed(block, denoise=True)
+    assert calls == ["run"]
+    calls.clear()
+    for _ in range(5):
+        sv.feed(block, denoise=False)                                # 조용하다 — 소음 제거를 돌리지 않는다
+    assert calls == [] and sv._den_idle
+    sv.feed(block, denoise=True)                                     # 다시 시끄러워졌다 — 처음 상태로 되돌린 뒤 돌린다
+    assert calls == ["reset", "vreset", "run"] and not sv._den_idle
+
+
+def test_denoiser_switch_has_a_gap_so_it_does_not_flicker():
+    from jarvis import listener as L
+    assert L.NOISE_MIN < L.DENOISE_OFF < L.DENOISE_ON < L.ABS_FLOOR * 1.0   # 조용한 방(바닥 소음)에선 꺼지고, 켜고 끄는 기준 사이에 틈
