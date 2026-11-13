@@ -2231,10 +2231,13 @@ class Jarvis(QObject):
             return "가디언 꺼짐 — 누가 울트론을 강제로 꺼도 되살리지 않습니다."
         if sys.platform != "win32":
             return "가디언은 Windows 에서만 동작합니다."
-        admin = "· 지금 관리자 권한으로 돌고 있어 일반 권한 비전은 끄지 못합니다 " if guardian.is_admin() else (
+        admin = "· 지금 관리자 권한으로 돌고 있어 일반 권한 적은 끄지 못합니다 " if guardian.is_admin() else (
             "· 관리자 권한이 아닙니다 (‘관리자 권한으로 켜 줘’ 라고 하면 올립니다) " if self.cfg["guardian_admin"] else "")
-        if guardian.running(DATA_DIR):
-            return "가디언 작동 중 — 강제로 꺼지면 1초 안에 되살립니다 " + admin + "('부활 시험해 줘'로 확인)"
+        n = guardian.count_running(DATA_DIR)
+        if n >= guardian.SLOTS:
+            return f"가디언 {n}개 작동 중 — 서로 지킨다. 강제로 꺼지면 1초 안에 되살립니다 " + admin + "('부활 시험해 줘'로 확인)"
+        if n > 0:
+            return f"가디언 {n}/{guardian.SLOTS}개 작동 중 (나머지를 띄우는 중…) " + admin
         return "가디언을 띄우는 중… (몇 초 뒤 다시 열어 보세요)"
 
     def _relaunch_admin(self) -> None:
@@ -2280,12 +2283,11 @@ class Jarvis(QObject):
         os._exit(3)                            # 정리 없이 바로 꺼진다 — 작업 관리자에서 '작업 끝내기' 한 것과 같다
 
     def _guardian_tick(self) -> None:
-        """5초마다: 가디언을 켜 두었는데 가디언이 없으면(설정에서 방금 켰거나, 누가 가디언을 껐으면) 다시 띄운다."""
-        if not self.cfg["guardian"] or self._guard_dev or sys.platform != "win32":
+        """5초마다: 가디언 둘 가운데 꺼진 게 있으면(적이 껐으면) 다시 띄운다 — 가디언끼리도 서로 지키지만, 울트론도 함께 채운다."""
+        if self._guard_dev or sys.platform != "win32":
             return
         try:
-            if not guardian.running(DATA_DIR):
-                self._start_guardian()
+            guardian.spawn(DATA_DIR)          # 빈 자리(꺼진 가디언)만큼 다시 띄운다 — 둘이 서로 지키게
         except Exception as e:
             log.debug("가디언 확인 실패: %s", e)
 

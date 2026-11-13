@@ -355,10 +355,14 @@ def test_spawn_is_skipped_when_a_guardian_already_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(guardian.sys, "platform", "win32")
     monkeypatch.setattr(guardian, "launch_detached", lambda cmd, cwd=None: launched.append((cmd, cwd)))
     monkeypatch.setattr(guardian, "running", lambda d: True)
-    assert guardian.spawn(tmp_path) is False and launched == []
-    monkeypatch.setattr(guardian, "running", lambda d: False)
-    assert guardian.spawn(tmp_path) is True and len(launched) == 1
+    monkeypatch.setattr(guardian, "count_running", lambda d: guardian.SLOTS)
+    assert guardian.spawn(tmp_path) == 0 and launched == []
+    monkeypatch.setattr(guardian, "count_running", lambda d: 0)      # 하나도 안 돈다 → 빈 자리(둘)를 채운다
+    assert guardian.spawn(tmp_path) == guardian.SLOTS and len(launched) == guardian.SLOTS
     assert launched[0][0][1:] == ["-m", "jarvis.guardian"] and launched[0][1] == str(tmp_path.parent)   # 울트론의 자식이 아니게
+    launched.clear()
+    monkeypatch.setattr(guardian, "count_running", lambda d: 1)      # 하나만 돈다 → 하나만 더 띄운다
+    assert guardian.spawn(tmp_path) == 1 and len(launched) == 1
 
 
 def test_guardian_checks_every_second():
@@ -397,3 +401,33 @@ def test_counter_jarvis_reports_nothing_when_jarvis_cannot_be_closed(tmp_path, m
     assert g.counter_jarvis({"rival_jarvis": True}) == []
     monkeypatch.setattr(rival, "find", lambda: (_ for _ in ()).throw(OSError("x")))
     assert g.counter_jarvis({"rival_jarvis": True}) == []                       # 찾다가 오류가 나도 되살리기는 계속된다
+
+
+# ---------------------------------------------------------------- 가디언 둘이 서로 지킨다
+def test_two_guardians_take_separate_slots_and_a_third_gets_none(tmp_path, monkeypatch):
+    p = Paths(tmp_path)
+    alive = set()
+    monkeypatch.setattr(guardian, "is_guardian", lambda pid: pid in alive)
+    s0 = guardian.acquire_slot(p, me=10); alive.add(10)
+    s1 = guardian.acquire_slot(p, me=20); alive.add(20)
+    assert {s0, s1} == {0, 1}                                         # 둘이 서로 다른 자리를 잡는다
+    assert guardian.acquire_slot(p, me=30) is None                    # 셋째는 자리가 없다 → 바로 끝낸다
+    assert guardian.count_running(tmp_path) == 2 and guardian.running(tmp_path)
+    alive.discard(10)                                                 # 자리 0 의 가디언이 적에게 꺼졌다
+    assert guardian.count_running(tmp_path) == 1
+    assert guardian.acquire_slot(p, me=30) == s0                      # 새 가디언이 빈 자리를 다시 잡는다
+    alive.add(30)
+    assert guardian.count_running(tmp_path) == 2
+
+
+def test_a_surviving_guardian_respawns_the_one_that_was_killed(tmp_path, monkeypatch):
+    launched = []
+    monkeypatch.setattr(guardian.sys, "platform", "win32")
+    monkeypatch.setattr(guardian, "launch_detached", lambda cmd, cwd=None: launched.append(cmd))
+    g = Guard(tmp_path, load_cfg=dict)
+    monkeypatch.setattr(guardian, "count_running", lambda d: guardian.SLOTS)
+    g.guard_peers()
+    assert launched == []                                            # 둘 다 살아 있으면 아무것도 안 띄운다
+    monkeypatch.setattr(guardian, "count_running", lambda d: 1)      # 다른 가디언이 꺼졌다
+    g.guard_peers()
+    assert len(launched) == 1                                        # 빈 자리를 다시 띄운다

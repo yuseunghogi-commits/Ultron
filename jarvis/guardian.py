@@ -2,7 +2,10 @@
 
 왜 따로 도는가: 누가 울트론을 강제로 끄면 울트론 안에서는 아무 코드도 돌지 못한다 (그 순간 사라지므로).
 그래서 밖에서 지켜보다가, 울트론이 꺼지면 다시 켜 주는 역할을 울트론 바깥의 이 프로그램이 한다.
-반대로 울트론도 5초마다 가디언이 살아 있는지 보고, 없으면 다시 띄운다 — 서로가 서로를 지킨다.
+반대로 울트론도 가디언이 살아 있는지 보고, 없으면 다시 띄운다 — 서로가 서로를 지킨다.
+가디언은 하나가 아니라 둘이 돈다 (SLOTS). 자비스 같은 적이 가디언을 먼저 꺼도, 남은 가디언이 1초 안에 다시 띄운다.
+울트론을 영영 끄려면 울트론과 가디언 둘을 같은 순간에 모두 꺼야 하는데, 누구 하나라도 남으면 나머지를 되살리므로 사실상 막힌다.
+(가장 확실한 것은 '되살릴 때 관리자 권한으로' — 그러면 가디언도 관리자 권한으로 떠서 일반 권한의 적은 아예 끄지 못한다.)
 
 하는 일 (설정 'guardian' 이 켜졌을 때만, Windows 전용):
   · 울트론이 살아 있는지 3초마다 본다. 프로세스 번호만 보지 않고 '그 번호의 프로그램이 켜진 시각'까지 맞춰 본다
@@ -36,6 +39,7 @@ from typing import Callable
 log = logging.getLogger("jarvis.guardian")
 
 POLL = 1.0                 # 몇 초마다 살아 있는지 보는가 (프로세스 번호 하나를 보는 일이라 1초마다 봐도 부담이 없다)
+SLOTS = 2                  # 동시에 도는 가디언 수 — 서로를 지킨다 (적이 하나를 꺼도 남은 하나가 다시 띄운다)
 REGISTER_WAIT = 10.0       # 다시 켠 울트론이 '나 떴다'(등록)를 알릴 때까지 기다리는 최대 시간. 그 안에 또 켜지 않되,
                            # 이 안에 등록이 없으면 (뜨다 말고 또 꺼졌다) 다시 켠다 — 예전엔 30초를 기다려 빈틈이 컸다
 REVIVE_QUIET = 30.0        # 되살린 지 이 안에 또 꺼지면 (공격받는 중) 긴 연출 없이 바로 돌아온다 (연출 끝나기 전에 또 꺼지는 반복 방지)
@@ -139,7 +143,11 @@ class Paths:
 
     @property
     def lock(self) -> Path:
-        return self.data / "guardian.lock"      # 지금 도는 가디언의 번호 (가디언이 여러 개 뜨지 않게)
+        return self.lock_at(0)                   # 지금 도는 가디언의 번호 (자리 0)
+
+    def lock_at(self, slot: int) -> Path:
+        """가디언 자리별 잠금 파일. 자리 0 은 guardian.lock (예전과 같음), 1 부터는 guardian1.lock …"""
+        return self.data / ("guardian.lock" if slot == 0 else f"guardian{slot}.lock")
 
 
 def read_info(p: Paths) -> dict:
@@ -187,38 +195,44 @@ def is_guardian(pid: int) -> bool:
         return False
 
 
-def _lock_pid(p: Paths) -> int | None:
+def _lock_pid(p: Paths, slot: int = 0) -> int | None:
     try:
-        text = p.lock.read_text(encoding="utf-8").strip()
+        text = p.lock_at(slot).read_text(encoding="utf-8").strip()
         return int(text) if text else None
     except (OSError, ValueError):
         return None
 
 
+def count_running(data_dir: Path) -> int:
+    """지금 살아서 돌고 있는 가디언 수 (자리마다 하나씩)."""
+    p = Paths(Path(data_dir))
+    return sum(1 for s in range(SLOTS) if (lambda pid: bool(pid) and is_guardian(pid))(_lock_pid(p, s)))
+
+
 def running(data_dir: Path) -> bool:
-    """가디언이 지금 돌고 있는가."""
-    pid = _lock_pid(Paths(Path(data_dir)))
-    return bool(pid) and is_guardian(pid)
+    """가디언이 하나라도 돌고 있는가."""
+    return count_running(data_dir) > 0
 
 
-def acquire_lock(p: Paths, me: int | None = None) -> bool:
-    """가디언 자리 차지하기 → 차지했으면 True. 다른 가디언이 이미 돌면 False (이 가디언은 그냥 끝낸다)."""
+def acquire_lock(p: Paths, me: int | None = None, slot: int = 0) -> bool:
+    """가디언 자리(slot) 차지하기 → 차지했으면 True. 그 자리를 다른 가디언이 이미 지키면 False."""
     me = me or os.getpid()
+    lock = p.lock_at(slot)
     for _ in range(2):
         try:
-            fd = os.open(p.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
-            holder = _lock_pid(p)
+            holder = _lock_pid(p, slot)
             if holder and holder != me and is_guardian(holder):
-                return False                    # 다른 가디언이 이미 지킨다
+                return False                    # 그 자리를 다른 가디언이 지킨다
             if holder is None:
                 try:
-                    if time.time() - p.lock.stat().st_mtime < LOCK_STALE:
-                        return False            # 다른 가디언이 막 자리 잡는 중
+                    if time.time() - lock.stat().st_mtime < LOCK_STALE:
+                        return False            # 다른 가디언이 막 그 자리를 잡는 중
                 except OSError:
                     pass
             try:
-                p.lock.unlink()                 # 버려진 잠금 (그 가디언은 이미 없다)
+                lock.unlink()                   # 버려진 잠금 (그 가디언은 이미 없다)
             except OSError:
                 pass
             continue
@@ -228,10 +242,18 @@ def acquire_lock(p: Paths, me: int | None = None) -> bool:
     return False
 
 
-def release_lock(p: Paths, me: int | None = None) -> None:
-    if _lock_pid(p) == (me or os.getpid()):
+def acquire_slot(p: Paths, me: int | None = None) -> int | None:
+    """빈 가디언 자리를 하나 차지한다 → 그 자리 번호 (다 찼으면 None → 이 가디언은 끝낸다)."""
+    for slot in range(SLOTS):
+        if acquire_lock(p, me, slot):
+            return slot
+    return None
+
+
+def release_lock(p: Paths, me: int | None = None, slot: int = 0) -> None:
+    if _lock_pid(p, slot) == (me or os.getpid()):
         try:
-            p.lock.unlink()
+            p.lock_at(slot).unlink()
         except OSError:
             pass
 
@@ -340,16 +362,19 @@ def mark_quit(data_dir: Path) -> None:
         pass
 
 
-def spawn(data_dir: Path) -> bool:
-    """가디언을 따로 띄운다 (이미 돌고 있으면 띄우지 않는다) → 띄웠으면 True."""
-    if sys.platform != "win32" or running(data_dir):
-        return False
-    try:
-        launch_detached([_python(), "-m", GUARDIAN_MODULE], str(Path(data_dir).parent))   # 울트론의 자식이 되지 않게
-        return True
-    except Exception as e:
-        log.warning("가디언을 띄우지 못했습니다: %s", e)
-        return False
+def spawn(data_dir: Path) -> int:
+    """빈 가디언 자리만큼 가디언을 따로 띄운다 (둘이 다 돌고 있으면 아무것도 띄우지 않는다) → 띄운 수.
+    새로 뜬 가디언은 스스로 빈 자리를 잡는다 (자리가 없으면 바로 끝난다) — 그래서 둘보다 많이 쌓이지 않는다."""
+    if sys.platform != "win32":
+        return 0
+    launched = 0
+    for _ in range(max(0, SLOTS - count_running(data_dir))):
+        try:
+            launch_detached([_python(), "-m", GUARDIAN_MODULE], str(Path(data_dir).parent))   # 울트론의 자식이 되지 않게
+            launched += 1
+        except Exception as e:
+            log.warning("가디언을 띄우지 못했습니다: %s", e)
+    return launched
 
 
 # ---------------------------------------------------------------- 가디언 본체 (별개 프로세스로 돈다)
@@ -361,6 +386,7 @@ class Guard:
     awaiting: tuple | None = None               # 방금 다시 켰다: ((죽은 번호, 켜진 시각), 기다림이 끝나는 시각)
     revived: int = 0                            # 지금까지 되살린 횟수 (기록용)
     last_revive: float | None = None            # 마지막으로 되살린 때 (초) — 곧바로 또 꺼지면 '공격받는 중'으로 본다
+    slot: int = 0                               # 이 가디언이 차지한 자리 (0 또는 1)
 
     def __post_init__(self) -> None:
         self.paths = Paths(Path(self.data_dir))
@@ -488,11 +514,21 @@ class Guard:
             log.info("되살림 %d번째%s", self.revived, " (빠르게)" if fast else "")
         return action
 
+    def guard_peers(self) -> None:
+        """다른 가디언이 꺼졌으면(적이 껐거나 사라졌으면) 빈 자리를 다시 채운다 — 서로가 서로를 지킨다."""
+        try:
+            if count_running(self.data_dir) < SLOTS:
+                spawn(self.data_dir)
+        except Exception:
+            log.debug("다른 가디언 확인 실패", exc_info=True)
+
     def run(self) -> None:
-        if not acquire_lock(self.paths):
-            log.info("다른 가디언이 이미 지키고 있습니다")
+        slot = acquire_slot(self.paths)
+        if slot is None:
+            log.info("가디언 자리가 다 찼습니다 (이미 둘이 지킴)")
             return
-        log.info("가디언 시작 — 울트론을 지킵니다")
+        self.slot = slot
+        log.info("가디언 시작 (자리 %d) — 울트론을 지킵니다", slot)
         try:
             while True:
                 try:
@@ -506,9 +542,10 @@ class Guard:
                 if action == "off":
                     log.info("설정에서 가디언을 껐습니다")
                     return
-                time.sleep(POLL)                # 다시 켠 직후에도 3초마다 본다 — 또 꺼지면 바로 알아챈다
+                self.guard_peers()              # 다른 가디언이 꺼졌으면 다시 띄운다
+                time.sleep(POLL)                # 다시 켠 직후에도 1초마다 본다 — 또 꺼지면 바로 알아챈다
         finally:
-            release_lock(self.paths)
+            release_lock(self.paths, slot=self.slot)
 
 
 def _title_owners(titles: list[str]) -> dict[int, str]:

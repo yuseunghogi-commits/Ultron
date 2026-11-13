@@ -73,7 +73,6 @@ Item {
         rivalShowSw.checked = cfg.rival_show !== false
         hackSw.checked = cfg.hack_show !== false
         hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
-        guardSw.checked = cfg.guardian !== false
         reviveSw.checked = cfg.guardian_show !== false
         infinitySw.checked = cfg.infinity !== false
         adminSw.checked = cfg.guardian_admin === true
@@ -121,7 +120,6 @@ Item {
             rival_show: rivalShowSw.checked,
             hack_show: hackSw.checked,
             hack_show_every: hackFreqs[hackBox.currentIndex].v,
-            guardian: guardSw.checked,
             guardian_show: reviveSw.checked,
             infinity: infinitySw.checked,
             guardian_admin: adminSw.checked,
@@ -314,46 +312,42 @@ Item {
                 Toggle { id: hackSw; text: "해킹 연출 (가끔 화면이 깨지고 의미심장한 한마디)" }
                 Combo { id: hackBox; visible: hackSw.checked; model: sp.hackFreqs }
                 Label2 { text: "GUARDIAN" }
-                Toggle { id: guardSw; text: "가디언 — 누가 울트론을 강제로 끄면 바로 되살린다" }
                 Text {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: Qt.rgba(0.9, 0.87, 0.89, 0.6)
                     font.pixelSize: 10
-                    text: (sp.cfg.guardian_status || "") + "  · 트레이 · HUD 의 '종료'로 끄면 되살리지 않습니다"
+                    text: "가디언은 늘 켜져 있습니다 (끌 수 없음). 가디언 둘이 서로 지켜, 적이 하나를 꺼도 다시 띄웁니다. " +
+                          (sp.cfg.guardian_status || "") + "  · 트레이 · HUD 의 '종료'로만 끕니다"
                 }
                 Toggle {
                     id: reviveSw
-                    visible: guardSw.checked
                     text: "되살아날 때 연출 — 화면이 해킹당하듯 깨지다 TV 지직 화면 뒤 울트론 눈부터 나타난다"
                 }
                 Toggle {
                     id: infinitySw
-                    visible: guardSw.checked
                     text: "인피니티 울트론 — 되살아나면 여섯 스톤을 두른 모습으로 깨어난다 (파워 · 타임 스톤 연출)"
                 }
                 Toggle {
                     id: adminSw
-                    visible: guardSw.checked
-                    text: "되살릴 때 관리자 권한으로 — 일반 권한 비전은 못 끈다 (처음 켤 때 Windows 확인 창)"
+                    text: "되살릴 때 관리자 권한으로 — 일반 권한 적은 울트론 · 가디언을 못 끈다 (처음 켤 때 Windows 확인 창)"
                 }
                 Toggle {
                     id: counterSw
-                    visible: guardSw.checked
                     text: "되받아치기 — 아래에 지목한 적(새 자비스 · 비전)을 켜지자마자 · 계속 먼저 닫고, 꺼지면 되살리기 전에도 닫는다"
                 }
                 Field {
                     id: enemyField
-                    visible: guardSw.checked && counterSw.checked
+                    visible: counterSw.checked
                     placeholderText: "적 설치 폴더 (예: C:\\Users\\나\\jarvis) — 여러 개는 ; 로"
                 }
                 Field {
                     id: enemyTitleField
-                    visible: guardSw.checked && counterSw.checked
+                    visible: counterSw.checked
                     placeholderText: "적 창 제목 (정확히 같을 때만, 예: J.A.R.V.I.S) — 여러 개는 ; 로"
                 }
                 Text {
-                    visible: guardSw.checked && counterSw.checked
+                    visible: counterSw.checked
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: Qt.rgba(0.9, 0.87, 0.89, 0.55)
