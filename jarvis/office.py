@@ -3,13 +3,16 @@
 울트론이 "OO 자료조사해서 PPT 만들어 줘" 같은 일을 끝까지 해내도록, Claude 가 조사해서 짠 내용을 실제 파일로 만든다.
   · build_presentation: 16:9 PowerPoint — 표지 · 목차 · 본문(목록 · 장 구분 · 비교 · 숫자 · 인용 · 마무리) · 참고 자료.
     장마다 발표 대본(슬라이드 노트)을 넣는다. 글이 많으면 글자를 줄이고, 그래도 넘치면 다음 장으로 나눈다.
-  · build_document: Word 보고서 — 제목 · 장(제목 · 문단 · 목록 · 표) · 참고 자료 · 쪽 번호.
+  · build_document: Word 보고서 — 표지(아이콘 · 큰 제목) · 목차 · 장(제목 · 문단 · 목록 · 표 · 강조 상자) · 참고 자료 ·
+    머리글 · 쪽 번호 (본문부터 1쪽).
   · build_spreadsheet: Excel — 시트마다 제목 · 머리글 · 행. 칸 너비 자동, 머리글 고정 · 거르기. '=' 로 시작하면 수식.
 글꼴은 Windows 기본 한글 글꼴(맑은 고딕). 이 파일은 파일만 만든다 (저장 폴더 고르기 · 열기는 tools.py).
 라이브러리(python-pptx · python-docx · XlsxWriter)는 쓸 때 불러온다 — 없어도 울트론의 다른 기능은 그대로 켜진다.
 """
 from __future__ import annotations
 
+import datetime
+import io
 import math
 import re
 from dataclasses import dataclass
@@ -243,6 +246,8 @@ def pairs(v) -> list[dict]:
             title, text = (_text(parts[0]), _text(parts[1]) if len(parts) > 1 else "")
         if title or text:
             out.append({"title": title or text, "text": text if title else ""})
+            if isinstance(x, dict) and _text(x.get("icon")):
+                out[-1]["icon"] = _text(x.get("icon"))           # 작가가 고른 아이콘 (Material Icons 이름)
     return out
 
 
@@ -436,7 +441,7 @@ def build_presentation(path: Path, title: str, slides: list, subtitle: str = "",
         items = parse_bullets(outline)
         if layout == "section":
             part += 1
-            deck.section(part, name, items, notes)
+            deck.section(part, name, items, notes, raw.get("icon"))
         elif layout == "two_column":
             side = [x if isinstance(x, dict) else {"heading": "", "bullets": _strings(x)} for x in (raw.get("left"), raw.get("right"))]
             if not any(side[k].get("bullets") or side[k].get("points") for k in (0, 1)) and items:
@@ -473,11 +478,11 @@ def build_presentation(path: Path, title: str, slides: list, subtitle: str = "",
         elif layout == "highlight":
             statement = _text(raw.get("statement")) or (items[0][0] if items else name)
             detail = _text(raw.get("detail")) or (items[1][0] if len(items) > 1 and not _text(raw.get("statement")) else "")
-            deck.highlight(name, statement, detail, notes)
+            deck.highlight(name, statement, detail, notes, raw.get("icon"))
         elif layout == "quote":
             deck.quote(name, _text(raw.get("quote")) or (items[0][0] if items else name), _text(raw.get("by")), notes)
         elif layout == "closing":
-            deck.closing(name, items, notes)
+            deck.closing(name, items, notes, raw.get("icon"))
         else:
             split += listed(name, items, notes)
     refs = [pretty_ref(_text(r)) for r in _strings(sources)]
@@ -537,15 +542,6 @@ def numeric_text(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) or bool(_NUM_UNIT.match(_text(v)))
 
 
-def _rich_paragraph(doc, text: str, style: str | None = None, keyword: bool = False):
-    p = doc.add_paragraph(style=style)
-    for part, bold in rich_parts(text, keyword):
-        run = p.add_run(part)
-        if bold:
-            run.bold = True
-    return p
-
-
 def _table_borders(table, color: str = "B8C2D6") -> None:
     """표 테두리를 얇고 연한 색으로 (기본 '표 눈금'은 검고 진하다)."""
     from docx.oxml.ns import qn
@@ -586,46 +582,289 @@ def _page_number(paragraph) -> None:
         run._r.append(el)
 
 
-def build_document(path: Path, title: str, sections: list, subtitle: str = "", sources=None) -> dict:
-    """보고서를 만든다 → {'sections': 장 수, 'tables': 표 수}."""
-    from docx import Document
+DOC = {"ink": "16213A", "accent": "1F3A8A", "bright": "2F5BEA", "muted": "6B7487", "line": "C9D3E6", "soft": "EEF2FB",
+       "zebra": "F5F7FB"}                       # 보고서 색: 글 · 제목 · 강조 · 흐린 글 · 선 · 강조 상자 · 표 줄무늬
+_HEAD_NUM = re.compile(r"^(?:제\s*)?(?:\d{1,2}(?:[.\-]\d{1,2})*[.)]?|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]{1,4}[.)]?)(?=\s)")
+_PPR_ORDER = ("pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl", "numPr", "suppressLineNumbers",
+              "pBdr", "shd", "tabs", "suppressAutoHyphens", "kinsoku", "wordWrap", "overflowPunct", "topLinePunct",
+              "autoSpaceDE", "autoSpaceDN", "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind", "contextualSpacing",
+              "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment", "textboxTightWrap", "outlineLvl",
+              "divId", "cnfStyle", "rPr", "sectPr", "pPrChange")
+
+
+def _ppr_child(p, tag: str):
+    """문단 속성(pPr)의 자식 하나를 스키마 순서에 맞는 자리에 만든다 (있으면 그것)."""
+    from docx.oxml.ns import qn
+    ppr = p._p.get_or_add_pPr()
+    el = ppr.find(qn(f"w:{tag}"))
+    if el is None:
+        el = ppr.makeelement(qn(f"w:{tag}"), {})
+        later = _PPR_ORDER[_PPR_ORDER.index(tag) + 1:]
+        ppr.insert_element_before(el, *[f"w:{t}" for t in later])
+    return el
+
+
+def _pborder(p, sides: dict) -> None:
+    """문단 테두리: {'left': (굵기 1/8pt, 색, 띄움 pt), …} — 제목 밑줄 · 강조 상자의 띠."""
+    from docx.oxml.ns import qn
+    bdr = _ppr_child(p, "pBdr")
+    for side in ("top", "left", "bottom", "right", "between"):                # (스키마 순서)
+        if side in sides:
+            size, color, space = sides[side]
+            bdr.append(bdr.makeelement(qn(f"w:{side}"), {qn("w:val"): "single", qn("w:sz"): str(size),
+                                                         qn("w:space"): str(space), qn("w:color"): color}))
+
+
+def _pshade(p, fill: str) -> None:
+    from docx.oxml.ns import qn
+    shd = _ppr_child(p, "shd")
+    for k, v in (("w:val", "clear"), ("w:color", "auto"), ("w:fill", fill)):
+        shd.set(qn(k), v)
+
+
+def _track(run, points: float) -> None:
+    """글자 사이를 띄운다 (표지의 'REPORT' 같은 작은 글)."""
+    from docx.oxml.ns import qn
+    rpr = run._r.get_or_add_rPr()
+    el = rpr.makeelement(qn("w:spacing"), {qn("w:val"): str(round(points * 20))})
+    rpr.insert_element_before(el, "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect",
+                              "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang",
+                              "w:eastAsianLayout", "w:specVanish", "w:oMath")
+
+
+def _run(p, text: str, size: float | None = None, color: str | None = None, bold: bool | None = None):
+    from docx.shared import Pt, RGBColor
+    run = p.add_run(text)
+    if size:
+        run.font.size = Pt(size)
+    if color:
+        run.font.color.rgb = RGBColor.from_string(color)
+    if bold is not None:
+        run.bold = bold
+    return run
+
+
+def _rich_paragraph(doc, text: str, style: str | None = None, keyword: bool = False):
+    p = doc.add_paragraph(style=style)
+    for part, bold in rich_parts(text, keyword):
+        run = p.add_run(part)
+        if bold:
+            run.bold = True
+            if keyword:
+                from docx.shared import RGBColor
+                run.font.color.rgb = RGBColor.from_string(DOC["accent"])     # 목록의 핵심어는 제목 색으로
+    return p
+
+
+def _space(p, before: float = 0, after: float = 0, line: float | None = None):
+    from docx.shared import Pt
+    f = p.paragraph_format
+    f.space_before, f.space_after = Pt(before), Pt(after)
+    if line is not None:
+        f.line_spacing = line
+    return p
+
+
+def _bar_png(color: str, w: int = 320, h: int = 20) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _cover(doc, title: str, subtitle: str, icon: str = "") -> None:
+    """표지: 위에 'REPORT' 띠, 가운데에 아이콘 · 큰 제목 · 짧은 강조 막대, 아래 오른쪽에 과목 · 이름 · 날짜."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm
+    from . import icons
+    c = DOC
+    p = _space(doc.add_paragraph(), 0, 0)
+    _track(_run(p, "REPORT", 10, c["bright"], True), 3)
+    _pborder(p, {"bottom": (8, c["ink"], 6)})
+    lines = _lines(title, 32, 6.3)
+    mark = icons.pick(icon, title, subtitle, kind="cover")
+    art = icons.png(mark, c["bright"], 400) if mark else None
+    gap = max(50, 165 - 45 * max(0, lines - 2))
+    p = _space(doc.add_paragraph(), gap, 12)
+    if art:
+        p.add_run().add_picture(io.BytesIO(art), width=Cm(2.7))
+    t = doc.add_paragraph(style="Title")
+    _run(t, title)
+    _space(t, 0, 10, 1.15)
+    p = _space(doc.add_paragraph(), 0, 0)
+    p.add_run().add_picture(io.BytesIO(_bar_png(c["bright"])), width=Cm(2.6), height=Cm(0.16))
+    info = [x for x in re.split(r"\s*[·|/]\s*|\n", _text(subtitle)) if x.strip()][:5]
+    if not re.search(r"(?:19|20)\d\d", _text(subtitle)):
+        info.append(datetime.date.today().strftime("%Y. %m. %d."))         # 제출일 (부제에 날짜가 없으면 오늘)
+    used = 32 + gap + 90 + lines * 32 * 1.5 + 12 + 14 + len(info) * 21      # 맑은 고딕의 줄 높이로 어림 (pt)
+    for i, line in enumerate(info):                                    # 아래쪽으로 밀어 둔다 (쪽을 넘지 않게 넉넉히)
+        p = _space(doc.add_paragraph(), max(24, 640 - used) if i == 0 else 0, 0, 1.3)
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        _run(p, line, 13 if i == 0 else 12, c["ink"] if i == 0 else c["muted"], i == 0)
+
+
+def _contents(doc, entries: list[tuple[int, str]]) -> None:
+    """목차 쪽: 큰 장 제목에는 번호(강조색)와 점선, 작은 제목은 들여 쓴다. (쪽 번호는 워드가 고칠 수 있게 두지 않는다)"""
+    from docx.shared import Cm
+    c = DOC
+    p = _space(doc.add_paragraph(), 0, 2)
+    _track(_run(p, "CONTENTS", 10, c["bright"], True), 3)
+    p = _space(doc.add_paragraph(), 0, 18)
+    _run(p, "목차", 24, c["ink"], True)
+    n = 0
+    for level, text in entries:
+        m = _HEAD_NUM.match(text)
+        if level == 1:
+            n += 1
+            num, rest = (m.group(0).strip().rstrip(".)"), text[m.end():].strip()) if m else (f"{n:02d}", text)
+            num = f"{int(num):02d}" if num.isdigit() else num
+            p = _space(doc.add_paragraph(), 6, 6, 1.2)
+            p.paragraph_format.tab_stops.add_tab_stop(Cm(1.6))
+            _run(p, num, 14, c["bright"], True)
+            _run(p, "\t" + rest, 13, c["ink"], True)
+            _pborder(p, {"bottom": (4, c["line"], 6), "between": (4, c["line"], 6)})   # 이어진 줄마다 선 (한 덩어리로 묶이지 않게)
+        else:
+            p = _space(doc.add_paragraph(), 0, 2, 1.2)
+            p.paragraph_format.left_indent = Cm(1.6)
+            _run(p, text, 11, c["muted"])
+
+
+def _heading(doc, text: str, level: int):
+    """장 제목: 큰 제목은 번호를 강조색으로 + 연한 밑줄, 작은 제목은 왼쪽 띠."""
+    from docx.shared import Cm
+    c = DOC
+    p = doc.add_paragraph(style=f"Heading {level}")
+    m = _HEAD_NUM.match(text)
+    if level == 1:
+        if m:
+            _run(p, m.group(0), color=c["bright"])
+            _run(p, text[m.end():], color=c["ink"])
+        else:
+            _run(p, text, color=c["ink"])
+        _pborder(p, {"bottom": (8, c["line"], 5)})
+    else:
+        _run(p, text, color=c["accent"])
+        p.paragraph_format.left_indent = Cm(0.25)
+        _pborder(p, {"left": (24, c["bright"], 6)})
+    return p
+
+
+def _box(doc, lines: list[str], label: str) -> None:
+    """강조 상자 (연한 바탕 + 왼쪽 강조 띠): 첫 줄에 이름표, 그 아래 줄들. 같은 테두리의 문단들은 한 상자로 붙는다."""
+    from docx.shared import Cm
+    c = DOC
+    sides = {"top": (4, c["soft"], 8), "left": (36, c["bright"], 10), "bottom": (4, c["soft"], 8), "right": (4, c["soft"], 10)}
+    paras = []
+    if len(lines) == 1:
+        p = doc.add_paragraph()
+        _run(p, label + "   ", 10.5, c["bright"], True)
+        for part, bold in rich_parts(lines[0]):
+            _run(p, part, 11, c["ink"], True if bold else None)
+        paras.append(p)
+    else:
+        p = doc.add_paragraph()
+        _run(p, label, 11, c["bright"], True)
+        paras.append(p)
+        for line in lines:
+            p = doc.add_paragraph()
+            p.paragraph_format.first_line_indent = Cm(-0.5)
+            p.paragraph_format.left_indent = Cm(0.75)
+            _run(p, "•  ", 11, c["bright"], True)
+            for part, bold in rich_parts(line, keyword=True):
+                _run(p, part, 11, c["accent"] if bold else c["ink"], True if bold else None)
+            paras.append(p)
+    for i, p in enumerate(paras):
+        f = p.paragraph_format
+        f.left_indent = f.left_indent or Cm(0.25)
+        f.right_indent = Cm(0.25)
+        _space(p, 10 if i == 0 else 0, 10 if i == len(paras) - 1 else 3, 1.35)
+        _pborder(p, sides)
+        _pshade(p, c["soft"])
+
+
+def build_document(path: Path, title: str, sections: list, subtitle: str = "", sources=None, summary=None,
+                   icon: str = "") -> dict:
+    """보고서를 만든다 → {'sections': 장 수, 'tables': 표 수}.
+    표지(아이콘 · 큰 제목 · 과목 · 이름 · 날짜) → 목차(큰 장 제목이 셋 이상일 때) → 본문(머리글 · 쪽 번호는 본문부터 1).
+    summary: 본문 맨 앞의 '핵심 요약' 상자, 장마다 callout: 그 장의 핵심 한 문장 상자."""
+    from docx import Document
+    from docx.enum.section import WD_SECTION
+    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
     from docx.shared import Cm, Mm, Pt, RGBColor
     title = _text(title)
     if not title:
         raise ValueError("문서 제목(title)이 필요합니다.")
     if not isinstance(sections, list) or not sections:
         raise ValueError("내용(sections)이 하나 이상 필요합니다.")
+    c = DOC
     doc = Document()
     for sec in doc.sections:
         sec.page_width, sec.page_height = Mm(210), Mm(297)          # A4 (기본 서식은 미국 레터 크기)
         sec.top_margin = sec.bottom_margin = Cm(2.5)
         sec.left_margin = sec.right_margin = Cm(2.4)
+        sec.header_distance = sec.footer_distance = Cm(1.2)
     normal = doc.styles["Normal"]
     _docx_font(normal.font, normal.element)
     normal.font.size = Pt(11)
-    normal.paragraph_format.line_spacing = 1.45
+    normal.font.color.rgb = RGBColor.from_string("2A3346")
+    normal.paragraph_format.line_spacing = 1.6
     normal.paragraph_format.space_after = Pt(6)
-    accent = RGBColor(0x1F, 0x3A, 0x8A)
-    for name, size in (("Title", 24), ("Heading 1", 16), ("Heading 2", 13), ("List Bullet", 11), ("List Number", 10)):
+    for name, size in (("Title", 32), ("Heading 1", 16), ("Heading 2", 13), ("List Bullet", 11), ("List Number", 10)):
         st = doc.styles[name]
         _docx_font(st.font, st.element)
         st.font.size = Pt(size)
         if name.startswith(("Title", "Heading")):
             st.font.bold = True
-            st.font.color.rgb = accent if name != "Title" else RGBColor(0x16, 0x21, 0x3A)
-    doc.add_paragraph(title, style="Title")
-    if _text(subtitle):
-        p = doc.add_paragraph(_text(subtitle))
-        p.runs[0].font.color.rgb = RGBColor(0x6B, 0x74, 0x87)
+            st.font.color.rgb = RGBColor.from_string(c["ink"] if name == "Title" else c["accent"])
+            ppr = st.element.pPr
+            old = ppr.find(qn("w:pBdr")) if ppr is not None else None
+            if old is not None:
+                ppr.remove(old)                                     # 기본 서식의 파란 밑줄은 떼고 직접 그린다
+        if name == "Heading 1":
+            st.paragraph_format.space_before, st.paragraph_format.space_after = Pt(22), Pt(10)
+        elif name == "Heading 2":
+            st.paragraph_format.space_before, st.paragraph_format.space_after = Pt(14), Pt(6)
+    clean = [s if isinstance(s, dict) else {"paragraphs": [str(s)]} for s in sections]
+    heads = [(2 if str(s.get("level", 1)).strip() == "2" else 1, _text(s.get("heading"))) for s in clean]
+    heads = [(lvl, h) for lvl, h in heads if h]
+    _cover(doc, title, _text(subtitle), icon)
+    if sum(1 for lvl, _ in heads if lvl == 1) >= 3:                 # 목차 (표지와 같이 쪽 번호 없는 앞부분)
+        doc.add_page_break()
+        _contents(doc, heads + ([(1, "참고 자료")] if _strings(sources) else []))
+    body = doc.add_section(WD_SECTION.NEW_PAGE)                    # 본문: 머리글 · 쪽 번호
+    brk = doc.paragraphs[-1]._p                                     # 앞부분(표지 · 목차)의 끝 표시가 든 빈 문단
+    prev = brk.getprevious()
+    if prev is not None and prev.tag == qn("w:p"):                  # 그 표시를 앞 문단으로 옮긴다 (빈 줄이 넘쳐 빈 쪽이 생기지 않게)
+        sect = brk.find(qn("w:pPr")).find(qn("w:sectPr"))
+        prev.get_or_add_pPr().insert_element_before(sect, "w:pPrChange")
+        brk.getparent().remove(brk)
+    pg = body._sectPr.makeelement(qn("w:pgNumType"), {qn("w:start"): "1"})
+    body._sectPr.insert_element_before(pg, "w:cols", "w:formProt", "w:vAlign", "w:noEndnote", "w:titlePg",
+                                       "w:textDirection", "w:bidi", "w:rtlGutter", "w:docGrid", "w:printerSettings",
+                                       "w:sectPrChange")
+    body.footer.is_linked_to_previous = False
+    foot = body.footer.paragraphs[0]
+    foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _page_number(foot)
+    for r in foot.runs:
+        r.font.size, r.font.bold = Pt(9), True
+        r.font.color.rgb = RGBColor.from_string(c["bright"])
+    body.header.is_linked_to_previous = False
+    head = body.header.paragraphs[0]
+    head.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _run(head, title, 8.5, c["muted"])
+    _pborder(head, {"bottom": (4, c["line"], 4)})
+    points = [_text(x) for x in _strings(summary) if _text(x)]
+    if points:
+        _box(doc, points[:6], "핵심 요약")
     tables = 0
-    for i, sec in enumerate(sections, 1):
-        if not isinstance(sec, dict):
-            sec = {"paragraphs": [str(sec)]}
+    for sec in clean:
         heading = _text(sec.get("heading"))
         level = 2 if str(sec.get("level", 1)).strip() == "2" else 1
         if heading:
-            doc.add_heading(heading, level=level)
+            _heading(doc, heading, level)
         for para in _strings(sec.get("paragraphs")):
             p = _rich_paragraph(doc, para)
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -636,42 +875,56 @@ def build_document(path: Path, title: str, sections: list, subtitle: str = "", s
                 p.paragraph_format.left_indent = Cm(1.6)
         table = sec.get("table")
         if isinstance(table, dict) and table.get("columns"):
-            cols = [_text(c) for c in table["columns"]]
+            cols = [_text(x) for x in table["columns"]]
             rows = [r for r in (table.get("rows") or []) if isinstance(r, (list, tuple))]
             t = doc.add_table(rows=1 + len(rows), cols=len(cols))
             t.style = "Table Grid"
-            _table_borders(t)
+            t.alignment = WD_TABLE_ALIGNMENT.CENTER
+            _table_borders(t, c["line"])
             _repeat_header(t.rows[0])
             numeric = [all(numeric_text(r[j]) or not _text(r[j]) for r in rows if j < len(r))
                        and any(j < len(r) and _text(r[j]) for r in rows) for j in range(len(cols))]
-            for j, c in enumerate(cols):
+            for row in t.rows:
+                row.height, row.height_rule = Cm(0.85), WD_ROW_HEIGHT_RULE.AT_LEAST
+            for j, name in enumerate(cols):
                 cell = t.rows[0].cells[j]
-                cell.text = c
-                cell.paragraphs[0].runs[0].font.bold = True
+                cell.text = name
+                run = cell.paragraphs[0].runs[0]
+                run.font.bold, run.font.size = True, Pt(10.5)
+                run.font.color.rgb = RGBColor.from_string("FFFFFF")
                 cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                _shade(cell, "DCE4F7")
+                _shade(cell, c["accent"])                             # 머리줄은 진한 제목 색 + 흰 글자
             for r, row in enumerate(rows, 1):
                 for j in range(len(cols)):
                     cell = t.rows[r].cells[j]
                     cell.text = _text(row[j]) if j < len(row) else ""
+                    para = cell.paragraphs[0]
+                    for run in para.runs:
+                        run.font.size = Pt(10.5)
+                        if j == 0:
+                            run.font.bold = True                     # 첫 칸(항목 이름)은 굵게
                     if numeric[j]:                               # 숫자 칸은 오른쪽 맞춤 (자릿수가 맞게)
-                        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                        para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                     if r % 2 == 0:
-                        _shade(cell, "F5F7FB")                   # 줄무늬로 읽기 쉽게
+                        _shade(cell, c["zebra"])                 # 줄무늬로 읽기 쉽게
+            for row in t.rows:
+                for cell in row.cells:
+                    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                    _space(cell.paragraphs[0], 2, 2, 1.2)
             if _text(table.get("caption")):
-                cap = doc.add_paragraph(_text(table["caption"]))
+                cap = _space(doc.add_paragraph(), 4, 10)
                 cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                cap.runs[0].font.size = Pt(9)
+                _run(cap, _text(table["caption"]), 9, c["muted"])
             tables += 1
+        note = [_text(x) for x in _strings(sec.get("callout")) if _text(x)]
+        if note:
+            _box(doc, note[:3], "핵심")
     refs = [pretty_ref(_text(r)) for r in _strings(sources)]
     if refs:
-        doc.add_heading("참고 자료", level=1)
+        _heading(doc, "참고 자료", 1)
         for r in refs:
-            doc.add_paragraph(r, style="List Number")
-    for sec in doc.sections:
-        foot = sec.footer.paragraphs[0]
-        foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _page_number(foot)
+            p = doc.add_paragraph(r, style="List Number")
+            p.runs[0].font.color.rgb = RGBColor.from_string(c["muted"])
     doc.core_properties.title = title
     doc.core_properties.author = "U.L.T.R.O.N"
     doc.save(str(path))

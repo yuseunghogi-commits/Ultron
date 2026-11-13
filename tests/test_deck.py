@@ -232,3 +232,85 @@ def test_line_count_follows_word_wrapping():
     assert office._lines("인위적 배출로 농도 증가", 24, 1.85) == 3               # 낱말 단위로 넘어가서 글자 수 어림(2줄)보다 많다
     assert office._lines("가" * 40, 20, 3) == 4                                   # 한 줄보다 긴 낱말은 글자 단위로
     assert office._lines("가나다 라마바", 20, 10) == 1
+
+
+# ---------------------------------------------------------------- 아이콘 · 채우기
+def pictures(slide) -> list:
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    return [sh for sh in slide.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
+
+
+@pytest.mark.parametrize("style", office.STYLES)
+def test_icons_are_drawn_as_pictures_in_every_style(tmp_path, style):
+    """카드 · 단계 · 숫자 · 비교 · 핵심 · 마무리 장에 내용에 맞는 아이콘(그림)이 들어간다 — 글만 있는 밋밋한 장이 없게."""
+    prs, _ = build(tmp_path, style, title="광합성의 비밀")
+    slides = list(prs.slides)
+    by_title = {}
+    for s in slides[2:]:                                                         # (목차 장에도 같은 제목이 있다)
+        for sh in s.shapes:
+            if sh.has_text_frame and sh.text_frame.text in ("이렇게 일어난다", "숫자로 보기", "영향을 주는 것", "여섯 가지",
+                                                            "명반응과 암반응", "핵심"):
+                by_title.setdefault(sh.text_frame.text, s)
+    assert len(pictures(by_title["숫자로 보기"])) == 3 and len(pictures(by_title["여섯 가지"])) == 6
+    assert len(pictures(by_title["영향을 주는 것"])) == 3 and len(pictures(by_title["핵심"])) == 1
+    if style != "side":                                                          # (좁은 칸은 단계를 번호 줄로)
+        assert len(pictures(by_title["이렇게 일어난다"])) == 4
+    closing = next(s for s in slides if "감사합니다" in texts(s))
+    assert len(pictures(closing)) == 1                                           # 감사합니다 → 하트
+    if style != "editorial":                                                     # 매거진은 표지를 글자로만
+        assert len(pictures(slides[0])) >= 1                                     # 표지의 큰 아이콘 (광합성 → 잎)
+
+
+def test_icon_choice_follows_the_words_and_never_repeats():
+    deck = D.Deck(office.THEMES["light"], "제목")
+    assert deck.marks([("빛 흡수", ""), ("물 분해", ""), ("포도당 생성", "")], "steps") == ["wb_sunny", "water_drop", "task_alt"]
+    assert deck.marks([("가", ""), ("나", ""), ("다", "")], "steps") == ["flag", "settings", "task_alt"]   # 시작 → 과정 → 완료
+    got = deck.marks([("빛", "햇빛"), ("햇빛", "빛"), ("아무 말", "")], "cards")
+    assert got[0] == "wb_sunny" and got[1] != "wb_sunny" and len(set(got)) == 3   # 같은 아이콘을 두 번 쓰지 않는다
+    assert deck.marks([("광합성", ""), ("엉뚱한 말", "")], spare=False) == ["eco", None]
+    assert deck.marks([("아무", "")], "cards", given=["Water Drop"]) == ["water_drop"]   # 작가가 고른 이름이 먼저
+    assert D.Deck._value_parts("1,000억 t") == ("", "1,000", "억 t") and D.Deck._value_parts("약 70%") == ("약 ", "70", "%")
+    assert D.Deck._value_parts("두 배") == ("", "두 배", "") and D.Deck._value_parts("3~6%") == ("", "3~6", "%")
+
+
+def test_icon_png_is_transparent_and_centered():
+    import io
+    from PIL import Image
+    im = Image.open(io.BytesIO(D.icon_png("eco", "2F5BEA", 200)))
+    assert im.mode == "RGBA" and im.getpixel((0, 0))[3] == 0 and im.getpixel((100, 100))[:3] == (0x2F, 0x5B, 0xEA)
+    left, top, right, bottom = im.getchannel("A").getbbox()
+    assert abs((left + right) / 2 - 100) <= 6 and abs((top + bottom) / 2 - 100) <= 6
+    assert D.icon_png("없는_아이콘", "000000", 64) is None and D.icon_png(None, "000000", 64) is None
+
+
+def test_short_lists_with_sub_points_still_become_rows_and_icons_replace_numbers(tmp_path):
+    prs, _ = build(tmp_path, "clean", [
+        {"title": "정의", "bullets": ["광합성: 빛으로 양분을 만드는 과정", "엽록체: 세포 속 기관", "산소: 결과로 나오는 기체",
+                                     "- 우리가 마시는 산소"]},
+        {"title": "번호", "bullets": ["첫째 내용", "- 하위 내용", "둘째 내용"]},
+    ], title="줄")
+    icons_, numbers = list(prs.slides)[1], list(prs.slides)[2]
+    boxes = [sh.text_frame.text for sh in icons_.shapes if sh.has_text_frame]
+    assert "광합성" in boxes and "결과로 나오는 기체 · 우리가 마시는 산소" in boxes   # 하위 줄은 윗 줄의 설명에 붙는다
+    assert len(pictures(icons_)) == 3 and "01" not in boxes                       # 줄마다 맞는 아이콘이 있으면 번호 대신
+    nums = [sh.text_frame.text for sh in numbers.shapes if sh.has_text_frame]
+    assert "01" in nums and "첫째 내용 · 하위 내용" in nums and not pictures(numbers)
+
+
+def test_cards_and_steps_fill_the_body_area(tmp_path):
+    """카드 · 단계 · 숫자 카드는 본문 칸의 아래까지 내려온다 (위에 몰리고 아래가 텅 비지 않게)."""
+    from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
+    from pptx.util import Inches
+    prs, _ = build(tmp_path, "clean", [FULL[2], FULL[4], FULL[6]], title="채우기")
+    x, y, w, h = D.Deck.AREA["clean"]
+    for slide in list(prs.slides)[1:4]:
+        cards = [sh for sh in slide.shapes if sh.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE
+                 and sh.auto_shape_type == MSO_SHAPE.ROUNDED_RECTANGLE]
+        assert cards and all(abs(sh.top - Inches(y)) < Inches(0.05) and abs(sh.height - Inches(h)) < Inches(0.05) for sh in cards)
+
+
+def test_pastel_numbers_stay_readable_on_yellow_cards():
+    deck = D.Deck(office.THEMES["light"], "제목", "pastel")
+    s = deck.slide()
+    ink = deck.card(s, 0, 0, 1, 1, 1)                                            # 두 번째 파스텔 = 노랑
+    assert D.contrast(ink.strong, deck.pastels[1]) >= 3

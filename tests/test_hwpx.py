@@ -2,6 +2,7 @@
 import re
 import zipfile
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 import pytest
 
@@ -86,3 +87,30 @@ def test_make_document_schema_offers_hwpx(T):
     doc = schemas["make_document"]
     assert doc["input_schema"]["properties"]["format"]["enum"] == ["docx", "hwpx"]
     assert "한글" in doc["description"]
+
+
+def test_hwpx_report_has_cover_contents_boxes_and_styled_table(tmp_path):
+    """워드 보고서와 같은 모양: 표지(첫 쪽 번호 감춤) · 목차 · 핵심 요약 · 핵심 상자 · 진한 머리줄의 표."""
+    secs = [{"heading": "1. 서론", "paragraphs": ["가"]}, {"heading": "2. 본론", "paragraphs": ["나"], "callout": "꼭 기억할 문장"},
+            {"heading": "2-1. 세부", "level": 2, "bullets": ["다"]},
+            {"heading": "3. 결론", "table": {"columns": ["가", "나"], "rows": [["1", "2"]]}}]
+    p = tmp_path / "r.hwpx"
+    hwpx.build_hwpx(p, "보고서 제목", secs, "과학 · 홍길동 · 2025. 3. 2.", ["자료 https://a.kr"], summary=["요약 하나", "요약 둘"])
+    z, header, section = _open(p)
+    ET.fromstring(header.encode())
+    ET.fromstring(section.encode())
+    assert 'hideFirstPageNum="1"' in section                                     # 표지에는 쪽 번호가 없다
+    assert section.count('pageBreak="1"') == 2                                   # 목차 · 본문은 새 쪽에서
+    for word in ("REPORT", "보고서 제목", "홍길동", "CONTENTS", "목차", "핵심 요약", "요약 하나", "꼭 기억할 문장", "참고 자료"):
+        assert f"<hp:t>{word}" in section or f">{word}<" in section, word
+    assert section.index("<hp:t>REPORT</hp:t>") < section.index("<hp:t>CONTENTS</hp:t>") < section.index("핵심 요약")
+    box = hwpx.PARA_ID["box"]
+    assert f'paraPrIDRef="{box}"' in section and f'borderFillIDRef="{hwpx.BORDER_BOX}"' in header
+    assert '<hh:charPr id="%d"' % hwpx.CHAR_ID["th"] in header and 'textColor="#FFFFFF"' in header   # 머리줄은 흰 글자
+    today = datetime.now().strftime("%Y. %m. %d.")
+    assert "<hp:t>2025. 3. 2.</hp:t>" in section and today not in section     # 부제에 날짜가 있으면 오늘 날짜를 더하지 않는다
+    one = tmp_path / "one.hwpx"
+    hwpx.build_hwpx(one, "짧은 보고서", secs[:2], "")
+    _, _, short = _open(one)
+    assert "CONTENTS" not in short and short.count('pageBreak="1"') == 1         # 큰 장이 셋 미만이면 목차 없이
+    assert f"<hp:t>{today}</hp:t>" in short                                      # 날짜가 없으면 표지에 오늘 날짜

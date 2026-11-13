@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import io
 import json
 import re
 from functools import lru_cache
@@ -40,13 +41,18 @@ KEYWORDS: list[tuple[str, str]] = [
     (r"행복|웃음|기쁨|즐거|만족|힐링", "sentiment_very_satisfied"),
     (r"운동(?!장)|스트레칭|헬스|달리기|걷기|체육(?!관)|근육|요가", "fitness_center"),
     (r"식사|음식|" + _W + r"밥|급식|요리|영양|채소|과일|식단", "restaurant"),
-    (r"물\s*마시|수분|" + _W + r"물을|생수|음수", "water_drop"),
+    (_W + r"물(?![가-힣])|" + _W + r"물[이을의은과에도로]|물\s*마시|수분|생수|음수", "water_drop"),
+    (r"광합성|엽록|새싹|" + _W + r"잎(?![가-힣])|" + _W + r"잎[이을의은과에도]", "eco"),
+    (r"이산화\s*탄소|(?<![a-z])co2", "co2"),
+    (r"산소|호흡|공기|숨\s*쉬|숨을|미세\s*먼지", "air"),
+    (r"세포|미토콘드리아|세균|바이러스|박테리아|미생물|현미경", "biotech"),
+    (r"온도|기온|체온", "thermostat"),
     (r"분리\s*배출|재활용|쓰레기|플라스틱|일회용|폐기", "recycling"),
     (r"친환경|에코|생태|지속\s*가능", "eco"),
     (r"환경|지구|기후|탄소|온난화|온실가스", "public"),
     (_W + r"숲|나무|식물|" + _W + r"꽃|정원|녹지|" + _W + r"자연(?!스)", "park"),
     (r"에너지|전기|전력|절전|배터리|충전", "bolt"),
-    (r"날씨|햇빛|태양|여름|더위|폭염", "wb_sunny"),
+    (r"날씨|햇빛|햇볕|태양|여름|더위|폭염|" + _W + r"빛(?!나|깔)", "wb_sunny"),
     (_W + r"비가|장마|우산|홍수|폭우|빗물", "umbrella"),
     (r"겨울|추위|한파|폭설|눈사람", "ac_unit"),
     (r"안전|보안|보호|예방|지키", "shield"),
@@ -74,6 +80,9 @@ KEYWORDS: list[tuple[str, str]] = [
     (r"자전거", "directions_bike"),
     (r"동물|반려|강아지|고양이|애완", "pets"),
     (r"뉴스|소식|공지|안내", "campaign"),
+    (r"역사|유래|전통", "history_edu"),
+    (r"비교|차이|대조|(?<![a-z])vs(?![a-z])", "compare_arrows"),
+    (r"분석|원인|이유|까닭", "search"),
     ("(?<!는\\s)" + _W + r"법(?!칙)|법률|법원|헌법|규칙|제도|정책|권리|투표|선거", "gavel"),
     (r"세계|국제|글로벌|외국|나라", "language"),
     (r"우리\s*집|" + _W + r"집(?:에|이|은|을|안|밖)|주거|가정|침실", "home"),
@@ -88,6 +97,10 @@ KEYWORDS: list[tuple[str, str]] = [
 DEFAULTS = {"cover": "auto_awesome", "point": "tips_and_updates", "list": "checklist", "stat": "insights",
             "steps": "route", "compare": "compare_arrows", "quote": "format_quote", "closing": "favorite",
             "poster": "campaign", "section": "label_important"}
+# 발표 자료의 카드 · 단계 · 숫자 묶음에서 글로 고르지 못한 칸에 차례로 쓰는 무난한 아이콘
+SPARE = {"cards": ("tips_and_updates", "star", "bookmark", "push_pin", "lightbulb", "verified"),
+         "steps": ("flag", "settings", "sync", "build", "tune", "task_alt"),
+         "stats": ("insights", "trending_up", "bar_chart", "pie_chart", "speed", "analytics")}
 
 
 @lru_cache(maxsize=1)
@@ -177,3 +190,27 @@ def draw(d, name: str | None, center: tuple[float, float], size: float, fill) ->
         return False
     d.text(center, chr(cp), font=font(round(size)), fill=fill, anchor="mm")
     return True
+
+
+_PNG: dict[tuple, bytes] = {}
+
+
+def png(name: str | None, color: str, px: int, alpha: int = 255) -> bytes | None:
+    """아이콘 하나 → 투명 바탕 PNG (그 색 · 크기, 가장자리가 매끄럽게). 아이콘 글꼴이 없거나 모르는 이름이면 None.
+    파워포인트 · 워드에는 아이콘 글꼴이 없으니 그림으로 넣는다 (어느 PC 에서나 똑같이 보인다)."""
+    key = (name, color, px, alpha)
+    if key not in _PNG:
+        cp = codes().get(resolve(name) or "") if name else None
+        if cp is None or not FONT.exists():
+            return None
+        from PIL import Image, ImageDraw
+        mask = Image.new("L", (px, px), 0)
+        ImageDraw.Draw(mask).text((px / 2, px / 2), chr(cp), font=font(px), fill=alpha, anchor="mm")
+        img = Image.new("RGBA", (px, px), tuple(int(color[i:i + 2], 16) for i in (0, 2, 4)) + (0,))
+        img.putalpha(mask)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        if len(_PNG) > 300:                      # 오래 켜 두어도 쌓이지 않게
+            _PNG.clear()
+        _PNG[key] = buf.getvalue()
+    return _PNG[key]
