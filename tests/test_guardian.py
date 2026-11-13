@@ -94,7 +94,8 @@ def guard(tmp_path, monkeypatch):
     monkeypatch.setattr(guardian, "created_at", lambda pid: g.created)
     monkeypatch.setattr(guardian, "shutting_down", lambda: g.shutdown)
     monkeypatch.setattr(Guard, "counter", lambda self, cfg, root: g.counted.append(root) or ["vision"])
-    monkeypatch.setattr(Guard, "relaunch", lambda self, info, closed=None, fast=False: g.launched.append((info, closed, fast)))
+    monkeypatch.setattr(Guard, "relaunch",
+                        lambda self, info, closed=None, fast=False, admin=False: g.launched.append((info, closed, fast, admin)))
     return g
 
 
@@ -161,7 +162,7 @@ def test_step_revives_every_single_time_with_no_rest(guard, monkeypatch):
         assert guard.step(now) == "wait"                            # 새 울트론을 지키는 중
         now += 3
     assert guard.revived == 20
-    assert all(f is True for _, _, f in guard.launched)             # 비전이 계속 공격 중 → 매번 연출 없이 빠르게
+    assert all(f is True for _, _, f, _a in guard.launched)         # 비전이 계속 공격 중 → 매번 연출 없이 빠르게
 
 
 def test_an_enemy_present_means_a_fast_revival_no_animation(guard):
@@ -206,6 +207,40 @@ def test_relaunch_tells_the_new_ultron_it_was_revived(tmp_path, monkeypatch):
     assert calls[1][0] == ["pythonw", "main.py", "--revived"]       # 가디언의 자식이 아닌 독립 프로세스로 띄운다
     g.relaunch({})                                                   # 다시 켜는 법을 모르면 아무것도 하지 않는다
     assert len(calls) == 2
+
+
+def test_relaunch_uses_admin_when_asked_and_falls_back_if_refused(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(guardian.sys, "platform", "win32")
+    monkeypatch.setattr(guardian, "is_admin", lambda: False)
+    monkeypatch.setattr(guardian, "launch_detached", lambda cmd, cwd=None: calls.append(("detached", cmd)))
+    g = Guard(tmp_path, load_cfg=dict)
+    info = {"relaunch": ["pyw", "main.py"], "root": "/x"}
+    monkeypatch.setattr(guardian, "launch_elevated", lambda cmd, cwd=None: calls.append(("elevated", cmd)) or True)
+    g.relaunch(info, admin=True)
+    assert calls == [("elevated", ["pyw", "main.py", "--revived"])]   # 관리자 권한으로 (확인 창), 성공하면 그걸로 끝
+    calls.clear()
+    monkeypatch.setattr(guardian, "launch_elevated", lambda cmd, cwd=None: calls.append(("elevated", cmd)) or False)
+    g.relaunch(info, admin=True)
+    assert [c[0] for c in calls] == ["elevated", "detached"]          # 거부/실패하면 일반 권한으로라도 되살린다 (사라지지 않게)
+    calls.clear()
+    monkeypatch.setattr(guardian, "is_admin", lambda: True)           # 가디언이 이미 관리자면 그냥 띄워도 자식이 상속
+    g.relaunch(info, admin=True)
+    assert [c[0] for c in calls] == ["detached"]
+    calls.clear()
+    g.relaunch(info, admin=False)                                     # 요청 안 하면 그냥 일반
+    assert [c[0] for c in calls] == ["detached"]
+
+
+def test_step_passes_the_admin_setting_to_relaunch(guard):
+    guard.cfg["guardian_admin"] = True
+    guard.created = None
+    guard.step(now=100)
+    assert guard.launched[-1][3] is True       # (info, closed, fast, admin) — 설정이 켜지면 관리자 권한으로 되살린다
+    guard.cfg["guardian_admin"] = False
+    guard.created = None
+    guard.step(now=140)
+    assert guard.launched[-1][3] is False
 
 
 def test_launch_detached_goes_through_a_short_lived_bridge(tmp_path, monkeypatch):

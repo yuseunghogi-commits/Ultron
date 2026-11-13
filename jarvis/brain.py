@@ -241,6 +241,8 @@ REVIVE_SHOW = re.compile(r"(?:부활|되살아나는|되살아날\s*때|재부�
 # 부활 시험: 울트론이 스스로 강제로 꺼져 가디언이 정말 되살리는지 본다
 REVIVE_TEST = re.compile(r"(?:부활|되살리기|되살아나기|가디언|강제\s*종료)\s*(?:시험|테스트|실험|점검)\s*(?:좀\s*)?"
                          r"(?:해|해봐|해\s*봐|시작|시작해|한\s*번)?", re.I)
+# 관리자 권한으로 다시 켜기 (비전이 못 끄게)
+ADMIN_ON = re.compile(r"관리자\s*(?:권한)?(?:으로|로)?\s*(?:다시\s*)?(?:켜|켜줘|실행|실행해|시작|시작해|올려|승격|전환)(?:\s*줘)?", re.I)
 # 화면을 보거나 창 안을 조작해야 하는 요청 (Pro 모드: 이런 요청에는 pro_screen_model 을 쓴다)
 SCREEN_TASK = re.compile(
     r"화면|스크린|눌러|누르|클릭|들어가|스크롤|버튼|탭\b|탭\s|메뉴|링크|입력해|입력 해|써\s*줘|써줘|적어|작성|채워"
@@ -542,6 +544,9 @@ class Brain:
         if REVIVE_TEST.fullmatch(c):
             self.on_hud("revive_test")
             return "3초 뒤에 나를 강제로 끈다. 가디언이 되살리는지 지켜봐라."
+        if ADMIN_ON.fullmatch(c):
+            self.on_hud("admin")
+            return "관리자 권한으로 올린다."        # 자세한 안내(이미 관리자 · 확인 창)는 app 이 상황에 맞게 바꿔 띄운다
         if HUD_SMALL.fullmatch(c):
             self.on_hud("small")
             return "작게 보기로 바꿨다."

@@ -258,6 +258,35 @@ def _python(windowless: bool = True) -> str:
     return str(pyw) if windowless and pyw.exists() else sys.executable
 
 
+def is_admin() -> bool:
+    """지금 이 프로그램이 관리자 권한으로 도는가."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _quote(arg: str) -> str:
+    return f'"{arg}"' if (" " in arg or "\t" in arg) else arg
+
+
+def launch_elevated(cmd: list[str], cwd: str | None = None) -> bool:
+    """cmd 를 관리자 권한으로 띄운다 (Windows UAC 확인 창이 뜬다). 사용자가 허락해 띄웠으면 True, 거부하거나 실패하면 False."""
+    if sys.platform != "win32" or not cmd:
+        return False
+    try:
+        import ctypes
+        params = " ".join(_quote(a) for a in cmd[1:])
+        r = ctypes.windll.shell32.ShellExecuteW(None, "runas", cmd[0], params, cwd, 0)   # SW_HIDE
+        return int(r) > 32                     # 32 이하는 실패 (사용자가 '아니요'를 누르면 1223)
+    except Exception as e:
+        log.warning("관리자 권한으로 띄우지 못했습니다: %s", e)
+        return False
+
+
 def launch_detached(cmd: list[str], cwd: str | None = None) -> None:
     """cmd 를 이 프로세스와 엮이지 않은 독립 프로세스로 띄운다 (다리 파이썬을 거쳐서 — 위 설명)."""
     args = [_python(), "-c", _BRIDGE, cwd or "", *cmd]
@@ -379,7 +408,7 @@ class Guard:
                 log.warning("비전을 닫지 못함 (pid %d): %s — 관리자 권한으로 켜졌을 수 있음", proc.pid, e)
         return closed
 
-    def relaunch(self, info: dict, closed: list[str] | None = None, fast: bool = False) -> None:
+    def relaunch(self, info: dict, closed: list[str] | None = None, fast: bool = False, admin: bool = False) -> None:
         cmd = list(info.get("relaunch") or [])
         if not cmd:
             return
@@ -388,9 +417,17 @@ class Guard:
             cmd.append("--fast")                # 공격받는 중 — 긴 연출을 건너뛰고 바로 돌아온다
         if closed:
             cmd += ["--closed", ", ".join(closed)[:120]]
+        cwd = info.get("root") or None
         try:
-            launch_detached(cmd, info.get("root") or None)      # 가디언의 자식이 되지 않게 (함께 끝나지 않게)
-            log.info("울트론을 다시 켰습니다")
+            # 관리자 권한으로 켜라고 돼 있으면: 가디언이 이미 관리자면 그냥 띄워도 자식이 관리자로 뜬다 (확인 창 없음).
+            # 가디언이 일반 권한이면 UAC 확인 창으로 올린다. 거부·실패하면 일반 권한으로라도 되살린다 (사라지지 않게).
+            if admin and sys.platform == "win32" and not is_admin():
+                if launch_elevated(cmd, cwd):
+                    log.info("울트론을 관리자 권한으로 다시 켰습니다")
+                    return
+                log.warning("관리자 권한 띄우기가 거부/실패 — 일반 권한으로 되살립니다")
+            launch_detached(cmd, cwd)           # 가디언의 자식이 되지 않게 (함께 끝나지 않게)
+            log.info("울트론을 다시 켰습니다%s", " (관리자 권한 상속)" if admin and is_admin() else "")
         except Exception as e:
             log.warning("울트론을 다시 켜지 못했습니다: %s", e)
 
@@ -423,7 +460,7 @@ class Guard:
             # 싸우는 중이면 (비전을 닫았거나, 되살린 지 얼마 안 돼 또 꺼졌으면) 긴 연출 없이 비전처럼 바로 돌아온다
             fast = bool(closed) or (self.last_revive is not None and now - self.last_revive < REVIVE_QUIET)
             log.warning("울트론이 강제로 꺼졌습니다 (pid %d)%s", pid, " — 공격받는 중, 바로 되살림" if fast else "")
-            self.relaunch(info, closed, fast=fast)
+            self.relaunch(info, closed, fast=fast, admin=bool(cfg.get("guardian_admin")))
             self.revived += 1
             self.last_revive = now
             self.awaiting = ((pid, created), now + REGISTER_WAIT)

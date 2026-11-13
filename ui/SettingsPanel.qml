@@ -75,6 +75,7 @@ Item {
         hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
         guardSw.checked = cfg.guardian !== false
         reviveSw.checked = cfg.guardian_show !== false
+        adminSw.checked = cfg.guardian_admin === true
         counterSw.checked = cfg.guardian_counter !== false
         enemyField.text = (cfg.enemy_installs || []).join("; ")
         enemyTitleField.text = (cfg.enemy_titles || []).join("; ")
@@ -121,6 +122,7 @@ Item {
             hack_show_every: hackFreqs[hackBox.currentIndex].v,
             guardian: guardSw.checked,
             guardian_show: reviveSw.checked,
+            guardian_admin: adminSw.checked,
             guardian_counter: counterSw.checked,
             enemy_installs: splitList(enemyField.text),
             enemy_titles: splitList(enemyTitleField.text),
@@ -322,6 +324,11 @@ Item {
                     id: reviveSw
                     visible: guardSw.checked
                     text: "되살아날 때 연출 — 화면이 해킹당하듯 깨지다 TV 지직 화면 뒤 울트론 눈부터 나타난다"
+                }
+                Toggle {
+                    id: adminSw
+                    visible: guardSw.checked
+                    text: "되살릴 때 관리자 권한으로 — 일반 권한 비전은 못 끈다 (처음 켤 때 Windows 확인 창)"
                 }
                 Toggle {
                     id: counterSw
