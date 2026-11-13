@@ -75,10 +75,21 @@ Window {
                 accent: win.accent
                 level: win.level
                 mode: win.st
+                opacity: emblemInf.status === Loader.Ready ? 0 : 1    // 인피니티 울트론이 얹히면 숨는다 (누르기 · 끌기는 그대로 된다)
 
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: jarvis.activate() }
                 DragHandler { target: null; onActiveChanged: if (active) win.startSystemMove() }
+            }
+            Loader {      // 되살아난 뒤: 인피니티 울트론 (InfinityCore.qml) — 엠블럼과 같은 자리 · 같은 크기
+                id: emblemInf
+                active: jarvis.infinity
+                source: "InfinityCore.qml"
+                x: emblem.x; y: emblem.y; width: emblem.width; height: emblem.height
+                onLoaded: {
+                    item.mode = Qt.binding(function() { return win.st })
+                    item.level = Qt.binding(function() { return win.level })
+                }
             }
 
             Rectangle {   // 상태 글자 가독성용 알약
@@ -367,9 +378,20 @@ Window {
                     level: win.level
                     mode: win.st
                     voiceBars: true
+                    opacity: core3Inf.status === Loader.Ready ? 0 : 1 // 인피니티 울트론이 얹히면 숨는다 (누르기는 그대로 된다)
 
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                     TapHandler { onTapped: jarvis.activate() }
+                }
+                Loader {      // 되살아난 뒤: 인피니티 울트론 (InfinityCore.qml) — 엠블럼과 같은 자리 · 같은 크기
+                    id: core3Inf
+                    active: jarvis.infinity
+                    source: "InfinityCore.qml"
+                    x: core3.x; y: core3.y; width: core3.width; height: core3.height
+                    onLoaded: {
+                        item.mode = Qt.binding(function() { return win.st })
+                        item.level = Qt.binding(function() { return win.level })
+                    }
                 }
 
                 Column {

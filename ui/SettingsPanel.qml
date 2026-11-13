@@ -75,6 +75,7 @@ Item {
         hackBox.currentIndex = Math.max(0, hackFreqs.findIndex(m => m.v === (cfg.hack_show_every || "sometimes")))
         guardSw.checked = cfg.guardian !== false
         reviveSw.checked = cfg.guardian_show !== false
+        infinitySw.checked = cfg.infinity !== false
         adminSw.checked = cfg.guardian_admin === true
         counterSw.checked = cfg.guardian_counter !== false
         enemyField.text = (cfg.enemy_installs || []).join("; ")
@@ -122,6 +123,7 @@ Item {
             hack_show_every: hackFreqs[hackBox.currentIndex].v,
             guardian: guardSw.checked,
             guardian_show: reviveSw.checked,
+            infinity: infinitySw.checked,
             guardian_admin: adminSw.checked,
             guardian_counter: counterSw.checked,
             enemy_installs: splitList(enemyField.text),
@@ -324,6 +326,11 @@ Item {
                     id: reviveSw
                     visible: guardSw.checked
                     text: "되살아날 때 연출 — 화면이 해킹당하듯 깨지다 TV 지직 화면 뒤 울트론 눈부터 나타난다"
+                }
+                Toggle {
+                    id: infinitySw
+                    visible: guardSw.checked
+                    text: "인피니티 울트론 — 되살아나면 여섯 스톤을 두른 모습으로 깨어난다 (파워 · 타임 스톤 연출)"
                 }
                 Toggle {
                     id: adminSw

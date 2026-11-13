@@ -10,6 +10,15 @@
   6) 잠깐 머문 뒤, 검은 바탕이 걷히며 울트론이 그 자리에서 HUD 크기로 줄어든다. 실제 울트론 HUD 가 바로 그 자리에 켜지고
      (app.py 가 옮겨 둔다), 덮개의 울트론은 HUD 와 겹친 채 옅어진다 — 울트론은 사라지지 않고 그 자리에 켜져 있다.
 
+인피니티 울트론으로 되살아날 때 (설정 'infinity', 기본 켜짐 — 모습은 infinity.py) 4) · 5) 가 길어진다 (장면 전체 약 28초):
+  4) 두 눈이 하얗게 달아오르며 천천히 떠오른다 (3.2초).
+  5) 원판 · 달아오른 링 · 칼날 띠가 나타나고 (2.6초), 여섯 스톤이 하나씩 천천히 와서 박힌다 (7.2초 — 스톤마다 제 색의
+     고리가 모여들고 종소리가 한 음씩 높아진다). 그다음 눈금 · 무한 사슬 · 꺾쇠와 가시 · 이름이 나타난다 (3.2초).
+  6) 스톤이 맥박 치는 채로 머물다가 (1.8초), 그 자리에서 HUD 크기로 줄어든다 — 실제 HUD 도 인피니티 울트론으로 켜진다.
+  인피니티 장면은 일부러 과격하다 (사용자가 그렇게 해 달라고 했다 — 보는 사람 가운데 빛에 민감한 사람이 없다):
+  스톤이 박힐 때마다 화면이 그 스톤의 색으로 번쩍이고 번개가 치며 코어가 흔들린다. 다 나타나는 순간에는 크게 번쩍인 뒤 몇 번 더
+  깜빡인다. 아래의 '1초에 3번 이하' 규칙은 보통 장면에만 지킨다. 번쩍임이 싫으면 설정에서 '인피니티 울트론'을 끄면 된다.
+
 실제로는 아무것도 바꾸지 않는다. 그 순간의 실제 화면을 찍어 그 그림을 일그러뜨려 덮개 창에 그릴 뿐이다.
 이 파일은 재료 · 시간표 · 사건(찢김 · 블록 · 글자 …) · 소리만 만든다 (numpy — Qt 없이 시험할 수 있다). 그리는 것은 revive_view.py.
 해킹 장면은 미리 그림으로 만들어 두지 않고 매 순간 그린다 — 사건 목록만 정해 두면 그 시각의 모습이 하나로 정해진다
@@ -21,6 +30,7 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -40,6 +50,16 @@ FORM = 2.8                 # 눈 둘레로 코어가 안쪽부터 나타난다
 HOLD = 0.8                 # 다 나타난 채 머문다
 SHRINK = 1.3               # 검은 바탕이 걷히며 그 자리에서 HUD 크기로 줄어든다
 HANDOFF = 0.6              # 실제 HUD 와 겹친 채 덮개의 울트론이 옅어진다
+# 인피니티 울트론으로 되살아날 때의 시간표 (눈 + 스톤 ≈ 10초)
+I_EYES = 3.2               # 두 눈이 하얗게 달아오르며 떠오른다
+I_INNER = 2.6              # 원판 · 달아오른 링 · 칼날 띠
+I_STONES = 7.2             # 여섯 스톤이 하나씩 (1.2초에 하나)
+I_OUTER = 3.2              # 눈금 · 무한 사슬 · 꺾쇠와 가시 · 이름
+I_HOLD = 1.8               # 다 나타난 채 머문다 (스톤이 맥박 친다)
+STONE_NOTES = (392.0, 440.0, 523.3, 587.3, 659.3, 784.0)   # 스톤이 박힐 때마다 울리는 종소리 (한 음씩 높아진다)
+STONE_RGB = ((178, 108, 255), (72, 146, 255), (255, 70, 78), (255, 142, 44), (84, 224, 122), (255, 222, 70))
+#            보라(힘)          파랑             빨강           주황            초록(시간)       노랑 — 스톤이 박히는 차례대로
+AFTERSHOCKS = (0.34, 0.52, 0.78)   # 다 나타난 뒤 이만큼씩 지나 한 번씩 더 깜빡인다 (초)
 HUD_SIZE = 214             # HUD 엠블럼 지름 (논리 픽셀, ui/Main.qml) — 줄어들 크기를 따로 받지 못했을 때
 STUTTER_FROM = 0.45        # 이 세기부터 움직임이 버벅거린다 (시간을 띄엄띄엄 쓴다)
 
@@ -59,15 +79,23 @@ class Scene:
     smears: np.ndarray               # (n, 7): t0 · t1 · y · 높이 · x · 너비 · 가져올 x  — 한 줄을 옆으로 길게 늘인 얼룩
     jumps: np.ndarray                # (n, 3): t0 · t1 · 위아래로 튄 양 (높이 비율)
     codes: list = field(default_factory=list)   # (t0, x, y, 글, 종류 0 = 붉은 제목 · 1 = 흰 16진수)
+    infinity: bool = False           # 인피니티 울트론으로 되살아난다 (눈 · 스톤이 천천히 나타나는 긴 시간표)
 
     def marks(self) -> dict[str, float]:
-        """각 단계가 끝나는 때 (초)."""
+        """각 단계가 끝나는 때 (초). 인피니티면 'inner' · 'stones' 가 더 있고, 'form' 은 다 나타난 때다."""
         m = {"hack": HACK}
         m["static"] = m["hack"] + STATIC
         m["settle"] = m["static"] + SETTLE
-        m["eyes"] = m["settle"] + EYES
-        m["form"] = m["eyes"] + FORM
-        m["hold"] = m["form"] + HOLD
+        if self.infinity:
+            m["eyes"] = m["settle"] + I_EYES
+            m["inner"] = m["eyes"] + I_INNER
+            m["stones"] = m["inner"] + I_STONES
+            m["form"] = m["stones"] + I_OUTER
+            m["hold"] = m["form"] + I_HOLD
+        else:
+            m["eyes"] = m["settle"] + EYES
+            m["form"] = m["eyes"] + FORM
+            m["hold"] = m["form"] + HOLD
         m["shrink"] = m["hold"] + SHRINK
         m["end"] = m["shrink"] + HANDOFF
         return m
@@ -87,10 +115,12 @@ class Scene:
 
 def phase(scene: Scene, t: float) -> tuple[str, float]:
     """t 초 때의 단계와 그 단계 안에서의 진행 0..1:
-    hack · static · settle · eyes · form · hold · shrink · handoff · end."""
+    hack · static · settle · eyes · form · hold · shrink · handoff · end.
+    인피니티면 form 대신 inner(원판 · 링 · 칼날) · stones(스톤 여섯) · outer(바깥 링 · 가시 · 이름)."""
     m = scene.marks()
     start = 0.0
-    for name, key in (("hack", "hack"), ("static", "static"), ("settle", "settle"), ("eyes", "eyes"), ("form", "form"),
+    core = ((("inner", "inner"), ("stones", "stones"), ("outer", "form")) if scene.infinity else (("form", "form"),))
+    for name, key in (("hack", "hack"), ("static", "static"), ("settle", "settle"), ("eyes", "eyes"), *core,
                       ("hold", "hold"), ("shrink", "shrink"), ("handoff", "end")):
         end = m[key]
         if t < end:
@@ -199,22 +229,84 @@ def static_tiles(w: int, h: int, rng: np.random.Generator | None = None, n: int 
 
 
 # ---------------------------------------------------------------- 엮기
+def stone_times(scene: Scene) -> list[float]:
+    """여섯 스톤이 저마다 자리에 박히는 때 (초) — 인피니티 장면에서만 뜻이 있다."""
+    m = scene.marks()
+    if not scene.infinity:
+        return []
+    each = I_STONES / 6
+    return [m["inner"] + (i + 0.62) * each for i in range(6)]
+
+
+def burst(scene: Scene, t: float) -> tuple[float, tuple[int, int, int]]:
+    """인피니티 장면의 번쩍임 → (화면 전체를 물들이는 진하기 0..1, 색).
+    스톤이 박힐 때마다 그 스톤의 색으로 번쩍이고, 다 나타나는 순간 하얗게 크게 번쩍인 뒤 몇 번 더 깜빡인다."""
+    if not scene.infinity:
+        return 0.0, (0, 0, 0)
+    m = scene.marks()
+    best, tint = 0.0, (255, 255, 255)
+    for i, at in enumerate(stone_times(scene)):
+        if t >= at:
+            a = 0.5 * math.exp(-(t - at) / 0.11)
+            if a > best:
+                c = STONE_RGB[i]
+                best, tint = a, (int(c[0] * 0.7 + 76), int(c[1] * 0.7 + 76), int(c[2] * 0.7 + 76))
+    if t >= m["eyes"] - 0.12:                                       # 눈이 다 떠진 순간: 붉게 한 번
+        a = 0.28 * math.exp(-max(0.0, t - (m["eyes"] - 0.12)) / 0.09)
+        if a > best:
+            best, tint = a, (255, 60, 70)
+    if t >= m["form"]:                                              # 다 나타났다: 크게 한 번 + 여진
+        a = 0.9 * math.exp(-(t - m["form"]) / 0.20)
+        for k, gap in enumerate(AFTERSHOCKS):
+            if t >= m["form"] + gap:
+                a = max(a, (0.5 - 0.1 * k) * math.exp(-(t - m["form"] - gap) / 0.06))
+        if a > best:
+            best, tint = a, (255, 228, 228)
+    return (best if best > 0.004 else 0.0), tint
+
+
+def jolt(scene: Scene, t: float) -> tuple[float, float]:
+    """인피니티 장면에서 코어가 흔들린 양 (화면 짧은 변에 대한 비율) — 스톤이 박힐 때 툭, 다 나타나는 순간 크게."""
+    if not scene.infinity:
+        return 0.0, 0.0
+    m = scene.marks()
+    amp = max([0.012 * math.exp(-(t - at) / 0.16) for at in stone_times(scene) if t >= at], default=0.0)
+    if t >= m["form"]:
+        amp = max(amp, 0.034 * math.exp(-(t - m["form"]) / 0.32))
+    if amp < 2e-4:
+        return 0.0, 0.0
+    n = int(t * 50)                                                 # 1/50 초마다 다른 쪽으로 튄다 (같은 t 면 늘 같은 값)
+    return amp * math.sin(n * 12.9898) , amp * math.sin(n * 78.233 + 1.7)
+
+
+def strikes(scene: Scene, t: float) -> list[tuple[int, float]]:
+    """t 초에 치고 있는 번개 → [(어느 스톤의 번개인가 0..5 · 다 나타난 순간의 큰 번개는 -1, 세기 0..1)]."""
+    if not scene.infinity:
+        return []
+    out = [(i, 1 - (t - at) / 0.34) for i, at in enumerate(stone_times(scene)) if 0 <= t - at < 0.34]
+    f = scene.marks()["form"]
+    if 0 <= t - f < 0.95:
+        out.append((-1, 1 - (t - f) / 0.95))
+    return out
+
+
 def build(shot: np.ndarray, size: tuple[int, int], rng: np.random.Generator | None = None,
-          target: tuple[float, float, float] | None = None) -> Scene:
+          target: tuple[float, float, float] | None = None, infinity: bool = False) -> Scene:
     """찍은 실제 화면(RGB) · 덮을 화면 크기(w, h) · 끝에 울트론이 자리 잡을 곳으로 장면을 엮는다 (다른 스레드에서 부른다).
-    target 이 없으면 화면 한가운데, HUD 엠블럼 크기."""
+    target 이 없으면 화면 한가운데, HUD 엠블럼 크기. infinity: 인피니티 울트론으로 되살아난다."""
     rng = rng or np.random.default_rng()
     w, h = int(size[0]), int(size[1])
     ev = _events(rng)
     return Scene(np.ascontiguousarray(shot[..., :3]), static_tiles(w, h, rng), (w, h),
                  target or (w / 2, h / 2, float(HUD_SIZE)), ev["tears"], ev["blocks"], ev["smears"], ev["jumps"],
-                 ev["codes"])
+                 ev["codes"], bool(infinity))
 
 
 # ---------------------------------------------------------------- 소리
 def sound(scene: Scene, rng: np.random.Generator | None = None, sr: int = glitch.SOUND_RATE) -> np.ndarray:
     """장면에 맞춘 소리 (int16 모노): 점점 거칠고 커지는 디지털 잡음(찢어질 때마다 지직) → 쉭 하는 TV 지직 →
-    눈이 떠오를 때 낮게 차오르는 울림 → 코어가 다 나타날 때 낮게 쿵 → 줄어들 때 가라앉는 소리."""
+    눈이 떠오를 때 낮게 차오르는 울림 → 코어가 다 나타날 때 낮게 쿵 → 줄어들 때 가라앉는 소리.
+    인피니티 장면이면 울림이 더 길게 차오르고, 스톤이 박힐 때마다 종소리가 한 음씩 높아진다."""
     rng = rng or np.random.default_rng()
     m = scene.marks()
     n_all = int(m["end"] * sr) + 1
@@ -261,10 +353,38 @@ def sound(scene: Scene, rng: np.random.Generator | None = None, sr: int = glitch
     e0, e1 = int(m["settle"] * sr), int(m["shrink"] * sr)
     te = t[e0:e1] - m["settle"]
     hum = 0.26 * np.sin(2 * np.pi * 55 * te) + 0.12 * np.sin(2 * np.pi * 110 * te) + 0.04 * np.sin(2 * np.pi * 165 * te)
-    env = np.clip(te / (EYES + FORM * 0.6), 0, 1) ** 1.6
+    rise = (m["form"] - m["settle"]) * 0.85 if scene.infinity else EYES + FORM * 0.6
+    env = np.clip(te / rise, 0, 1) ** 1.6
     fade_at = m["hold"] - m["settle"]
     env *= np.clip(1 - (te - fade_at) / SHRINK, 0, 1)
     out[e0:e1] += hum * env
+
+    # 3-1) 인피니티: 스톤이 박힐 때마다 — 숨을 들이쉬듯 차오르는 소리 뒤에 맑은 종소리 (한 음씩 높아진다)
+    for i, at in enumerate(stone_times(scene)):
+        note = STONE_NOTES[i % len(STONE_NOTES)]
+        a = int((at - 0.55) * sr)
+        tw = np.arange(int(0.55 * sr), dtype=np.float32) / sr
+        out[a:a + len(tw)] += (0.05 * (tw / 0.55) ** 2 * np.sin(2 * np.pi * (note / 4) * tw * (1 + 0.6 * tw))
+                               )[:max(0, n_all - a)]
+        b = int(at * sr)
+        tb = np.arange(min(int(1.6 * sr), n_all - b), dtype=np.float32) / sr
+        bell = (np.sin(2 * np.pi * note * tb) + 0.45 * np.sin(2 * np.pi * note * 2.0 * tb) * np.exp(-tb * 3)
+                + 0.25 * np.sin(2 * np.pi * note * 2.76 * tb) * np.exp(-tb * 6))
+        out[b:b + len(tb)] += 0.13 * bell * np.exp(-tb * 3.2) * np.clip(tb / 0.006, 0, 1)
+        tc = np.arange(min(int(0.5 * sr), n_all - b), dtype=np.float32) / sr          # 번개: 탁 터지고 낮게 우르릉
+        crack = rng.uniform(-1, 1, len(tc)).astype(np.float32)
+        crack = (crack + np.roll(crack, 1) + np.roll(crack, 2) + np.roll(crack, 3)) / 4
+        out[b:b + len(tc)] += 0.42 * crack * np.exp(-tc * 9) + 0.22 * np.sin(2 * np.pi * (70 - 30 * tc) * tc) * np.exp(-tc * 6)
+    if scene.infinity:                                              # 다 나타나는 순간: 크게 터지고 길게 울린다 + 여진
+        f0 = int(m["form"] * sr)
+        tf = np.arange(min(int(1.6 * sr), n_all - f0), dtype=np.float32) / sr
+        boom = rng.uniform(-1, 1, len(tf)).astype(np.float32)
+        boom = (boom + np.roll(boom, 1) + np.roll(boom, 2) + np.roll(boom, 3) + np.roll(boom, 4)) / 5
+        out[f0:f0 + len(tf)] += 0.6 * boom * np.exp(-tf * 4.5) + 0.5 * np.sin(2 * np.pi * (34 + 20 * np.exp(-tf * 5)) * tf) * np.exp(-tf * 2.2)
+        for gap in AFTERSHOCKS:
+            a0 = int((m["form"] + gap) * sr)
+            ta = np.arange(min(int(0.12 * sr), n_all - a0), dtype=np.float32) / sr
+            out[a0:a0 + len(ta)] += 0.3 * rng.uniform(-1, 1, len(ta)).astype(np.float32) * np.exp(-ta * 30)
 
     # 4) 코어가 다 나타날 때 낮게 쿵
     k0 = int(m["form"] * sr)
