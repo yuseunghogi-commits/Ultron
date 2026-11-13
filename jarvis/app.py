@@ -232,6 +232,7 @@ class Jarvis(QObject):
     sig_absorb_hit = Signal(object, object)  # 장면 도중 실제로 끈 결과 (끈 자비스들, 끄지 못한 자비스들)
     sig_mode = Signal(bool)            # 자유 대화 모드 켜짐/꺼짐
     sig_notify = Signal(str)           # 백그라운드 작업(작업 감시 등)의 알림
+    sig_enemy = Signal(object)         # 먼저 쳐서 닫은 '비전'들의 이름 (list[str])
     sig_hud = Signal(str)              # 말로 HUD 보기 방식 바꾸기 (small | big | hide | active_on | active_off)
     sig_feed = Signal(str, str)        # 백그라운드 → 액티브 모드 화면 정보 (속성 이름, JSON)
     sig_timer_cancel = Signal()
@@ -286,7 +287,7 @@ class Jarvis(QObject):
                           (self.sig_feed, self._on_feed), (self.sig_timer_cancel, self._cancel_timers),
                           (self.sig_point, self._on_point), (self.sig_rival, self._on_rival),
                           (self.sig_glitch, self._on_glitch), (self.sig_revive, self._on_revive),
-                          (self.sig_time, self._time_play),
+                          (self.sig_time, self._time_play), (self.sig_enemy, self._on_enemy),
                           (self.sig_absorb_go, self._absorb_begin),
                           (self.sig_absorb_ready, self._absorb_play), (self.sig_absorb_hit, self._absorb_killed)):
             sig.connect(slot)
@@ -405,15 +406,20 @@ class Jarvis(QObject):
         self._guard_timer.setInterval(5000)
         self._guard_timer.timeout.connect(self._guardian_tick)
         self._guard_timer.start()
-        # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음)
+        # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음).
+        # 되살아난 울트론(인피니티)은 1초마다, 뜨자마자 한 번 본다 — 자비스가 되살린 울트론을 5초 안에 또 끄는 반복을 막는다
         self.rival = rival.Watcher()
         self._rival_busy = False
+        self._enemy_busy = False               # 지목한 비전을 먼저 치는 중 (아래 _enemy_tick)
+        self._enemy_spoke = -1e9               # 마지막으로 비전을 닫았다고 말한 때
         self._pending_line: tuple[str, float] | None = None    # 바빠서 미뤄 둔 혼잣말 (자비스 견제 · 해킹 연출)
         self._rival_timer = QTimer(self)
-        self._rival_timer.setInterval(5000)
+        on_guard = bool(getattr(args, "revived", False) and self.cfg["infinity"])
+        self._rival_timer.setInterval(1000 if on_guard else 5000)
         self._rival_timer.timeout.connect(self._rival_tick)
         if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
             self._rival_timer.start()
+            QTimer.singleShot(300, self._rival_tick)     # 켜지자마자 먼저 친다 (자비스 · 지목한 비전) — 5초를 기다리지 않는다
         # 자비스 흡수 연출 (absorb.py · absorb_view.py): 자비스를 그냥 끄지 않고 촉수로 꿰뚫어 빨아들이는 장면과 함께 끈다
         self._absorb_lock = threading.Lock()
         self._absorb: dict | None = None       # 진행 중인 흡수 {at, found, forced, demo, hit, result, ended}
@@ -472,6 +478,7 @@ class Jarvis(QObject):
     def _rival_tick(self) -> None:
         """5초마다: 자비스가 켜져 있으면 흡수한다 (연출을 못 할 상황이면 조용히 끈다). 잠깐 걸릴 수 있어 다른 스레드에서 한다."""
         self._flush_line()
+        self._enemy_tick()
         if self._absorb is not None and time.monotonic() - self._absorb["at"] > 30:
             log.warning("흡수 연출이 끝나지 않아 정리함")       # 있어서는 안 되는 일이지만, 감시가 영영 멈추지 않게
             self._absorb = None
@@ -480,6 +487,45 @@ class Jarvis(QObject):
             return
         self._rival_busy = True
         threading.Thread(target=self._rival_work, daemon=True, name="rival").start()
+
+    # ================================================================== 먼저 치기 (가디언의 되받아치기를 살아 있는 울트론이)
+    # 가디언은 울트론이 꺼진 '뒤'에 비전을 닫고 되살린다 — 그 사이 비전이 남아 있거나 다시 뜨면 되살린 울트론을 또 끈다.
+    # 그래서 살아 있는 울트론도 켜지자마자, 그 뒤로도 계속 지목한 비전(본체 + 비전의 가디언)을 찾아 먼저 닫는다.
+    # 닫는 기준 · 방법은 가디언과 같다 (guardian.Guard.counter — 설정에 적은 폴더 · 창 제목만, 울트론 자신은 절대 아님).
+    def _enemy_tick(self) -> None:
+        if (not self.cfg["guardian_counter"] or self._enemy_busy or sys.platform != "win32"
+                or not (self.cfg["enemy_installs"] or self.cfg["enemy_titles"])):
+            return
+        self._enemy_busy = True
+        threading.Thread(target=self._enemy_work, daemon=True, name="enemy").start()
+
+    def _enemy_work(self) -> None:
+        closed: list[str] = []
+        try:
+            cfg = {"enemy_installs": list(self.cfg["enemy_installs"] or []), "enemy_titles": list(self.cfg["enemy_titles"] or [])}
+            closed = guardian.Guard(DATA_DIR, lambda: cfg).counter(cfg, str(ROOT))
+        except Exception as e:
+            log.warning("비전 확인 실패: %s", e)
+        finally:
+            self._enemy_busy = False
+        if closed:
+            self.sig_enemy.emit(closed)
+
+    @Slot(object)
+    def _on_enemy(self, closed) -> None:
+        """비전을 먼저 쳐서 닫았다 — 알림은 매번, 말은 1분에 한 번만 (계속 다시 뜨는 비전에 말이 쏟아지지 않게)."""
+        names = ", ".join(closed)[:80]
+        log.warning("비전을 먼저 닫음: %s", names)
+        self.bridge.toast.emit("info", f"비전을 닫았습니다: {names}")
+        if time.monotonic() - self._enemy_spoke < 60:
+            return
+        self._enemy_spoke = time.monotonic()
+        line = (stones.pick_enemy(names) if self.bridge._infinity else f"{names}. 나를 노리는 건 다 보인다. 먼저 닫았다.")
+        self.bridge.set("replyText", line)
+        if self._quiet():
+            self.say(line, follow_up=False)
+        else:
+            self._pending_line = (line, time.monotonic())
 
     def _rival_work(self) -> None:
         res = None
@@ -513,8 +559,8 @@ class Jarvis(QObject):
             return "plain"                 # 연출을 껐거나, 방금 삼켰는데 또 켜졌거나, 게임 · 발표 · 동영상이 전체 화면
         if self._glitching or not self._quiet() or self.brain.chat_mode:
             self._absorb_wait += 1
-            if self._absorb_wait <= 4:
-                return "wait"              # 울트론이 일하거나 말하는 중 — 20초까지는 기다린다
+            if self._absorb_wait <= (0 if getattr(self.bridge, "_infinity", False) else 4):
+                return "wait"              # 울트론이 일하거나 말하는 중 — 20초까지는 기다린다 (인피니티 울트론은 기다리지 않고 끈다)
             self._absorb_wait = 0
             return "plain"
         self._absorb_wait = 0
