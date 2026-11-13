@@ -95,7 +95,7 @@ def guard(tmp_path, monkeypatch):
     monkeypatch.setattr(guardian, "shutting_down", lambda: g.shutdown)
     monkeypatch.setattr(Guard, "counter", lambda self, cfg, root: g.counted.append(root) or ["vision"])
     monkeypatch.setattr(Guard, "relaunch",
-                        lambda self, info, closed=None, fast=False, admin=False: g.launched.append((info, closed, fast, admin)))
+                        lambda self, info, closed=None, fast=False, admin=False, now=0.0: g.launched.append((info, closed, fast, admin)))
     return g
 
 
@@ -431,3 +431,58 @@ def test_a_surviving_guardian_respawns_the_one_that_was_killed(tmp_path, monkeyp
     monkeypatch.setattr(guardian, "count_running", lambda d: 1)      # 다른 가디언이 꺼졌다
     g.guard_peers()
     assert len(launched) == 1                                        # 빈 자리를 다시 띄운다
+
+
+# ---------------------------------------------------------------- 관리자 권한 프로세스를 죽은 줄 알지 않기 (확인 창 폭주)
+def test_an_admin_process_reads_as_alive_not_as_dead(monkeypatch):
+    import sys as _sys
+    import types as _t
+
+    class AccessDenied(Exception):
+        pass
+
+    class NoSuchProcess(Exception):
+        pass
+
+    denied = _t.SimpleNamespace(status=lambda: (_ for _ in ()).throw(AccessDenied()),
+                                create_time=lambda: (_ for _ in ()).throw(AccessDenied()),
+                                cmdline=lambda: (_ for _ in ()).throw(AccessDenied()))
+    fake = _t.SimpleNamespace(Process=lambda pid: denied, STATUS_ZOMBIE="zombie",
+                              AccessDenied=AccessDenied, NoSuchProcess=NoSuchProcess, pid_exists=lambda pid: True)
+    monkeypatch.setitem(_sys.modules, "psutil", fake)
+    assert guardian.created_at(42) == guardian.ALIVE                 # 살아 있다 — 권한이 높아 못 읽을 뿐 (죽음 아님)
+    assert guardian.same_process(guardian.ALIVE, 1234.5) is True     # 그래서 같은 울트론으로 본다 → 되살리지 않는다
+    assert guardian.is_guardian(42) is True                          # 관리자 가디언의 자리도 빼앗지 않는다
+
+    fake.Process = lambda pid: (_ for _ in ()).throw(NoSuchProcess())    # 진짜 없는 번호
+    assert guardian.created_at(42) is None and guardian.is_guardian(42) is False
+    fake.pid_exists = lambda pid: False
+    fake.Process = lambda pid: (_ for _ in ()).throw(RuntimeError("x"))
+    assert guardian.created_at(42) is None                           # 알 수 없고 번호도 없으면 죽음
+
+
+def test_only_one_guardian_revives_per_death(tmp_path):
+    import time
+    p = Paths(tmp_path)
+    now = time.time()
+    assert guardian.claim_revive(p, now)                             # 첫 가디언이 맡는다
+    assert not guardian.claim_revive(p, now + 1)                     # 곧바로 온 둘째는 맡지 못한다 (확인 창이 두 번 뜨지 않게)
+    assert not guardian.claim_revive(p, now + guardian.REGISTER_WAIT - 0.2)
+    assert guardian.claim_revive(p, now + guardian.REGISTER_WAIT + 1)   # 한참 뒤(또 꺼졌다)엔 다시 맡는다
+
+
+def test_admin_elevation_backs_off_after_a_denial(tmp_path, monkeypatch):
+    monkeypatch.setattr(guardian.sys, "platform", "win32")
+    monkeypatch.setattr(guardian, "is_admin", lambda: False)
+    elev, det = [], []
+    monkeypatch.setattr(guardian, "launch_elevated", lambda cmd, cwd=None: elev.append(cmd) or False)   # 사용자가 거부
+    monkeypatch.setattr(guardian, "launch_detached", lambda cmd, cwd=None: det.append(cmd))
+    g = Guard(tmp_path, load_cfg=dict)
+    info = {"relaunch": ["py", "main.py"], "root": str(tmp_path)}
+    g.relaunch(info, admin=True, now=100)
+    assert len(elev) == 1 and len(det) == 1 and g.last_elev_fail == 100    # 거부 → 일반 권한으로라도 되살림
+    g.relaunch(info, admin=True, now=150)                                  # 곧바로 또 꺼져도 확인 창은 안 띄운다
+    assert len(elev) == 1 and len(det) == 2
+    monkeypatch.setattr(guardian, "launch_elevated", lambda cmd, cwd=None: elev.append(cmd) or True)   # 쿨다운 지난 뒤엔 다시 시도 — 이번엔 허락
+    g.relaunch(info, admin=True, now=100 + guardian.ELEV_RETRY + 1)
+    assert len(elev) == 2 and g.last_elev_fail is None and len(det) == 2   # 관리자로 떴으니 일반 권한 띄우기는 더 안 한다

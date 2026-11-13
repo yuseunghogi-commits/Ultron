@@ -415,7 +415,7 @@ class Jarvis(QObject):
         self._pending_line: tuple[str, float] | None = None    # 바빠서 미뤄 둔 혼잣말 (자비스 견제 · 해킹 연출)
         self._rival_timer = QTimer(self)
         on_guard = bool(getattr(args, "revived", False) and self.cfg["infinity"])
-        self._rival_timer.setInterval(1000 if on_guard else 5000)
+        self._rival_timer.setInterval(3000 if on_guard else 5000)   # 되살아난 직후엔 좀 더 자주 보되(3초), 1초는 과하다 (모든 프로세스를 훑어 발열)
         self._rival_timer.timeout.connect(self._rival_tick)
         if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
             self._rival_timer.start()
