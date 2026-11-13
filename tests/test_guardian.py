@@ -486,3 +486,40 @@ def test_admin_elevation_backs_off_after_a_denial(tmp_path, monkeypatch):
     monkeypatch.setattr(guardian, "launch_elevated", lambda cmd, cwd=None: elev.append(cmd) or True)   # 쿨다운 지난 뒤엔 다시 시도 — 이번엔 허락
     g.relaunch(info, admin=True, now=100 + guardian.ELEV_RETRY + 1)
     assert len(elev) == 2 and g.last_elev_fail is None and len(det) == 2   # 관리자로 떴으니 일반 권한 띄우기는 더 안 한다
+
+
+def test_enemy_scan_reads_command_lines_only_of_python_programs(tmp_path, monkeypatch):
+    """모든 프로그램의 명령줄을 읽으면 느리다(발열) — 파이썬 프로그램만 읽는다.
+    그래서 비전 폴더의 .py 파일을 연 편집기(파이썬 아님)를 비전으로 잘못 닫는 일도 없다."""
+    read, killed = [], []
+
+    class Proc:
+        def __init__(self, pid, exe, name, cmdline, cwd=""):
+            self.pid, self._cmd, self._cwd = pid, cmdline, cwd
+            self.info = {"pid": pid, "exe": exe, "name": name}     # process_iter 는 이름 · 실행 파일만 읽어 둔다
+
+        def cmdline(self):
+            read.append(("cmdline", self.pid))
+            return self._cmd
+
+        def cwd(self):
+            read.append(("cwd", self.pid))
+            return self._cwd
+
+        def kill(self):
+            killed.append(self.pid)
+
+        def wait(self, t):
+            pass
+
+    V, U = r"C:\Users\me\vision", r"C:\Users\me\ultron"
+    procs = [Proc(1, r"C:\Python\pythonw.exe", "pythonw.exe", [r"C:\Python\pythonw.exe", V + r"\main.py"]),   # 비전 본체
+             Proc(2, r"C:\Code\code.exe", "code.exe", [r"C:\Code\code.exe", V + r"\main.py"]),               # 비전 파일을 연 편집기
+             Proc(3, r"C:\Windows\explorer.exe", "explorer.exe", [r"C:\Windows\explorer.exe"])]
+    asked = []
+    monkeypatch.setitem(__import__("sys").modules, "psutil",
+                        types.SimpleNamespace(process_iter=lambda attrs: asked.append(attrs) or procs))
+    Guard(tmp_path, load_cfg=dict).counter({"enemy_installs": [V], "enemy_titles": []}, U)
+    assert killed == [1]                                             # 편집기 · 탐색기는 그대로
+    assert {pid for _, pid in read} == {1}                           # 명령줄 · 작업 폴더는 파이썬 프로그램만 읽었다
+    assert "cmdline" not in asked[0] and "cwd" not in asked[0]       # 한꺼번에 모든 프로그램의 명령줄을 읽지 않는다

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import (QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPolygonF,
                            QRadialGradient, QTransform)
 
@@ -44,6 +44,7 @@ GEM_BEAT = 2.2                                 # 보석이 맥박 치는 빠르�
 WAVE_EVERY = 3.2                               # 힘의 물결이 퍼져 나가는 간격 (초)
 CHAIN_R, CHAIN_AMP, CHAIN_LINKS = 186, 4.6, 36                   # 무한 사슬 링: 반지름 · 꼬인 폭 · 꼬인 횟수
 POWER, TIME = 0, 4                             # 연출에 쓰는 스톤: 보라(힘) · 초록(시간) — GEMS 에서의 자리
+LOD_SCALE = 0.7            # 440 단위 하나가 이 픽셀보다 작게 그려지면(HUD) 세부를 던다 — 부활 연출(약 1.4)은 그대로
 REACH = 252                                    # 가시 끝까지의 거리 — 440 상자(220)보다 나간다
 BOX = 2 * (REACH + 4)                          # 가시까지 다 들어가는 정사각형의 한 변 (HUD 에서는 이 상자를 엠블럼 자리에 맞춘다)
 EYE = [(82, -56), (46, -49), (13, -31), (20, -16), (49, -28), (78, -41), (82, -56)]      # 오른쪽 눈 (조금 더 날카롭다)
@@ -123,9 +124,11 @@ def _flare(p: QPainter, length: float, thick: float, col: QColor, a: float) -> N
     p.restore()
 
 
-def _gem(p: QPainter, at: QPointF, ang: float, r: float, col: QColor, k: float, beat: float = 0.5) -> None:
+def _gem(p: QPainter, at: QPointF, ang: float, r: float, col: QColor, k: float, beat: float = 0.5,
+         small: bool = False) -> None:
     """칼날 사이에 박힌 보석 하나: 빛무리 + 강철 테 + 깎인 여섯 면 + 타오르는 속 + 십자 섬광.
-    ang = 놓인 각도 (뾰족한 쪽이 바깥을 본다), beat 0..1 = 맥박 (클수록 밝다)."""
+    ang = 놓인 각도 (뾰족한 쪽이 바깥을 본다), beat 0..1 = 맥박 (클수록 밝다).
+    small: 작게 그린다 (HUD) — 보이지 않을 만큼 작은 안쪽 흰 섬광은 뺀다."""
     if k <= 0:
         return
     _light(p, at.x(), at.y(), r * (3.0 + 0.6 * beat), col, (0.6 + 0.3 * beat) * k)
@@ -157,9 +160,25 @@ def _gem(p: QPainter, at: QPointF, ang: float, r: float, col: QColor, k: float, 
     p.rotate(-ang)                                             # 섬광은 보석이 돌아도 늘 가로 · 세로
     _light(p, 0, 0, r * 0.8, QColor(255, 255, 255), (0.3 + 0.35 * beat) * k)        # 하얗게 타오르는 속
     _flare(p, r * (2.1 + 0.9 * beat), 1.5, col.lighter(170), (0.6 + 0.4 * beat) * k)
-    _flare(p, r * (1.1 + 0.4 * beat), 1.1, QColor(255, 255, 255), 0.9 * k)
+    if not small:
+        _flare(p, r * (1.1 + 0.4 * beat), 1.1, QColor(255, 255, 255), 0.9 * k)
     p.restore()
 
+
+_BLADES: dict[int, tuple[QPolygonF, QPolygonF]] = {}
+
+
+def _blade(i: int) -> tuple[QPolygonF, QPolygonF]:
+    """i 번째 칼날 (몸통 다각형, 바깥 가장자리) — 도는 좌표계 안에서 늘 같은 모양이라 한 번만 만든다."""
+    if i not in _BLADES:
+        a0 = i * 60
+        inner = [pt(a0 + BAND_SPAN * j / 8, BAND_IN) for j in range(9)]
+        outer = [pt(a0 + BAND_SKEW + BAND_SPAN * j / 8, BAND_OUT) for j in range(8, -1, -1)]
+        _BLADES[i] = (QPolygonF(inner + outer), QPolygonF(outer))
+    return _BLADES[i]
+
+
+_TICKS = [QLineF(pt(i * 5 - 90, 160), pt(i * 5 - 90, 160 + (13 if i % 6 == 0 else 8))) for i in range(72)]   # 눈금 72개 (자리는 늘 같다)
 
 _STRANDS: dict[int, list[QPointF]] = {}
 
@@ -193,8 +212,13 @@ def _word() -> QPainterPath:
     return _WORD[0]
 
 
+_LOOPS: dict[float, QPainterPath] = {}
+
+
 def _infinity(a: float, steps: int = 72) -> QPainterPath:
-    """무한대(∞) 곡선 — 가로 반폭 a."""
+    """무한대(∞) 곡선 — 가로 반폭 a. 같은 크기는 한 번만 만든다 (점 73개를 매번 계산하면 느리다)."""
+    if a in _LOOPS:
+        return _LOOPS[a]
     path = QPainterPath()
     for i in range(steps + 1):
         s = 2 * math.pi * i / steps
@@ -204,6 +228,8 @@ def _infinity(a: float, steps: int = 72) -> QPainterPath:
             path.moveTo(q)
         else:
             path.lineTo(q)
+    if len(_LOOPS) < 64:
+        _LOOPS[a] = path
     return path
 
 
@@ -225,6 +251,8 @@ def paint(p: QPainter, t: float, reveal: float = 1.0, cv: dict | None = None, ey
     cv: 부분별로 나타난 정도를 직접 줄 때 (parts 와 같은 열쇠. 'stones' = 스톤 여섯의 정도 목록을 주면 하나씩 따로 나타난다).
     eye_open: 눈을 뜬 정도 (1 = 보통, 작으면 가늘게)."""
     cv = cv if cv is not None else parts(reveal)
+    m = p.worldTransform()
+    small = math.hypot(m.m11(), m.m12()) < LOD_SCALE      # HUD 처럼 작게 그린다 — 안 보이는 세부를 덜어 빨리 그린다 (발열)
     p.save()
     p.setRenderHint(QPainter.Antialiasing)
     p.setBrush(Qt.NoBrush)
@@ -275,17 +303,15 @@ def paint(p: QPainter, t: float, reveal: float = 1.0, cv: dict | None = None, ey
             q = stage(cv["band"], i * 0.05, 0.7 + i * 0.05)
             if q <= 0:
                 continue
-            a0 = i * 60
-            inner = [pt(a0 + BAND_SPAN * j / 8, BAND_IN) for j in range(9)]
-            outer = [pt(a0 + BAND_SKEW + BAND_SPAN * j / 8, BAND_OUT) for j in range(8, -1, -1)]
+            blade, edge = _blade(i)
             p.setBrush(_k(BAND, 0.68 * q))
             p.setPen(_pen(_k(RING, 0.9 * q), 1.2))
-            p.drawPolygon(QPolygonF(inner + outer))
+            p.drawPolygon(blade)
             p.setBrush(Qt.NoBrush)
             p.setPen(_pen(_k(HOT, q), 3.2))
-            p.drawPolyline(QPolygonF(outer))
+            p.drawPolyline(edge)
             p.setPen(_pen(_k(WHITE_HOT, 0.9 * q), 1.2))
-            p.drawPolyline(QPolygonF(outer))
+            p.drawPolyline(edge)
         p.restore()
 
     # 여섯 보석 (칼날 사이에 박혀 함께 돈다) + 제 색의 빛이 안쪽 링으로 흘러든다
@@ -310,7 +336,8 @@ def paint(p: QPainter, t: float, reveal: float = 1.0, cv: dict | None = None, ey
             beat = 0.5 + 0.5 * math.sin(t * GEM_BEAT - i * math.pi / 3)      # 여섯이 차례로 밝아진다
             bright = col.lighter(125)
             mid = pt(ang, 196)
-            _light(p, mid.x(), mid.y(), 92, col, (0.10 + 0.07 * beat) * q)   # 후광을 제 색으로 물들인다
+            if not small:
+                _light(p, mid.x(), mid.y(), 92, col, (0.10 + 0.07 * beat) * q)   # 후광을 제 색으로 물들인다
             ray = QLinearGradient(pt(ang, GEM_R), pt(ang, 214))              # 바깥으로 쏘는 빛살 (꺾쇠 앞에서 사라진다)
             ray.setColorAt(0.0, _c(bright, (0.75 + 0.25 * beat) * q))
             ray.setColorAt(1.0, _c(bright, 0.0))
@@ -325,15 +352,17 @@ def paint(p: QPainter, t: float, reveal: float = 1.0, cv: dict | None = None, ey
             _qt_arc(p, 116, ang - 23 * q, 46 * q)
             p.setPen(_pen(_k(WHITE_HOT, (0.55 + 0.45 * beat) * q), 1.3))
             _qt_arc(p, 116, ang - 15 * q, 30 * q)
-            root = pt(ang, 113)
-            _light(p, root.x(), root.y(), 20, bright, (0.45 + 0.35 * beat) * q)   # 빛이 링으로 흘러드는 자리
-            _gem(p, pt(ang, GEM_R), ang, GEM_SIZE, col, q, beat)
+            if not small:
+                root = pt(ang, 113)
+                _light(p, root.x(), root.y(), 20, bright, (0.45 + 0.35 * beat) * q)   # 빛이 링으로 흘러드는 자리
+            _gem(p, pt(ang, GEM_R), ang, GEM_SIZE, col, q, beat, small)
 
     # 눈금 링 (강철 72개 — 흰빛이 한 바퀴 훑는다)
     if cv["ticks"] > 0:
         p.save()
         p.rotate(-4 * t)
         scan = (t * 90) % 360
+        groups: dict[tuple, list] = {}         # (색, 밝기 칸, 굵기) → 선들 — 묶어서 한 번에 그린다 (하나씩 그리면 느리다)
         for i in range(72):
             q = stage(cv["ticks"], i * 0.004, 0.6 + i * 0.004)
             if q <= 0:
@@ -342,8 +371,11 @@ def paint(p: QPainter, t: float, reveal: float = 1.0, cv: dict | None = None, ey
             big = i % 6 == 0
             wave = (0.5 + 0.5 * math.cos(math.radians((i * 5 - scan) % 360))) ** 10
             col = WHITE_HOT if wave > 0.5 else (RING if big else STEEL)
-            p.setPen(_pen(_k(col, q * min(1, (0.75 if big else 0.45) + 0.55 * wave)), 3 if big else 1.5))
-            p.drawLine(pt(ang, 160), pt(ang, 160 + (13 if big else 8)))
+            level = round(q * min(1, (0.75 if big else 0.45) + 0.55 * wave) * 16)    # 밝기를 16칸으로 (눈으로는 차이 없음)
+            groups.setdefault((col.rgb(), level, big), []).append(_TICKS[i])
+        for (rgb, level, big), lines in groups.items():
+            p.setPen(_pen(_k(QColor.fromRgb(rgb), level / 16), 3 if big else 1.5))
+            p.drawLines(lines)
         p.restore()
 
     # 무한 사슬 링 (붉은 줄과 강철 줄이 엇갈려 꼬였다 — 한 바퀴 그려지며 나타난다)
@@ -454,7 +486,7 @@ def paint(p: QPainter, t: float, reveal: float = 1.0, cv: dict | None = None, ey
         p.drawPath(word)
         p.restore()
         _light(p, 0, 62, 42, ACC, 0.4 * k)
-        loop = _infinity(27 * (0.7 + 0.3 * k))
+        loop = _infinity(round(27 * (0.7 + 0.3 * k), 1))
         p.save()
         p.translate(0, 62)
         p.setBrush(Qt.NoBrush)

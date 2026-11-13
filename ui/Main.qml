@@ -9,6 +9,27 @@ import QtQuick.Effects
 
 Window {
     id: win
+    // 장식 애니메이션(눈금 훑기 · 화면 훑기)의 시계. 무한 반복 애니메이션을 쓰면 창 전체가 화면 주사율(60~144번/초)로
+    // 계속 다시 그려져 발열이 크다 — 이 타이머 하나(1초 30번)로만 움직이고, 펼친 화면이 보일 때만 돈다.
+    property real decoT: 0
+    // 펼친 화면은 이 박자 하나로 모든 움직임(엠블럼 · 인피니티 · 장식)을 함께 갱신한다 — 저마다 돌면 박자가 어긋나 더 자주 그린다.
+    // 대기 중엔 1초에 20번, 듣거나 생각할 땐 30번 (엠블럼의 빠르기를 따른다).
+    Timer {
+        id: decoBeat
+        interval: Math.round(1000 / core3.fps)
+        repeat: true
+        running: win.visible && !win.compact
+        property real last: 0
+        onRunningChanged: last = 0
+        onTriggered: {
+            const now = Date.now() / 1000
+            const dt = last > 0 ? Math.min(now - last, 0.1) : interval / 1000
+            last = now
+            win.decoT += dt
+            if (!core3.paused) core3.tick(dt)
+            if (core3Inf.item) core3Inf.item.tick(dt)
+        }
+    }
     width: 420; height: 724
     visible: true
     color: "transparent"
@@ -76,6 +97,7 @@ Window {
                 level: win.level
                 mode: win.st
                 opacity: emblemInf.status === Loader.Ready ? 0 : 1    // 인피니티 울트론이 얹히면 숨는다 (누르기 · 끌기는 그대로 된다)
+                paused: !win.visible || emblemInf.status === Loader.Ready   // 숨었거나 덮였으면 움직이지 않는다 (발열)
 
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: jarvis.activate() }
@@ -89,6 +111,7 @@ Window {
                 onLoaded: {
                     item.mode = Qt.binding(function() { return win.st })
                     item.level = Qt.binding(function() { return win.level })
+                    item.paused = Qt.binding(function() { return !win.visible })
                 }
             }
 
@@ -230,11 +253,8 @@ Window {
                             width: 6; height: 6; radius: 3
                             anchors.verticalCenter: parent.verticalCenter
                             color: jarvis.hasApiKey ? "#53ffa8" : win.amber
-                            SequentialAnimation on opacity {
-                                loops: Animation.Infinite
-                                NumberAnimation { to: 0.35; duration: 900 }
-                                NumberAnimation { to: 1.0; duration: 900 }
-                            }
+                            // 1.8초마다 옅어졌다 진해진다 — 무한 애니메이션 대신 decoBeat 로 (창 전체를 매 주사마다 다시 그리지 않게)
+                            opacity: 0.675 + 0.325 * Math.cos(2 * Math.PI * win.decoT / 1.8)
                         }
                         Text {
                             text: jarvis.linkText
@@ -252,7 +272,7 @@ Window {
                     property string time: ""
                     property string date: ""
                     Timer {
-                        interval: 500; running: true; repeat: true; triggeredOnStart: true
+                        interval: 500; running: full.visible && win.visible; repeat: true; triggeredOnStart: true
                         onTriggered: {
                             const d = new Date()
                             clock.time = win.pad(d.getHours()) + ":" + win.pad(d.getMinutes()) + ":" + win.pad(d.getSeconds())
@@ -297,12 +317,8 @@ Window {
                             GradientStop { position: 0.5; color: win.accent }
                             GradientStop { position: 1.0; color: win.c(0.0) }
                         }
-                        SequentialAnimation on x {
-                            loops: Animation.Infinite
-                            running: full.visible
-                            NumberAnimation { from: -34; to: ruler.width; duration: 3600; easing.type: Easing.InOutSine }
-                            PauseAnimation { duration: 1800 }
-                        }
+                        // 3.6초 동안 훑고 1.8초 쉰다 — 화면 주사율 애니메이션 대신 decoBeat(1초 30번)로 움직인다 (발열)
+                        x: { const k = Math.min(1, (win.decoT % 5.4) / 3.6); return -34 + (ruler.width + 34) * (0.5 - 0.5 * Math.cos(Math.PI * k)) }
                     }
                 }
             }
@@ -378,7 +394,9 @@ Window {
                     level: win.level
                     mode: win.st
                     voiceBars: true
+                    clocked: true                                     // 펼친 화면의 박자(decoBeat)로 움직인다
                     opacity: core3Inf.status === Loader.Ready ? 0 : 1 // 인피니티 울트론이 얹히면 숨는다 (누르기는 그대로 된다)
+                    paused: !win.visible || core3Inf.status === Loader.Ready   // 숨었거나 덮였으면 움직이지 않는다 (발열)
 
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                     TapHandler { onTapped: jarvis.activate() }
@@ -391,6 +409,8 @@ Window {
                     onLoaded: {
                         item.mode = Qt.binding(function() { return win.st })
                         item.level = Qt.binding(function() { return win.level })
+                        item.paused = Qt.binding(function() { return !win.visible })
+                        item.clocked = true                       // 펼친 화면의 박자(decoBeat)로 움직인다
                     }
                 }
 
@@ -749,12 +769,8 @@ Window {
                         GradientStop { position: 0.5; color: win.c(0.045) }
                         GradientStop { position: 1.0; color: "transparent" }
                     }
-                    SequentialAnimation on y {
-                        loops: Animation.Infinite
-                        running: full.visible
-                        NumberAnimation { from: -70; to: full.height; duration: 5200; easing.type: Easing.InOutSine }
-                        PauseAnimation { duration: 2600 }
-                    }
+                    // 5.2초 동안 훑고 2.6초 쉰다 — decoBeat(1초 30번)로 움직인다 (발열)
+                    y: { const k = Math.min(1, (win.decoT % 7.8) / 5.2); return -70 + (full.height + 70) * (0.5 - 0.5 * Math.cos(Math.PI * k)) }
                 }
             }
         }

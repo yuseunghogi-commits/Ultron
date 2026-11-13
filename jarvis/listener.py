@@ -56,6 +56,8 @@ NOISE_FACTOR_ACTIVE = 1.8  # 호출 직후/이어 말하기 중에는 더 낮은
 ABS_FLOOR = 60.0           # 아주 조용한 방에서도 이 밑은 말소리로 보지 않음 (감도로 나눔)
 END_RATIO = 0.55           # 시작 기준의 이 비율 밑으로 내려가야 무음으로 봄 (말끝 흐림 보존)
 NOISE_MIN = 15.0
+DENOISE_ON = 45.0          # 소음(음성 대역 RMS)이 이보다 크면 소음 제거 갈래를 돌린다 — 목소리가 소음에 묻힐 수 있는 곳
+DENOISE_OFF = 35.0         # 이보다 작아지면 끈다 (조용한 방은 원본 소리만으로 정확하다 — 블록당 약 2ms 아낌, 발열)
 NOISE_WIN_BLOCKS = 80      # 소음 추정 창 2.4초
 
 # 주변이 말소리로 가득한 곳 (교실·카페·TV) — 음성 감지 AI 가 주변 대화를 계속 '말소리'로 보므로 쓸 수 없다.
@@ -254,6 +256,7 @@ class Listener:
     # ---------- VAD ----------
     def _vad_loop(self) -> None:
         noise = 60.0                      # 주변 소음(음성 대역) RMS 추정치 (int16 스케일)
+        use_den = True                    # 소음 제거 갈래를 돌리는 중 (조용해지면 끈다 — 켜고 끄기 사이에 틈을 두어 깜빡이지 않게)
         smooth: float | None = None
         floor_win: collections.deque = collections.deque(maxlen=NOISE_WIN_BLOCKS)
         pre_roll: collections.deque = collections.deque(maxlen=FG_PRE_ROLL_BLOCKS)
@@ -321,8 +324,9 @@ class Listener:
                 block = self._agc.process(block, e, noise, in_speech and silent_run == 0 or loud_run > 0)
             ai = False
             if svad is not None:
+                use_den = noise > (DENOISE_OFF if use_den else DENOISE_ON)
                 try:
-                    ai = svad.feed(block)
+                    ai = svad.feed(block, denoise=use_den)
                 except Exception as ex:
                     log.warning("음성 감지 AI 오류 — 기존 방식으로 전환: %s", ex)
                     self.noise_robust = False

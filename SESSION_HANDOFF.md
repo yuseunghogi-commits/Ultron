@@ -30,6 +30,20 @@ PC판 음성 AI 비서 울트론을 여러 번 개선 중. **인피니티 울트
   - 그래도 지목하지 않은 프로그램이 끄면 막을 수 없다 → 사용자가 설정에 비전 폴더 · 창 제목을 적어야 한다. 가장 확실한 것은 '되살릴 때 관리자 권한으로' (일반 권한 프로그램은 Windows 가 못 끄게 막는다).
 - **가디언을 못 끄게** (자비스가 가디언을 먼저 끄는 문제): 가디언이 하나가 아니라 **둘**이 돈다 (`guardian.SLOTS`). 서로를 지켜서(각자 `guard_peers`로 빈 자리를 다시 띄움), 적이 하나를 꺼도 1초 안에 다시 뜬다. 울트론·가디언 셋을 같은 순간에 모두 꺼야 영영 끌 수 있다. 자리별 잠금은 `guardian.lock`·`guardian1.lock`(`Paths.lock_at`, `acquire_slot`). 울트론도 `_guardian_tick`에서 `spawn`으로 빈 자리를 채운다.
 - **가디언 늘 켜짐**: 설정에서 끄는 토글을 없앴다. `config._migrate`가 `guardian`을 늘 True로 강제한다(파일에 False로 남아 있어도). 끄는 건 트레이·HUD의 '종료'뿐(`mark_quit`). `guardian_show`·`infinity`·`guardian_admin`·`guardian_counter` 하위 토글은 그대로 보인다.
+- **최적화 (발열)** — 실측(offscreen · 소프트웨어 렌더러, 3초 평균):
+  | 화면 | 전 (다시 그림/초 · CPU) | 후 |
+  |---|---|---|
+  | 작은 HUD | 63 · 20% | 20 · 8% |
+  | 작은 HUD + 인피니티 | 69 · 22% | 16 · 11% |
+  | 펼친 HUD | 64 · 29% | 21 · 11% |
+  | HUD 숨김 | 0 · 4% | 0 · 0% |
+  (실제 PC 는 화면 주사율만큼(60~144) 다시 그렸다 — 이제 상태에 따라 15~30.)
+  - `Emblem.qml`: `FrameAnimation`(매 화면 주사) → `Timer`(대기 20 · 듣기/생각 30fps). `paused`(창 숨김 · 인피니티가 덮음) · `clocked`(바깥 박자 `tick(dt)`).
+  - `Main.qml`: 무한 반복 애니메이션(상태 점 · 눈금 훑기 · 화면 훑기)이 창 전체를 매 주사마다 다시 그리게 했다 → `decoBeat` 박자 하나(`win.decoT`)로. 펼친 화면은 엠블럼 · 인피니티 · 장식을 이 박자 하나로 함께 그린다. 시계는 펼친 화면이 보일 때만.
+  - `infinity_item.py`: 대기 15 · 듣기/생각 24fps, `paused`(창 숨김) · `clocked` + `tick(dt)` 슬롯.
+  - `infinity.py`: HUD 크기(`LOD_SCALE` 0.7 미만)에선 안 보이는 세부(바깥 물들임 · 링 뿌리 빛 · 흰 섬광)를 뺀다. 칼날 · 눈금 · ∞ 모양을 한 번만 계산(`_blade`, `_TICKS`, `_LOOPS`), 눈금 72개를 색 · 밝기별로 묶어 `drawLines` — HUD 한 장 6.0 → 4.7ms.
+  - 마이크: 소음 제거 AI 갈래(블록당 ~2ms)를 시끄러울 때만 (`DENOISE_ON` 45 / `DENOISE_OFF` 35, `StreamVad.feed(denoise=)`). 조용한 방은 원본 소리 AI 만으로 정확.
+  - 적 검사(`Guard.enemies`): 모든 프로그램의 명령줄 · 작업 폴더를 읽던 것 → 이름 · 실행 파일만 읽고 명령줄 · 폴더는 파이썬 프로그램만(`_lazy`). 비전 폴더 .py 를 연 편집기를 잘못 닫던 것도 막힘.
 - **확인 창(UAC)이 계속 뜨던 문제 · 발열** (사용자 제보): 원인은 `guardian.created_at`가 관리자 권한 프로세스를 읽을 때 권한 거부를 '죽음'으로 봐서, 관리자 울트론을 가디언이 죽은 줄 알고 끝없이 되살린 것. 고침:
   - `created_at`/`is_guardian`가 권한 거부(AccessDenied) = '살아 있음'(`ALIVE`)으로 (NoSuchProcess 만 죽음). `same_process(ALIVE, …)`=True. → '예' 한 번이면 관리자 울트론이 '살아 있음'으로 읽혀 더 안 뜬다.
   - 거부 쿨다운 `ELEV_RETRY`(5분): '아니요'를 눌러도 당분간 확인 창을 안 띄우고 일반 권한으로 되살린다.
@@ -67,7 +81,7 @@ PC판 음성 AI 비서 울트론을 여러 번 개선 중. **인피니티 울트
       sys.modules.setdefault(m, MagicMock())
   ```
 - 실행: `QT_QPA_PLATFORM=offscreen <venv>/bin/python -m pytest -q`
-- **베이스라인 실패 3개는 원래부터 이 환경 탓** (내 변경과 무관): `tests/test_stt_routing.py` 의 3개 (standby_wake_offline / active_offline_falls_back / auto_mode_retries). 그 외 전부 통과해야 함(현재 1105개).
+- **베이스라인 실패 3개는 원래부터 이 환경 탓** (내 변경과 무관): `tests/test_stt_routing.py` 의 3개 (standby_wake_offline / active_offline_falls_back / auto_mode_retries). 그 외 전부 통과해야 함(현재 1109개).
 
 ## 미리보기(그림/영상) 만들어 사용자에게 보여주는 법
 - offscreen 으로 QImage 를 numpy→PIL 로 저장. 패턴은 `scratchpad/inf/shot.py`, `scratchpad/revive/video_v2.py` 참고(스크립트는 세션 scratchpad 에 있어 새 세션엔 없음 — 다시 작성). `SendUserFile` 로 보냄. 연출 영상은 ffmpeg(설치돼 있음)로 프레임+wav 합쳐 mp4.
