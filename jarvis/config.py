@@ -43,7 +43,7 @@ DEFAULTS: dict = {
     "rival_jarvis": True,            # 자비스 견제: 자비스 앱이 같이 켜져 있으면 끄고 한마디 한다 · 자비스를 깔보는 성격 (rival.py)
     "rival_show": True,              # 자비스 흡수 연출: 자비스를 끌 때 촉수로 꿰뚫어 빨아들이는 장면을 보여 준다 (끄면 조용히 끄기만)
     # --- 가디언: 울트론을 지키는 감시 프로그램 (guardian.py) ---
-    "guardian": True,                # 울트론과 따로 도는 감시 프로그램이, 누가 울트론을 강제로 끄면 다시 켜 준다
+    "guardian": True,                # 울트론과 따로 도는 감시 프로그램이, 누가 울트론을 강제로 끄면 다시 켜 준다 (늘 켜짐 — 끄는 항목 없음)
     "guardian_show": True,           # 되살아날 때 연출: 해킹 화면이 점점 심해지다 TV 지직 화면 → 울트론 눈부터 나타남 (revive.py)
     "infinity": True,                # 되살아나면 인피니티 울트론으로 깨어난다: 여섯 스톤이 하나씩 박히는 긴 연출 · HUD 엠블럼이 바뀜 ·
                                      # 자비스는 파워 스톤으로 가루 내고, 곧바로 되살아나면 타임 스톤으로 되감은 듯 돌아온다 (infinity.py · stones.py)
@@ -101,6 +101,9 @@ def _migrate(data: dict) -> bool:
             changed = True
     if changed:
         data["migrated"] = done
+    if data.get("guardian") is not True:        # 가디언은 늘 켜짐 — 설정에서 끄는 항목을 없앴다 (끄려면 트레이·HUD 의 '종료')
+        data["guardian"] = True
+        changed = True
     return changed
 
 # 자비스 → 울트론으로 이름을 바꾸면서 기본값이 바뀐 항목. 예전 기본값을 그대로 쓰던 설정만 새 기본값으로 옮긴다

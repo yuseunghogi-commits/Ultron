@@ -260,12 +260,10 @@ def test_guardian_status_line(app, monkeypatch):
     me, mod = app
     monkeypatch.setattr(mod.sys, "platform", "win32")
     me.cfg["guardian"] = True
-    monkeypatch.setattr(mod.guardian, "running", lambda d: True)
-    assert "작동 중" in me.guardian_status()
-    monkeypatch.setattr(mod.guardian, "running", lambda d: False)
+    monkeypatch.setattr(mod.guardian, "count_running", lambda d: mod.guardian.SLOTS)
+    assert "작동 중" in me.guardian_status() and "서로 지킨다" in me.guardian_status()
+    monkeypatch.setattr(mod.guardian, "count_running", lambda d: 0)
     assert "띄우는 중" in me.guardian_status()
-    me.cfg["guardian"] = False
-    assert "꺼짐" in me.guardian_status()
 
 
 def test_revive_test_kills_itself_only_when_the_guardian_watches(app, monkeypatch):
@@ -342,7 +340,7 @@ def test_guardian_status_mentions_admin(app, monkeypatch):
     me, mod = app
     monkeypatch.setattr(mod.sys, "platform", "win32")
     me.cfg["guardian"] = True
-    monkeypatch.setattr(mod.guardian, "running", lambda d: True)
+    monkeypatch.setattr(mod.guardian, "count_running", lambda d: mod.guardian.SLOTS)
     monkeypatch.setattr(mod.guardian, "is_admin", lambda: True)
     assert "관리자 권한으로 돌" in me.guardian_status()
     monkeypatch.setattr(mod.guardian, "is_admin", lambda: False)
@@ -370,15 +368,16 @@ def test_saying_test_the_revival_runs_the_real_test():
 
 
 # ---------------------------------------------------------------- 가디언 기본값
-def test_guardian_is_on_by_default_and_old_configs_move_once(tmp_path, monkeypatch):
+def test_guardian_is_always_on_and_cannot_be_turned_off(tmp_path, monkeypatch):
     import json
     from jarvis import config as C
     monkeypatch.setattr(C, "DATA_DIR", tmp_path)
     monkeypatch.setattr(C, "CONFIG_PATH", tmp_path / "config.json")
     assert C.DEFAULTS["guardian"] is True and C.DEFAULTS["guardian_show"] is True
-    (tmp_path / "config.json").write_text(json.dumps({"guardian": False}), encoding="utf-8")   # 예전 기본값이 저장된 파일
+    # 가디언은 늘 켜짐 — 설정에서 끄는 항목을 없앴다. 예전에 꺼 두었던 파일이어도 켜진 채로 읽힌다.
+    (tmp_path / "config.json").write_text(json.dumps({"guardian": False}), encoding="utf-8")
     assert C.load_config()["guardian"] is True
     cfg = C.Config()
     assert cfg["guardian"] is True
-    cfg.update({"guardian": False})                                  # 그 뒤에 사용자가 끄면
-    assert C.Config()["guardian"] is False and C.load_config()["guardian"] is False   # 꺼진 채로 남는다
+    cfg.update({"guardian": False})                                  # 끄려 해도
+    assert C.Config()["guardian"] is True and C.load_config()["guardian"] is True   # 늘 켜진 채로 남는다

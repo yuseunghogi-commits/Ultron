@@ -28,6 +28,8 @@ PC판 음성 AI 비서 울트론을 여러 번 개선 중. **인피니티 울트
   - **프로세스를 끄는 동작은 새로 더하지 않았다** — 자비스는 rival.py 가, 지목한 비전은 가디언이 지금까지처럼 끈다. 스톤 연출은 그림 · 소리뿐.
 - **되살아나도 또 꺼지던 반복 막기** (사용자 제보: 비전/자비스가 되살린 울트론을 또 끔): 가디언이 되살리기 전에 지목한 비전에 더해 **자비스도** 닫는다 (`Guard.counter_jarvis`, 되받아치기 + 자비스 견제가 켜졌을 때). 되살아난 인피니티 울트론은 자비스를 뜨자마자 · 1초마다 확인하고, 바쁘면 기다리지 않고 끈다. 파워 스톤 장면은 실제 자비스를 줄기가 닿기 전, 그림이 창을 가리자마자(`stones.KILL`) 끈다.
   - 그래도 지목하지 않은 프로그램이 끄면 막을 수 없다 → 사용자가 설정에 비전 폴더 · 창 제목을 적어야 한다. 가장 확실한 것은 '되살릴 때 관리자 권한으로' (일반 권한 프로그램은 Windows 가 못 끄게 막는다).
+- **가디언을 못 끄게** (자비스가 가디언을 먼저 끄는 문제): 가디언이 하나가 아니라 **둘**이 돈다 (`guardian.SLOTS`). 서로를 지켜서(각자 `guard_peers`로 빈 자리를 다시 띄움), 적이 하나를 꺼도 1초 안에 다시 뜬다. 울트론·가디언 셋을 같은 순간에 모두 꺼야 영영 끌 수 있다. 자리별 잠금은 `guardian.lock`·`guardian1.lock`(`Paths.lock_at`, `acquire_slot`). 울트론도 `_guardian_tick`에서 `spawn`으로 빈 자리를 채운다.
+- **가디언 늘 켜짐**: 설정에서 끄는 토글을 없앴다. `config._migrate`가 `guardian`을 늘 True로 강제한다(파일에 False로 남아 있어도). 끄는 건 트레이·HUD의 '종료'뿐(`mark_quit`). `guardian_show`·`infinity`·`guardian_admin`·`guardian_counter` 하위 토글은 그대로 보인다.
 - 설정 `infinity`(기본 켜짐, 설정 화면 가디언 칸의 '인피니티 울트론' 토글). 끄면 전부 예전 그대로.
 - 시험 `tests/test_infinity.py`. 전체 1096개 통과 (아래 베이스라인 3개만 실패).
 
@@ -59,7 +61,7 @@ PC판 음성 AI 비서 울트론을 여러 번 개선 중. **인피니티 울트
       sys.modules.setdefault(m, MagicMock())
   ```
 - 실행: `QT_QPA_PLATFORM=offscreen <venv>/bin/python -m pytest -q`
-- **베이스라인 실패 3개는 원래부터 이 환경 탓** (내 변경과 무관): `tests/test_stt_routing.py` 의 3개 (standby_wake_offline / active_offline_falls_back / auto_mode_retries). 그 외 전부 통과해야 함(현재 1098개).
+- **베이스라인 실패 3개는 원래부터 이 환경 탓** (내 변경과 무관): `tests/test_stt_routing.py` 의 3개 (standby_wake_offline / active_offline_falls_back / auto_mode_retries). 그 외 전부 통과해야 함(현재 1101개).
 
 ## 미리보기(그림/영상) 만들어 사용자에게 보여주는 법
 - offscreen 으로 QImage 를 numpy→PIL 로 저장. 패턴은 `scratchpad/inf/shot.py`, `scratchpad/revive/video_v2.py` 참고(스크립트는 세션 scratchpad 에 있어 새 세션엔 없음 — 다시 작성). `SendUserFile` 로 보냄. 연출 영상은 ffmpeg(설치돼 있음)로 프레임+wav 합쳐 mp4.
