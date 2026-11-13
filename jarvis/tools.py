@@ -361,7 +361,7 @@ class PCTools(ControlTools):
                                                             "line starting with '- ' is a sub-point"},
                                  "left": {"type": "object", "description": "two_column: {heading, bullets}"},
                                  "right": {"type": "object", "description": "two_column: {heading, bullets}"},
-                                 "stats": {"type": "array", "description": "stats: 2-4 of {value: '73%', label}",
+                                 "stats": {"type": "array", "description": "stats: 2-4 of {value: '73%', label, icon?}",
                                            "items": {"type": "object"}},
                                  "chart": {"type": "object", "description": "chart: the data for a real, editable chart",
                                            "properties": {
@@ -373,13 +373,19 @@ class PCTools(ControlTools):
                                                "unit": {"type": "string", "description": "e.g. '%', '℃', '명'"}}},
                                  "events": {"type": "array", "description": "timeline: 3-5 of {when, title, text}",
                                             "items": {"type": "object"}},
-                                 "steps": {"type": "array", "description": "process: 3-5 of {title, text}", "items": {"type": "object"}},
-                                 "cards": {"type": "array", "description": "cards: 3-4 of {title, text}", "items": {"type": "object"}},
+                                 "steps": {"type": "array", "description": "process: 3-5 of {title, text, icon?}",
+                                           "items": {"type": "object"}},
+                                 "cards": {"type": "array", "description": "cards: 3-4 of {title, text, icon?}",
+                                           "items": {"type": "object"}},
                                  "table": {"type": "object", "description": "table: {columns: [...], rows: [[...]]}, at most 5 x 6"},
                                  "statement": {"type": "string", "description": "highlight: the one big sentence"},
                                  "detail": {"type": "string", "description": "highlight: one supporting line"},
                                  "quote": {"type": "string"},
                                  "by": {"type": "string", "description": "who said the quote"},
+                                 "icon": {"type": "string",
+                                          "description": "optional Material Icons name for a section / highlight / closing slide "
+                                                         "(e.g. 'eco', 'groups', 'savings'). Cards, steps and stats items take "
+                                                         "an 'icon' too. Omit to let the icon be picked from the text."},
                                  "notes": {"type": "string", "description": "speaker notes: what to say on this slide (1-2 sentences)"}},
                                  "required": ["title"]}},
                   "sources": {"type": "array", "items": {"type": "string"}, "description": "references you used yourself: 'title — URL'"},
@@ -394,12 +400,16 @@ class PCTools(ControlTools):
                  "한글 / 한컴 / hwp / 아래아한글. Use for 보고서 / 레포트 / 조사 정리 / 문서로 정리 / 가정통신문 requests. "
                  "Give the sections in order; how much you write yourself (just headings, or the full text) is set by the "
                  "작업 rules in your instructions — sections without text are written by writer agents in parallel. A 참고 자료 "
-                 "list is added from sources and pages are numbered.",
+                 "list is added from sources and pages are numbered. A designed cover page (icon, big title, the subtitle's "
+                 "과목 · 이름 · 날짜 at the bottom), a 목차 page (3+ chapters) and running headers are added automatically.",
                  {"title": s,
                   "subtitle": {"type": "string", "description": "e.g. '과목 · 학번 이름 · 날짜'"},
                   "audience": {"type": "string", "description": "who reads it, e.g. '고등학교 과제', '팀장 보고'"},
                   "facts": {"type": "array", "items": {"type": "string"},
                             "description": "facts for the writers — only what you researched yourself"},
+                  "summary": {"type": "array", "items": {"type": "string"},
+                              "description": "optional 3-5 short key points, shown in a '핵심 요약' box before chapter 1"},
+                  "icon": {"type": "string", "description": "optional Material Icons name for the cover (e.g. 'eco')"},
                   "sections": {"type": "array", "items": {"type": "object", "properties": {
                       "heading": {"type": "string"},
                       "level": {"type": "integer", "enum": [1, 2], "description": "2 for a sub-heading"},
@@ -410,7 +420,9 @@ class PCTools(ControlTools):
                       "table": {"type": "object", "properties": {
                           "columns": {"type": "array", "items": {"type": "string"}},
                           "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-                          "caption": {"type": "string"}}}}}},
+                          "caption": {"type": "string"}}},
+                      "callout": {"type": "string",
+                                  "description": "optional one key sentence of this section, shown in a highlighted box"}}}},
                   "sources": {"type": "array", "items": {"type": "string"}},
                   "format": {"type": "string", "enum": ["docx", "hwpx"],
                              "description": "docx = Word (default), hwpx = 한글 (when the user says 한글 · 한컴 · hwp)"},
@@ -1641,7 +1653,8 @@ class PCTools(ControlTools):
 
     def t_make_document(self, title: str, sections: list, subtitle: str = "", sources: list | None = None,
                         filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True,
-                        audience: str = "", facts: list | None = None, format: str = "docx", **_extra) -> str:
+                        audience: str = "", facts: list | None = None, format: str = "docx", summary: list | None = None,
+                        icon: str = "", **_extra) -> str:
         from . import hwpx, office, writers
         hangul = str(format or "").strip().lower() in ("hwpx", "hwp", "한글", "한컴")
         sections, found, team = self._team("document", {"title": title, "subtitle": subtitle, "audience": audience,
@@ -1649,7 +1662,7 @@ class PCTools(ControlTools):
         refs = writers.merge_sources(sources, found)
         build = hwpx.build_hwpx if hangul else office.build_document
         path, info, note = self._make_file(
-            lambda p: build(p, title, sections, subtitle, refs),
+            lambda p: build(p, title, sections, subtitle, refs, summary=summary, icon=icon),
             filename or title, ".hwpx" if hangul else ".docx", folder, overwrite, open)
         if hangul and "열 프로그램을 찾지 못해" in note:
             note += " 한컴오피스 한글이나 무료 '한컴오피스 뷰어'가 있으면 열 수 있다."

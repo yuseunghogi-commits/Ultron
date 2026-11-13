@@ -331,6 +331,11 @@ def test_poster_info_bar_splits_date_and_place():
     ("운동장에서 만나요", "place"),
     ("AI와 미래 직업", "smart_toy"),
     ("자연스럽게 말하기", "forum"),
+    ("빛 흡수", "wb_sunny"), ("빛깔 고운 옷", None),                    # '빛깔'은 색이지 빛이 아니다
+    ("물 분해", "water_drop"), ("물이 나뉜다", "water_drop"),
+    ("동물이 먹는 것", "pets"), ("보물 찾기", None),                    # '동물' · '보물'의 '물'은 물이 아니다
+    ("광합성의 비밀", "eco"), ("이산화탄소를 줄이자", "co2"), ("호흡과 산소", "air"),
+    ("원인과 결과", "search"), ("광합성 vs 호흡", "eco"), ("둘의 차이", "compare_arrows"),
 ])
 def test_icon_words_are_not_mistaken(text, icon):
     assert icons.from_text(text) == icon

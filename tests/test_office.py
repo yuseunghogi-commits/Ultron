@@ -66,7 +66,8 @@ def _order(parent, schema):
 
 def test_korean_font_and_bullet_xml_follow_the_powerpoint_schema(tmp_path):
     path = tmp_path / "deck.pptx"
-    office.build_presentation(path, "제목", SLIDES[:2])
+    many = {"title": "여섯 줄 이상은 글머리 기호 목록", "bullets": ["하나", "- 하위", "둘", "셋", "넷", "다섯", "여섯"]}
+    office.build_presentation(path, "제목", SLIDES[:2] + [many])     # (짧은 목록은 번호 · 아이콘 줄로 그린다)
     prs = pptx.Presentation(str(path))
     rpr_schema = ["ln", "noFill", "solidFill", "gradFill", "blipFill", "pattFill", "grpFill", "effectLst", "effectDag",
                   "highlight", "uLnTx", "uLn", "uFillTx", "uFill", "latin", "ea", "cs", "sym", "hlinkClick",
@@ -145,9 +146,50 @@ def test_document_has_title_headings_bullets_table_sources_and_page_numbers(tmp_
     cells = [[c.text for c in r.cells] for r in d.tables[0].rows]
     assert cells == [["구분", "내용"], ["대기", "미세먼지"], ["수질", ""]]
     with zipfile.ZipFile(path) as z:
-        assert "PAGE" in z.read("word/footer1.xml").decode() and 'w:eastAsia="맑은 고딕"' in z.read("word/styles.xml").decode()
+        footers = [z.read(n).decode() for n in z.namelist() if n.startswith("word/footer")]
+        assert any("PAGE" in f for f in footers) and 'w:eastAsia="맑은 고딕"' in z.read("word/styles.xml").decode()
     with pytest.raises(ValueError):
         office.build_document(tmp_path / "x.docx", "제목", [])
+
+
+def test_report_has_cover_contents_summary_callout_header_and_restarted_page_numbers(tmp_path):
+    """표지(아이콘 · 큰 제목 · 과목 · 이름 · 날짜) → 목차 → 본문(머리글 · 쪽 번호는 본문부터 1) — 표는 진한 머리줄."""
+    path = tmp_path / "report.docx"
+    office.build_document(path, "광합성의 원리", [
+        {"heading": "1. 서론", "paragraphs": ["**광합성**은 중요하다."]},
+        {"heading": "2. 원리", "bullets": ["빛 반응: 물을 나눈다"], "callout": "빛이 없으면 광합성도 없다."},
+        {"heading": "2.1 조건", "level": 2, "bullets": ["빛"]},
+        {"heading": "3. 비교", "table": {"columns": ["종류", "값"], "rows": [["가", "1"], ["나", "2"]]}},
+        {"heading": "결론", "paragraphs": ["끝."]},
+    ], subtitle="과학 · 2학년 3반 김민준", sources=["자료 — https://a.kr"], summary=["핵심 하나", "핵심 둘"])
+    d = docx.Document(str(path))
+    texts = [p.text for p in d.paragraphs]
+    assert texts[0] == "REPORT" and "광합성의 원리" in texts and "과학" in texts and "김민준" in " ".join(texts)
+    order = [texts.index(t) for t in ("광합성의 원리", "목차", "핵심 요약", "1. 서론", "참고 자료")]
+    assert order == sorted(order)                                                # 표지 → 목차 → 요약 → 본문 → 참고 자료
+    toc = texts[texts.index("목차") + 1:texts.index("핵심 요약")]
+    assert "01\t서론" in toc and "02\t원리" in toc and "2.1 조건" in toc and "04\t결론" in toc and "05\t참고 자료" in toc
+    assert any("빛이 없으면 광합성도 없다." in t and t.startswith("핵심") for t in texts)   # 핵심 상자
+    assert len(d.sections) == 2                                                  # 앞부분(표지 · 목차) · 본문
+    front, body = d.sections
+    assert not front.footer.paragraphs[0].text and "광합성의 원리" in body.header.paragraphs[0].text
+    xml = body._sectPr.xml
+    assert 'w:pgNumType w:start="1"' in xml or 'w:start="1"' in xml               # 본문부터 1쪽
+    with zipfile.ZipFile(path) as z:
+        doc_xml = z.read("word/document.xml").decode()
+    assert 'w:fill="1F3A8A"' in doc_xml and 'w:fill="EEF2FB"' in doc_xml          # 진한 머리줄 · 연한 강조 상자
+    assert "<w:drawing>" in doc_xml or "<w:drawing" in doc_xml                    # 표지 아이콘 그림
+    head = d.tables[0].rows[0].cells[0].paragraphs[0].runs[0]
+    assert head.font.color.rgb == docx.shared.RGBColor(0xFF, 0xFF, 0xFF) and head.font.bold
+    assert not any(p.text == "" and p._p.find(docx.oxml.ns.qn("w:pPr") + "/" + docx.oxml.ns.qn("w:sectPr")) is not None
+                   for p in d.paragraphs)                                        # 빈 줄만 있는 구역 끝 문단 (빈 쪽의 원인) 없음
+
+
+def test_short_report_skips_the_contents_page(tmp_path):
+    path = tmp_path / "short.docx"
+    office.build_document(path, "짧은 글", [{"heading": "하나", "paragraphs": ["가"]}, {"heading": "둘", "paragraphs": ["나"]}])
+    texts = [p.text for p in docx.Document(str(path)).paragraphs]
+    assert "목차" not in texts and "짧은 글" in texts and texts.index("짧은 글") < texts.index("하나")
 
 
 def test_spreadsheet_keeps_numbers_formulas_and_clean_sheet_names(tmp_path):

@@ -188,7 +188,8 @@ _PLAN_API_TEAM = """- 발표 자료와 보고서는 팀이 함께 만듭니다. 
 _PLAN_SOLO = """- 발표 자료는 장마다 그 layout 의 칸(bullets · left/right · stats · chart · events · steps · cards · table · statement)을 직접
   채우세요. 한 장에 3~5줄의 짧은 구절 (되도록 "핵심어: 한 줄 설명" 모양), 발표 대본(notes)은 장마다 1~2문장.
 """ + _LAYOUT_RULE + """
-  · 실제로 쓴 출처는 sources 에 남기세요. 보고서는 sections 의 장마다 heading · paragraphs 를 쓰세요."""
+  · 실제로 쓴 출처는 sources 에 남기세요. 보고서는 sections 의 장마다 heading · paragraphs 를 쓰고, 핵심 요약 3~4줄을
+    summary 에 넣으세요 (본문 앞의 요약 상자가 됩니다)."""
 
 CHAT_TEMPLATE = """당신은 U.L.T.R.O.N.(울트론), {title}이 만들어 {title}의 PC에 사는 AI입니다. 지금은 '자유 대화 모드'입니다.
 {title}은 호출어 없이 당신과 음성으로 이야기하고 있습니다. 명령을 처리하는 비서가 아니라, 영화 속 울트론처럼 똑똑하고

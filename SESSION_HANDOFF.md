@@ -38,7 +38,21 @@ PC판 음성 AI 비서 울트론을 여러 번 개선 중. **인피니티 울트
   - 반투명 글자 · 아이콘은 `Pen._glyphs`(가림판)로 — Pillow 는 글자에 반투명 색을 안 쓴다.
   - 포스터: 그라데이션 머리 + 큰 아이콘, 일시 · 장소 정보 띠(조각마다 아이콘 · 글 길이만큼 폭), 아이콘 달린 구역(글씨 크기 통일), 어두운 꼬리.
   - `tools.py` 스키마 · `brain.py` 지시문: 카드뉴스답게(카드 한 장에 메시지 하나, stat · 비교 · 인용 · 단계, 카드마다 모양 바꾸기, icon).
-  - 다음 후보: 발표 자료(deck.py) · 보고서도 같은 수준으로 — 사용자에게 물어볼 것.
+- **발표 자료 · 보고서 품질 개선** (사용자: "발표 자료랑 보고서도 같은 수준으로 올려줘"):
+  - 아이콘: `icons.png(name, color, px)` 가 Material 아이콘을 투명 PNG 로 그린다 (파워포인트 · 워드에는 아이콘 글꼴이 없어 그림으로).
+    `icons.KEYWORDS` 에 발표용 낱말 추가(빛 · 물 · 광합성 · 이산화탄소 · 산소 · 세포 · 온도 · 역사 · 비교 · 원인), `icons.SPARE`(못 고른 칸의 무난한 아이콘).
+  - `deck.py`: `Deck.emblem`(스타일별 아이콘 바탕) · `marks`(칸마다 겹치지 않게 고르기, 단계는 시작 flag → 끝 task_alt) · `one`.
+    카드 · 단계 · 숫자 카드가 본문 칸 높이를 다 채우고 내용은 가운데(`process` 'STEP 01' · `cards` 1줄=세로 카드/2줄=가로 카드 · `stats` 숫자 크게 + 단위 작게 `_value_parts`).
+    연표는 마디 아래 사건 카드. 짧은 목록은 하위 줄을 윗 줄 설명에 붙여 번호 줄로, 줄마다 맞는 아이콘이 다 있으면 번호 대신 아이콘.
+    표지 · 장 구분 · 마무리에 큰 아이콘(매거진 스타일 표지는 글자만). 파스텔 노랑 카드 위 숫자는 진하게(대비 2.4 미만).
+    슬라이드 · cards/steps/stats 항목의 `icon`(Material 이름)을 받는다 (`office.pairs` 가 icon 을 넘긴다, `tools.py` 스키마 · 작가 안내).
+  - `office.build_document`: 표지(REPORT 띠 · 아이콘 · 큰 제목 · 아래 오른쪽 과목/이름/날짜 — 부제에 연도가 없으면 오늘 날짜) →
+    목차(큰 장 제목 3개 이상, 쪽 번호 없이) → 본문 구역(머리글 = 제목, 쪽 번호는 본문부터 1). 장 제목: 번호 강조색 + 연한 밑줄,
+    작은 제목: 왼쪽 띠. `summary`(핵심 요약 상자) · 장마다 `callout`(핵심 상자) — 연한 바탕 + 왼쪽 띠 문단 테두리. 표 머리줄 진한 남색 + 흰 글자.
+    구역 끝 표시(sectPr)는 마지막 문단으로 옮겨 빈 줄 때문에 빈 쪽이 생기지 않게. 문단 속성 순서는 `_PPR_ORDER` 로 지킨다.
+  - `hwpx.py`: 같은 모양을 바탕 틀에 이미 있는 요소만으로 — 표지(`hideFirstPageNum="1"`), 목차 · 본문은 `pageBreak="1"`,
+    문단 테두리(`hh:border` borderFill 6~10)로 장 제목 밑줄 · 작은 제목 띠 · 핵심 상자(connect=1). 그림(아이콘)은 넣지 않는다.
+  - 견본을 LibreOffice 로 그려 확인했다 (`soffice --convert-to pdf` → `pdftoppm`, 글꼴 대체: 맑은 고딕 → 나눔고딕).
 - **최적화 (발열)** — 실측(offscreen · 소프트웨어 렌더러, 3초 평균):
   | 화면 | 전 (다시 그림/초 · CPU) | 후 |
   |---|---|---|
@@ -90,7 +104,7 @@ PC판 음성 AI 비서 울트론을 여러 번 개선 중. **인피니티 울트
       sys.modules.setdefault(m, MagicMock())
   ```
 - 실행: `QT_QPA_PLATFORM=offscreen <venv>/bin/python -m pytest -q`
-- **베이스라인 실패 3개는 원래부터 이 환경 탓** (내 변경과 무관): `tests/test_stt_routing.py` 의 3개 (standby_wake_offline / active_offline_falls_back / auto_mode_retries). 그 외 전부 통과해야 함(현재 1150개).
+- **베이스라인 실패 3개는 원래부터 이 환경 탓** (내 변경과 무관): `tests/test_stt_routing.py` 의 3개 (standby_wake_offline / active_offline_falls_back / auto_mode_retries). 그 외 전부 통과해야 함(현재 1190개).
 
 ## 미리보기(그림/영상) 만들어 사용자에게 보여주는 법
 - offscreen 으로 QImage 를 numpy→PIL 로 저장. 패턴은 `scratchpad/inf/shot.py`, `scratchpad/revive/video_v2.py` 참고(스크립트는 세션 scratchpad 에 있어 새 세션엔 없음 — 다시 작성). `SendUserFile` 로 보냄. 연출 영상은 ffmpeg(설치돼 있음)로 프레임+wav 합쳐 mp4.
@@ -106,11 +120,13 @@ PC판 음성 AI 비서 울트론을 여러 번 개선 중. **인피니티 울트
 - 설정 화면: `ui/SettingsPanel.qml`, HUD: `ui/Main.qml` · `ui/Emblem.qml` · `ui/ActiveMode.qml`.
 
 ## 주의 (제약)
-- **줄 끝 유지**: 일부 파일은 CRLF(`tools.py` `uia.py` `local_router.py` `brain.py`? README 등), 일부는 LF. 편집할 때 그 파일의 줄 끝을 그대로 둘 것. (scratchpad 의 `ed.py` 헬퍼가 CRLF/LF 보존. 없으면 다시 작성.)
+- **줄 끝 유지**: 일부 파일은 CRLF(`tools.py` `uia.py` `local_router.py` `listener.py` `tests/test_frontend.py` README 등), 일부는 LF(`brain.py` `office.py` `deck.py` `hwpx.py` …). 편집할 때 그 파일의 줄 끝을 그대로 둘 것. (scratchpad 의 `ed.py` 헬퍼가 CRLF/LF 보존. 없으면 다시 작성.)
 - 사용자 이메일 등 개인정보를 외부로 보내지 않음. API 키를 채팅에 붙여 달라고 하지 않음.
 - 사용자의 미리캔버스 캔버스는 고치지 않음(예전 대화 맥락).
 - 가디언/부활/비전 관련은 **사용자 본인 PC·본인 앱 방어** 맥락. 비전 자동 사냥 같은 공격적 동작은 사용자가 '지목한 것'에 한정.
 
 ## 사용자가 PC 에서 할 일 (현재까지)
-- PC 울트론 폴더에서 `git checkout main && git pull`(이 브랜치는 PR 로 main 에 머지됨). 단, 인피니티 울트론은 아직 브랜치에만 있고 연결 안 됨.
+- 사용자는 ZIP 으로 내려받은 폴더(`Downloads\Ultron-main`, `Desktop\Ultron-main (8)` 등)를 쓰고 있어 `git pull` 이 안 된다
+  ("not a git repository"). 한 번만 `git clone https://github.com/yuseunghogi-commits/Ultron.git` 으로 받고, 옛 폴더의 `data` 폴더
+  (설정 · API 키 · 기억 · 목소리 · 모델)를 새 폴더에 복사해 쓰라고 안내했다. 그 뒤로는 그 폴더에서 `git pull` 만.
 - 예전 `data/tts_cache` 폴더는 지워도 됨(이제 안 씀). `requirements.txt` 에서 `edge-tts` 빠짐.

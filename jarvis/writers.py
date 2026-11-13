@@ -59,6 +59,8 @@ GUIDE = {
   · timeline → "events": 3~5개 {"when": "1953년", "title": "사건 이름", "text": "한 줄 설명"}
   · process → "steps": 3~5개 {"title": "단계 이름", "text": "한 줄 설명"}
   · cards → "cards": 3~4개 {"title": "제목", "text": "한두 줄 설명"}
+  · cards · process · stats 의 항목마다 내용에 맞는 "icon" (Material Icons 이름, 예: "eco", "water_drop", "groups",
+    "savings") 을 넣으면 그 그림이 들어갑니다 (빼면 글에서 고릅니다)
   · table → "table": {"columns": [...], "rows": [[...]]} — 4칸 · 5줄 이하, 칸마다 짧게
   · highlight → "statement": 기억에 남을 한 문장, "detail": 보충 한 줄
   · quote → "quote" · "by": 자료에 있는 실제 인용만. 없으면 layout 을 "highlight" 로 바꿔 쓰세요
@@ -68,6 +70,7 @@ GUIDE = {
 - 서론에 해당하는 장은 목적과 범위, 결론에 해당하는 장은 앞 내용의 요약과 제언으로 쓰세요.
 - 핵심 용어는 처음 나올 때만 **굵게** (한 문단에 하나 이하).
 - 내용에 맞으면 "bullets"(3~5줄)나 "table"({"columns", "rows", "caption"} — 4칸 · 6줄 이하)을 더하세요.
+- 본론의 장에 꼭 기억할 한 문장이 있으면 "callout": 그 한 문장 (강조 상자로 보입니다 — 문단을 되풀이하지 말고 핵심만).
 - 답: {"sections": [{"index": 2, "heading": "…", "paragraphs": ["…", "…"]}], "sources": ["…"]}""",
 }
 
@@ -79,7 +82,7 @@ _SLIDE_BODY = ("bullets", "left", "right", "stats", "events", "steps", "cards", 
 _SECTION_BODY = ("paragraphs", "bullets", "table")
 _SLIDE_KEEP = ("layout", "title", "bullets", "left", "right", "stats", "chart", "events", "steps", "cards", "table",
                "statement", "detail", "quote", "by", "notes")
-_SECTION_KEEP = ("heading", "paragraphs", "bullets", "table")
+_SECTION_KEEP = ("heading", "paragraphs", "bullets", "table", "callout")
 _SLIDE_SKIP = ("section", "closing")              # 짧은 문구뿐인 장 — 작가에게 맡기지 않는다
 
 

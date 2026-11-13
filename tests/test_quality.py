@@ -55,7 +55,7 @@ def test_word_report_is_a4_with_real_bold_and_tidy_tables(tmp_path):
     bold = [r.text for par in d.paragraphs for r in par.runs if r.bold]
     assert "화석 연료" in bold and "온실가스: " in bold and "그냥 한 줄" not in bold
     xml = zipfile.ZipFile(p).read("word/document.xml").decode()
-    assert "w:tblHeader" in xml and 'w:color="B8C2D6"' in xml
+    assert "w:tblHeader" in xml and f'w:color="{office.DOC["line"]}"' in xml               # 표 선은 연하게
     styles = zipfile.ZipFile(p).read("word/styles.xml").decode()
     heading = styles[styles.find('w:styleId="Heading1"'):][:900]
     assert "asciiTheme" not in heading and "eastAsiaTheme" not in heading                  # 테마 글꼴이 맑은 고딕을 덮지 않게
