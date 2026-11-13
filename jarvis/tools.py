@@ -439,39 +439,69 @@ class PCTools(ControlTools):
                   "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["sheets"]),
             tool("make_cardnews",
-                 "Create card news (카드뉴스): square 1080x1080 images — a cover, one card per item and a closing card — saved "
-                 "as PNG files plus one PDF in a new folder, then open the folder. Use for 카드뉴스 / 인스타 카드 / SNS 홍보 "
-                 "requests instead of operating a design website (much faster and more reliable). Keep each card short: a "
-                 "title and 2-4 short lines.",
-                 {"title": {"type": "string", "description": "cover title (big text)"},
-                  "subtitle": {"type": "string", "description": "small tag on the cover, e.g. '환경 캠페인'"},
-                  "cards": {"type": "array", "description": "content cards, 3-8 recommended (max 12)",
+                 "Create card news (카드뉴스): square 1080x1080 Instagram-style images — a cover, one card per item and a "
+                 "closing card with save/share icons — saved as PNG files plus one PDF in a new folder, then open the folder. "
+                 "Use for 카드뉴스 / 인스타 카드 / SNS 홍보 requests instead of operating a design website. Write it like real "
+                 "card news, not slides: ONE message per card, a punchy title (about 16 Korean chars or fewer), at most 2-3 "
+                 "short lines (about 20 chars each), no long sentences. Make every card visual: give a big number as 'stat' "
+                 "whenever there is one (e.g. {value:'6시간', label:'청소년 평균 수면'}), use 'left'/'right' for do-vs-don't "
+                 "or before/after, 'quote' for one striking sentence, layout 'steps' for how-to order, 3-5 bullets for a "
+                 "checklist. Pick an 'icon' (Material Icons name) per card. Vary the layouts — do not make every card the same.",
+                 {"title": {"type": "string", "description": "cover headline — a hook, 8-20 Korean chars, e.g. '잠이 부족한 10대, 공부도 무너진다'"},
+                  "subtitle": {"type": "string", "description": "small tag on the cover and every card, e.g. '환경 캠페인'"},
+                  "cards": {"type": "array", "description": "content cards, 4-7 recommended (max 12)",
                             "items": {"type": "object", "properties": {
-                                "title": {"type": "string"},
-                                "bullets": {"type": "array", "items": {"type": "string"}},
-                                "highlight": {"type": "string", "description": "optional one-line key message in a box"}},
+                                "title": {"type": "string", "description": "one short message"},
+                                "bullets": {"type": "array", "items": {"type": "string"},
+                                            "description": "short lines (1-2 for a point card, 3-5 for a list)"},
+                                "highlight": {"type": "string", "description": "optional one-line key message in a colored bar"},
+                                "layout": {"type": "string", "enum": ["point", "list", "stat", "steps", "compare", "quote"],
+                                           "description": "optional; chosen automatically from the content if omitted"},
+                                "stat": {"type": "object", "description": "big number card",
+                                         "properties": {"value": {"type": "string", "description": "e.g. '70%', '6시간', '2배'"},
+                                                        "label": {"type": "string"}}},
+                                "left": {"type": "object", "description": "compare: the bad / before side",
+                                         "properties": {"title": {"type": "string"},
+                                                        "bullets": {"type": "array", "items": {"type": "string"}}}},
+                                "right": {"type": "object", "description": "compare: the good / after side",
+                                          "properties": {"title": {"type": "string"},
+                                                         "bullets": {"type": "array", "items": {"type": "string"}}}},
+                                "quote": {"type": "string", "description": "one striking sentence; bullets[0] = who said it"},
+                                "icon": {"type": "string", "description": "Material Icons name, e.g. bedtime, smartphone, "
+                                         "school, local_cafe, fitness_center, eco, recycling, groups, lightbulb, warning, "
+                                         "payments, favorite, schedule, event, place, science, smart_toy"}},
                                 "required": ["title"]}},
-                  "closing": {"type": "string", "description": "closing card: first line is the big message, later lines small text"},
+                  "closing": {"type": "string", "description": "closing card: first line is the big message (a call to action), "
+                                                                "later lines small text"},
                   "sources": {"type": "array", "items": {"type": "string"}},
+                  "style": {"type": "string", "enum": ["clean", "bold", "gradient", "pastel"],
+                            "description": "design: clean(깔끔, default) · bold(강렬) · gradient(그라데이션, 세련) · "
+                                           "pastel(파스텔, 귀엽게 · 초등 · 친근)"},
                   "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green", "purple", "teal", "rose",
-                                                       "mono", "midnight", "forest"]},
+                                                       "mono", "midnight", "forest"],
+                            "description": "colors — pick one that fits the topic (e.g. green for 환경, navy for 정보, "
+                                           "rose/purple for 감성, warm for 음식 · 생활)"},
+                  "icon": {"type": "string", "description": "optional Material Icons name for the cover"},
                   "filename": s, "folder": s, "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["title", "cards"]),
             tool("make_poster",
                  "Create a poster (포스터 · 홍보물 · 안내문 · 캠페인) as a portrait A4 (or A3) image plus a print-ready PDF and "
-                 "open it. Use instead of operating a design website. A colored header with the title, an optional slogan "
-                 "box, 2-4 sections of short bullet points and a footer.",
+                 "open it. Use instead of operating a design website. A gradient header with a big title and a large icon, "
+                 "a key-info bar (put date · time · place there, separated by ' · '), 2-4 section cards with icons and short "
+                 "bullet points, and a dark footer. Keep the title short (2 lines) and bullets short.",
                  {"title": s,
-                  "subtitle": {"type": "string"},
-                  "highlight": {"type": "string", "description": "slogan or key message shown in a box"},
+                  "subtitle": {"type": "string", "description": "one short line under the title"},
+                  "highlight": {"type": "string", "description": "key info bar, e.g. '10월 17일(토) 오전 10시 · 본관 체육관'"},
                   "sections": {"type": "array", "description": "2-4 recommended (max 6)",
                                "items": {"type": "object", "properties": {
                                    "heading": {"type": "string"},
-                                   "bullets": {"type": "array", "items": {"type": "string"}}}}},
-                  "footer": {"type": "string", "description": "e.g. organizer · date · place"},
+                                   "bullets": {"type": "array", "items": {"type": "string"}},
+                                   "icon": {"type": "string", "description": "optional Material Icons name"}}}},
+                  "footer": {"type": "string", "description": "e.g. organizer · contact"},
                   "sources": {"type": "array", "items": {"type": "string"}},
                   "theme": {"type": "string", "enum": ["light", "dark", "navy", "warm", "green", "purple", "teal", "rose",
                                                        "mono", "midnight", "forest"]},
+                  "icon": {"type": "string", "description": "optional Material Icons name for the big header icon"},
                   "size": {"type": "string", "enum": ["a4", "a3"]},
                   "filename": s, "folder": s, "overwrite": {"type": "boolean"}, "open": {"type": "boolean"}},
                  ["title", "sections"]),
@@ -1639,21 +1669,23 @@ class PCTools(ControlTools):
                 f"(파일 이름 {path.name}).{note} [전체 경로: {path}]")
 
     def t_make_cardnews(self, title: str, cards: list, subtitle: str = "", closing: str = "", sources: list | None = None,
-                        theme: str = "light", filename: str = "", folder: str = "", overwrite: bool = False,
-                        open: bool = True, **_extra) -> str:
+                        theme: str = "light", style: str = "", icon: str = "", filename: str = "", folder: str = "",
+                        overwrite: bool = False, open: bool = True, **_extra) -> str:
         from . import design
         path, info, note = self._make_file(
-            lambda p: design.build_cardnews(p, title, cards, subtitle, closing, sources, theme),
+            lambda p: design.build_cardnews(p, title, cards, subtitle, closing, sources, theme, style, icon),
             filename or f"{title} 카드뉴스", "", folder, overwrite, open)
         return (f"카드뉴스를 만들었다 — {info['cards']}장 (표지 · 마무리 포함, 그림 파일과 한 묶음 PDF). "
                 f"저장한 곳: {self._where(path)} 안의 '{path.name}' 폴더.{note} [전체 경로: {path}]")
 
     def t_make_poster(self, title: str, sections: list | None = None, subtitle: str = "", highlight: str = "",
                       footer: str = "", sources: list | None = None, theme: str = "light", size: str = "a4",
-                      filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True, **_extra) -> str:
+                      icon: str = "", filename: str = "", folder: str = "", overwrite: bool = False, open: bool = True,
+                      **_extra) -> str:
         from . import design
         path, info, note = self._make_file(
-            lambda p: design.build_poster(p, title, sections or [], subtitle, highlight, footer, sources, theme, size),
+            lambda p: design.build_poster(p, title, sections or [], subtitle, highlight, footer, sources, theme, size,
+                                          icon=icon),
             filename or title, ".png", folder, overwrite, open)
         return (f"포스터를 만들었다 — {str(size or 'a4').upper()} 세로, 구역 {info['sections']}개 (그림 파일과 인쇄용 PDF). "
                 f"저장한 곳: {self._where(path)} (파일 이름 {path.name}).{note} [전체 경로: {path}]")

@@ -1,6 +1,8 @@
 """카드뉴스 · 포스터 (design.py · tools.py 의 make_cardnews / make_poster) — 화면 클릭 없이 그림으로 바로 만든다."""
 import re
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
@@ -190,3 +192,145 @@ def test_design_tools_are_described_for_claude_with_labels():
         assert len(schemas[name]["description"]) > 80
     assert T.PCTools.label("make_cardnews", {"title": "분리배출"}) == "카드뉴스 만들기 · 분리배출"
     assert T.PCTools.label("make_poster", {"title": "축제"}) == "포스터 만들기 · 축제"
+
+
+# ---------------------------------------------------------------- 카드뉴스다운 모양 (카드마다 다른 모양 · 아이콘 · 스타일)
+from jarvis import icons  # noqa: E402
+
+
+def _card(**kw):
+    base = {"title": "제목", "bullets": [], "highlight": "", "stat": None, "quote": "", "layout": "", "icon": None,
+            "left": None, "right": None}
+    base.update(kw)
+    return base
+
+
+def test_bundled_pretendard_is_used_for_every_weight_when_present():
+    for w in ("regular", "semibold", "bold", "extrabold", "black"):
+        f = design.font_file(w)
+        if (design._OWN / "Pretendard-Regular.otf").exists():
+            assert f.parent == design._OWN and f.name.startswith("Pretendard")
+    assert design.font_file("black") != design.font_file("regular")              # 제목은 굵은 글꼴
+
+
+def test_layout_is_chosen_from_the_content():
+    pick = lambda **kw: design.choose_layout(design._card_data(kw, 1))           # noqa: E731
+    assert pick(title="하나", bullets=["짧게"]) == "point"
+    assert pick(title="여럿", bullets=["가", "나", "다"]) == "list"
+    assert pick(title="만드는 방법", bullets=["가", "나", "다"]) == "steps"
+    assert pick(title="숫자", stat={"value": "70%", "label": "재활용"}) == "stat"
+    assert pick(title="비교", left={"bullets": ["a"]}, right={"bullets": ["b"]}) == "compare"
+    assert pick(title="비교", compare=[{"bullets": ["a"]}, {"bullets": ["b"]}]) == "compare"
+    assert pick(title="인용", quote="한 문장") == "quote"
+    assert pick(title="고른 모양", layout="list", bullets=["가"]) == "list"
+    assert pick(title="stat 없이 stat", layout="stat", bullets=["가"]) == "point"     # 쓸 수 없는 모양은 고르지 않는다
+    assert pick(title="한쪽만 비교", layout="compare", left={"bullets": ["a"]}) == "point"
+
+
+@pytest.mark.parametrize("title, stat, rest", [
+    ("한국 청소년 평균 수면 6시간", "6시간", "한국 청소년 평균 수면"),
+    ("재활용되는 플라스틱 9%", "9%", "재활용되는 플라스틱"),
+    ("하루 3시간 이상 스마트폰", None, None),                                      # 숫자가 끝에 있지 않다 — 그대로
+    ("고3 10명 중 7명", None, None),                                               # 숫자가 여럿 — 그대로
+])
+def test_a_title_ending_with_a_number_becomes_a_big_number_card(title, stat, rest):
+    c = design._card_data({"title": title, "bullets": ["설명 한 줄"]}, 1)
+    changed = design.auto_stat(c)
+    assert changed == (stat is not None)
+    if stat:
+        assert c["stat"] == stat and c["title"] == rest and design.choose_layout(c) == "stat"
+    else:
+        assert c["title"] == title and not c["stat"]
+    many = design._card_data({"title": "평균 수면 6시간", "bullets": ["가", "나", "다"]}, 1)
+    assert not design.auto_stat(many)                                              # 글이 많으면 목록 그대로
+
+
+def test_stat_value_splits_number_and_unit():
+    assert design._split_stat("6시간") == ("6", "시간")
+    assert design._split_stat("70%") == ("70", "%")
+    assert design._split_stat("4.7시간") == ("4.7", "시간")
+    assert design._split_stat("10명 중 7명") == ("10명 중 7명", "")
+
+
+def test_icons_come_from_korean_words_and_do_not_repeat():
+    assert icons.available()
+    assert icons.from_text("스마트폰이 잠을 훔친다") == "smartphone"               # 먼저 나온 낱말
+    assert icons.from_text("분리배출 제대로 하기") == "recycling"
+    assert icons.from_text("특별 강연") == "record_voice_over"
+    assert icons.from_text("잠이 줄면 생기는 일") == "bedtime"                      # '일' 은 직업이 아니다
+    assert icons.pick("Bed Time") == "bedtime" and icons.pick("없는이름", "커피") == "local_cafe"
+    assert icons.pick(None, "아무 관련 없는 글", kind="list") == icons.DEFAULTS["list"]
+    assert icons.pick(None, "잠과 스마트폰", avoid={"bedtime"}) == "smartphone"      # 이미 쓴 것은 피한다
+    info = design.build_cardnews(Path(tempfile.mkdtemp()) / "아이콘", "잠", [
+        {"title": "잠이 부족하면", "bullets": ["가"]}, {"title": "잠과 스마트폰", "bullets": ["나"]},
+        {"title": "잠을 늘리려면", "bullets": ["다"]}])
+    assert info["cards"] == 5
+
+
+@pytest.mark.parametrize("style", design.STYLES)
+def test_every_style_draws_every_card_shape(tmp_path, style):
+    cards = [{"title": "평균 수면", "stat": {"value": "6시간", "label": "청소년"}, "bullets": ["설명"]},
+             {"title": "이렇게 바꿔요", "left": {"title": "그만", "bullets": ["새벽 게임"]},
+              "right": {"title": "이렇게", "bullets": ["30분 전 화면 끄기"]}},
+             {"title": "만드는 방법", "bullets": ["하나: 설명", "둘: 설명", "셋: 설명"]},
+             {"title": "", "quote": "잠은 선물이다", "bullets": ["누군가"]},
+             {"title": "체크리스트", "bullets": ["가", "나", "다", "라"], "highlight": "꼭 지켜요"},
+             {"title": "핵심 하나", "bullets": ["짧은 설명"], "highlight": "강조"}]
+    info = design.build_cardnews(tmp_path / style, "스타일 시험", cards, subtitle="캠페인", style=style)
+    assert info["style"] == style and info["layouts"] == ["stat", "compare", "steps", "quote", "list", "point"]
+    for f in info["files"]:
+        assert colours(f) > 50
+
+
+def test_style_names_in_korean_and_unknown_style_falls_back(tmp_path):
+    assert design.build_cardnews(tmp_path / "a", "제목", CARDS[:1], style="파스텔")["style"] == "pastel"
+    assert design.build_cardnews(tmp_path / "b", "제목", CARDS[:1], style="없는스타일")["style"] == "clean"
+
+
+def test_gradient_text_stays_readable_on_light_accents():
+    light = design.Look(office.THEMES["mono"], "gradient")                         # 노랑
+    dark = design.Look(office.THEMES["navy"], "gradient")
+    for look in (light, dark):
+        assert min(design.contrast(look.ink, look.g1), design.contrast(look.ink, look.g2)) >= 3.0   # 큰 굵은 글씨 기준
+    assert light.ink != (255, 255, 255)                                              # 노랑 바탕엔 어두운 글씨
+    assert design.Look(office.THEMES["purple"], "gradient").ink == (255, 255, 255)
+    for name in office.THEMES:                                                      # 어떤 색 테마든 읽힌다
+        lk = design.Look(office.THEMES[name], "gradient")
+        assert min(design.contrast(lk.ink, lk.g1), design.contrast(lk.ink, lk.g2)) >= 3.0, name
+
+
+def test_translucent_watermark_is_faint_not_solid(tmp_path):
+    """강렬 스타일의 큰 쪽 번호는 흐리게 깔린다 (Pillow 는 글자에 반투명을 쓰지 않으므로 따로 칠한다)."""
+    th = office.THEMES["warm"]
+    f = design.build_cardnews(tmp_path / "w", "제목", [{"title": "짧게", "bullets": ["가"]}], style="bold",
+                              theme="warm")["files"][1]
+    with Image.open(f) as im:
+        crop = im.convert("RGB").crop((780, 820, 1050, 1000))
+        accent, bg = design._rgb(th.accent), design._rgb(th.bg)
+        solid = sum(1 for px in list(crop.getdata()) if sum(abs(a - b) for a, b in zip(px, accent)) < 30)
+        assert solid < crop.width * crop.height * 0.02                              # 강조색 그대로인 곳은 거의 없다
+
+
+def test_poster_info_bar_splits_date_and_place():
+    assert design._info_parts("10월 17일(토) 오전 10시 · 본관 체육관") == ["10월 17일(토) 오전 10시", "본관 체육관"]
+    assert design._info_parts("입장 무료") == ["입장 무료"]
+    assert design._info_parts("a · b · c · d") == ["a · b · c · d"]                 # 너무 잘게 나누지 않는다
+
+
+@pytest.mark.parametrize("text, icon", [
+    ("집중력 · 기억력 저하", None),                  # '집중력'의 '집'은 집(home)이 아니다
+    ("검색 잘하는 법", "lightbulb"),                  # '~하는 법'은 방법 (법원 아님)
+    ("법을 지켜요", "gavel"),
+    ("아이디어 내기", "lightbulb"),                   # '아이디어'의 '아이'는 어린이가 아니다
+    ("준비물 챙기기", None),                          # '준비'의 '비'는 비(rain)가 아니다
+    ("회원 가입", "how_to_reg"),                      # '회원'의 '원'은 돈이 아니다
+    ("1만 원 아끼기", "payments"),
+    ("요약", None),                                   # '요약'의 '약'은 약(medicine)이 아니다
+    ("책임감 키우기", None),
+    ("잠깐 쉬어요", None),                            # '잠깐'은 잠(sleep)이 아니다
+    ("운동장에서 만나요", "place"),
+    ("AI와 미래 직업", "smart_toy"),
+    ("자연스럽게 말하기", "forum"),
+])
+def test_icon_words_are_not_mistaken(text, icon):
+    assert icons.from_text(text) == icon
