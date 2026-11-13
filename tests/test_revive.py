@@ -381,3 +381,17 @@ def test_guardian_is_always_on_and_cannot_be_turned_off(tmp_path, monkeypatch):
     assert cfg["guardian"] is True
     cfg.update({"guardian": False})                                  # 끄려 해도
     assert C.Config()["guardian"] is True and C.load_config()["guardian"] is True   # 늘 켜진 채로 남는다
+
+
+def test_admin_revive_is_on_by_default_and_old_configs_move_once(tmp_path, monkeypatch):
+    import json
+    from jarvis import config as C
+    monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(C, "CONFIG_PATH", tmp_path / "config.json")
+    assert C.DEFAULTS["guardian_admin"] is True
+    (tmp_path / "config.json").write_text(json.dumps({"guardian_admin": False}), encoding="utf-8")   # 예전 기본값이 저장된 파일
+    assert C.load_config()["guardian_admin"] is True
+    cfg = C.Config()
+    assert cfg["guardian_admin"] is True
+    cfg.update({"guardian_admin": False})                            # 그 뒤에 사용자가 직접 끄면
+    assert C.Config()["guardian_admin"] is False and C.load_config()["guardian_admin"] is False   # 꺼진 채로 남는다
