@@ -26,3 +26,12 @@ Copyright (c) 2026 U.L.T.R.O.N 제작자. All rights reserved.
 정말로 남이 내려받지 못하게 하려면 GitHub 저장소를 비공개(Private)로 두는 것이 가장 확실합니다.
 
 이 문서는 법률 자문이 아닙니다. 정식 보호가 필요하면 전문가와 상의하세요.
+
+
+함께 넣은 외부 자료 (Third-party assets)
+-----------------------------------------
+카드뉴스 · 포스터를 그릴 때 쓰는 아래 자료는 위 제작자의 저작물이 아니며, 각자의 라이선스를 따릅니다.
+  - assets/fonts/Pretendard-*.otf — Pretendard 글꼴, Copyright (c) 2021 Kil Hyung-jin.
+    SIL Open Font License 1.1 (assets/fonts/OFL-Pretendard.txt). 글꼴만 따로 팔 수는 없습니다.
+  - assets/icons/MaterialIconsRound-Regular.ttf — Google Material Icons (Round).
+    Apache License 2.0 (assets/icons/LICENSE-MaterialIcons.txt).
