@@ -45,6 +45,7 @@ DEFAULTS: dict = {
     # --- 가디언: 울트론을 지키는 감시 프로그램 (guardian.py) ---
     "guardian": True,                # 울트론과 따로 도는 감시 프로그램이, 누가 울트론을 강제로 끄면 다시 켜 준다
     "guardian_show": True,           # 되살아날 때 연출: 해킹 화면이 점점 심해지다 TV 지직 화면 → 울트론 눈부터 나타남 (revive.py)
+    "guardian_admin": False,         # 되살릴 때 울트론을 관리자 권한으로 켠다 → 일반 권한 비전은 못 끈다 (첫 켤 때 UAC 확인 창)
     "guardian_counter": True,        # 다시 켜기 전에 '비전'(아래에 지목한 것)을 닫는다
     "enemy_installs": [],            # '비전'으로 볼 프로그램의 설치 폴더들 (이 폴더에서 실행된 것만 닫는다 — 오인 방지)
     "enemy_titles": [],              # '비전'으로 볼 창 제목들 (정확히 같을 때만)

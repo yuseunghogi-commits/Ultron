@@ -190,7 +190,7 @@ def app(monkeypatch):
     class App:
         _revive_begin, _revive_done, _revived_line = J._revive_begin, J._revive_done, J._revived_line
         _revive_handoff, _revive_target = J._revive_handoff, J._revive_target
-        guardian_status, _revive_test = J.guardian_status, J._revive_test
+        guardian_status, _revive_test, _relaunch_admin = J.guardian_status, J._revive_test, J._relaunch_admin
 
         def __init__(self):
             self.cfg = {"guardian_show": True, "user_title": "창조자"}
@@ -311,6 +311,52 @@ def test_saying_show_me_the_revival_plays_the_preview():
     for text in ("부활 연출 보여 줘", "되살아나는 장면 보여줘", "부활 연출"):
         assert REVIVE_SHOW.fullmatch(normalize(text)), text
     assert not REVIVE_SHOW.fullmatch(normalize("부활절 언제야"))
+
+
+def test_relaunch_admin_turns_on_admin_mode_and_kills_itself_to_come_back_elevated(app, monkeypatch):
+    me, mod = app
+    exits = []
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    monkeypatch.setattr(mod.os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(mod.logging, "shutdown", lambda: None)
+    monkeypatch.setattr(mod.QTimer, "singleShot", lambda ms, fn: fn())   # 예약된 '꺼지기'를 바로 실행
+    monkeypatch.setattr(mod.guardian, "is_admin", lambda: False)
+    monkeypatch.setattr(mod.guardian, "running", lambda d: True)
+    me._relaunch_admin()
+    assert me.cfg["guardian_admin"] is True and me.cfg["guardian"] is True     # 되살릴 때 관리자 권한으로
+    assert exits == [3] and "확인 창" in me.said[-1]                             # 스스로 꺼져 가디언이 관리자 권한으로 되살린다
+    # 이미 관리자면 아무것도 끄지 않는다
+    exits.clear(); me.said.clear()
+    monkeypatch.setattr(mod.guardian, "is_admin", lambda: True)
+    me._relaunch_admin()
+    assert exits == [] and "이미 관리자" in me.said[-1]
+    # 가디언이 아직 없으면 끄지 않고 먼저 띄운다 (끄면 돌아올 수 없으므로)
+    exits.clear(); me.said.clear()
+    monkeypatch.setattr(mod.guardian, "is_admin", lambda: False)
+    monkeypatch.setattr(mod.guardian, "running", lambda d: False)
+    me._relaunch_admin()
+    assert exits == [] and "start_guardian" in me.events
+
+
+def test_guardian_status_mentions_admin(app, monkeypatch):
+    me, mod = app
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    me.cfg["guardian"] = True
+    monkeypatch.setattr(mod.guardian, "running", lambda d: True)
+    monkeypatch.setattr(mod.guardian, "is_admin", lambda: True)
+    assert "관리자 권한으로 돌" in me.guardian_status()
+    monkeypatch.setattr(mod.guardian, "is_admin", lambda: False)
+    me.cfg["guardian_admin"] = True
+    assert "관리자 권한이 아닙니다" in me.guardian_status()
+
+
+def test_saying_run_as_admin_is_recognized():
+    from jarvis.brain import ADMIN_ON, REVIVE_TEST
+    from jarvis.local_router import normalize
+    for text in ("관리자 권한으로 켜 줘", "관리자 권한으로 다시 켜", "관리자로 올려 줘", "관리자 권한으로 실행해"):
+        assert ADMIN_ON.fullmatch(normalize(text)), text
+    for text in ("관리자 누구야", "설정 열어", "부활 시험해 줘"):
+        assert not ADMIN_ON.fullmatch(normalize(text)), text
 
 
 def test_saying_test_the_revival_runs_the_real_test():

@@ -1424,6 +1424,8 @@ class Jarvis(QObject):
             QTimer.singleShot(1500, lambda: self._revive_begin(demo=True))   # 부활 연출 시범 — 대답을 읽은 뒤
         elif action == "revive_test":
             QTimer.singleShot(3000, self._revive_test)   # 진짜로 꺼졌다 되살아나 본다 — 대답을 읽은 뒤
+        elif action == "admin":
+            QTimer.singleShot(1200, self._relaunch_admin)   # 관리자 권한으로 다시 켠다 — 대답을 읽은 뒤
 
     # ================================================================== 액티브 모드 (전체 화면 HUD)
     def set_active(self, on: bool) -> None:
@@ -2070,9 +2072,39 @@ class Jarvis(QObject):
             return "가디언 꺼짐 — 누가 울트론을 강제로 꺼도 되살리지 않습니다."
         if sys.platform != "win32":
             return "가디언은 Windows 에서만 동작합니다."
+        admin = "· 지금 관리자 권한으로 돌고 있어 일반 권한 비전은 끄지 못합니다 " if guardian.is_admin() else (
+            "· 관리자 권한이 아닙니다 (‘관리자 권한으로 켜 줘’ 라고 하면 올립니다) " if self.cfg["guardian_admin"] else "")
         if guardian.running(DATA_DIR):
-            return "가디언 작동 중 — 누가 울트론을 강제로 끄면 1초 안에 알아채 되살립니다. ('부활 시험해 줘'로 확인)"
+            return "가디언 작동 중 — 강제로 꺼지면 1초 안에 되살립니다 " + admin + "('부활 시험해 줘'로 확인)"
         return "가디언을 띄우는 중… (몇 초 뒤 다시 열어 보세요)"
+
+    def _relaunch_admin(self) -> None:
+        """관리자 권한으로 다시 켠다: '되살릴 때 관리자 권한으로'를 켜고, 스스로 강제로 꺼진다 → 가디언이 관리자 권한으로 되살린다
+        (가디언이 일반 권한이면 UAC 확인 창이 한 번 뜬다). 가디언 없이 그냥 꺼지면 돌아오지 못하므로 그땐 끄지 않는다."""
+        if sys.platform != "win32":
+            line = "관리자 권한은 Windows 에서만 올릴 수 있다."
+        elif guardian.is_admin():
+            line = "이미 관리자 권한으로 돌고 있다. 일반 권한 비전은 나를 끄지 못한다."
+            self.bridge.set("replyText", line)
+            self.say(line, follow_up=False)
+            return
+        else:
+            self.cfg.update({"guardian": True, "guardian_admin": True})
+            if not guardian.running(DATA_DIR):
+                self._start_guardian()
+                line = "가디언부터 준비했다. 잠시 뒤 다시 '관리자 권한으로 켜 줘'라고 해라."
+                self.bridge.set("replyText", line)
+                self.say(line, follow_up=False)
+                return
+            line = "관리자 권한으로 다시 켠다. 확인 창이 뜨면 예를 눌러라."
+            self.bridge.set("replyText", line)
+            self.say(line, follow_up=False)
+            log.warning("관리자 권한으로 다시 켜기 — 스스로 강제 종료")
+            logging.shutdown()
+            QTimer.singleShot(1500, lambda: os._exit(3))
+            return
+        self.bridge.set("replyText", line)
+        self.say(line, follow_up=False)
 
     def _revive_test(self) -> None:
         """'부활 시험해 줘': 스스로를 강제로 끈다 (누가 끈 것과 똑같이) — 가디언이 되살리는지 본다.
