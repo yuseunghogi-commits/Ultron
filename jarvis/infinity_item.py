@@ -13,7 +13,7 @@ from PySide6.QtGui import QPainter
 from PySide6.QtQml import qmlRegisterType
 from PySide6.QtQuick import QQuickPaintedItem
 
-FRAME_MS = 33              # 1초에 30장 — 천천히 도는 문양이라 넉넉하다 (HUD 는 늘 켜져 있으니 가볍게)
+FRAME_MS = 50              # 1초에 20장 — 천천히 도는 문양이라 넉넉하다 (늘 도니 발열을 줄이려 30 → 20)
 SPEED = {"thinking": 3.2, "listening": 1.5, "offline": 0.3}      # 도는 빠르기 (보통 = 1)
 EYES = {"thinking": 0.62, "listening": 1.22, "offline": 0.45, "boot": 0.8}   # 눈을 뜬 정도 (보통 = 1)
 

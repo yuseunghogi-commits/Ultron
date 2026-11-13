@@ -42,6 +42,8 @@ POLL = 1.0                 # 몇 초마다 살아 있는지 보는가 (프로세
 SLOTS = 2                  # 동시에 도는 가디언 수 — 서로를 지킨다 (적이 하나를 꺼도 남은 하나가 다시 띄운다)
 REGISTER_WAIT = 10.0       # 다시 켠 울트론이 '나 떴다'(등록)를 알릴 때까지 기다리는 최대 시간. 그 안에 또 켜지 않되,
                            # 이 안에 등록이 없으면 (뜨다 말고 또 꺼졌다) 다시 켠다 — 예전엔 30초를 기다려 빈틈이 컸다
+ALIVE = -1.0               # created_at: 살아 있지만 켜진 시각을 못 읽음 (관리자 권한 프로세스를 일반 권한 가디언이 볼 때)
+ELEV_RETRY = 300.0         # 관리자 권한 확인 창을 거부당하면 이만큼은 다시 띄우지 않는다 (확인 창이 계속 뜨지 않게) — 그동안은 일반 권한으로 되살린다
 REVIVE_QUIET = 30.0        # 되살린 지 이 안에 또 꺼지면 (공격받는 중) 긴 연출 없이 바로 돌아온다 (연출 끝나기 전에 또 꺼지는 반복 방지)
                            # (아직 뜨는 중인 울트론을 죽은 줄 알고 한 번 더 켜면 울트론이 두 개가 된다). 넘으면 다시 켠다.
 LOCK_STALE = 10.0          # 내용이 빈 잠금 파일이 이보다 오래되면 버려진 것으로 본다
@@ -61,6 +63,8 @@ def same_process(found_created: float | None, recorded_created: float | None) ->
     """그 번호의 프로그램이 울트론이 남긴 것과 같은 때 켜졌는가 (번호를 다른 프로그램이 다시 받은 경우를 가린다)."""
     if found_created is None:
         return False                            # 그 번호의 프로그램이 없다
+    if found_created == ALIVE:
+        return True                             # 살아 있다 (권한이 높아 켜진 시각만 못 읽음) — 같은 울트론으로 본다
     if not recorded_created:
         return True                             # 예전 형식의 기록 — 번호만으로 본다
     return abs(found_created - recorded_created) < 1.0
@@ -142,6 +146,10 @@ class Paths:
         return self.data / "guardian.quit"      # 사용자가 울트론을 직접 껐다는 표시
 
     @property
+    def revive(self) -> Path:
+        return self.data / "guardian.revive"     # 방금 누가 되살리기를 맡았다는 표시 (가디언 둘이 동시에 안 띄우게)
+
+    @property
     def lock(self) -> Path:
         return self.lock_at(0)                   # 지금 도는 가디언의 번호 (자리 0)
 
@@ -159,18 +167,44 @@ def read_info(p: Paths) -> dict:
 
 
 # ---------------------------------------------------------------- 프로세스 (psutil — 테스트에서는 바꿔 끼운다)
+def _pid_exists(pid: int) -> bool:
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except Exception:
+        return False
+
+
 def created_at(pid: int) -> float | None:
-    """그 번호의 프로그램이 켜진 시각 (없으면 None)."""
+    """그 번호의 프로그램이 켜진 시각. 없으면 None, 살아 있지만 못 읽으면(관리자 권한 프로세스) ALIVE.
+    권한이 높은 프로세스는 일반 권한에서 생성 시각을 못 읽는다 — 그걸 '죽음'으로 보면 멀쩡한 울트론을 자꾸 되살린다 (확인 창 폭주)."""
     if not pid:
         return None
     try:
         import psutil
-        p = psutil.Process(pid)
-        if p.status() == psutil.STATUS_ZOMBIE:
-            return None
-        return p.create_time()
     except Exception:
         return None
+    try:
+        p = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return None
+    except Exception:
+        return ALIVE if _pid_exists(pid) else None
+    try:
+        if p.status() == psutil.STATUS_ZOMBIE:
+            return None
+    except psutil.AccessDenied:
+        return ALIVE                            # 살아 있다 — 권한이 높아 상태만 못 읽는다
+    except Exception:
+        pass
+    try:
+        return p.create_time()
+    except psutil.NoSuchProcess:
+        return None
+    except psutil.AccessDenied:
+        return ALIVE
+    except Exception:
+        return ALIVE if _pid_exists(pid) else None
 
 
 def shutting_down() -> bool:
@@ -185,12 +219,17 @@ def shutting_down() -> bool:
 
 
 def is_guardian(pid: int) -> bool:
-    """그 번호의 프로그램이 가디언인가 (명령줄에 jarvis.guardian 이 들어 있다)."""
+    """그 번호의 프로그램이 가디언인가 (명령줄에 jarvis.guardian 이 들어 있다).
+    관리자 권한 가디언은 일반 권한에서 명령줄을 못 읽는다 — 그때는 살아 있으면 가디언으로 본다 (그 자리를 빼앗지 않게)."""
     if not pid:
         return False
     try:
         import psutil
         return GUARDIAN_MODULE in " ".join(psutil.Process(pid).cmdline())
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
+        return _pid_exists(pid)
     except Exception:
         return False
 
@@ -240,6 +279,21 @@ def acquire_lock(p: Paths, me: int | None = None, slot: int = 0) -> bool:
             f.write(str(me))
         return True
     return False
+
+
+def claim_revive(p: Paths, now: float, window: float = REGISTER_WAIT) -> bool:
+    """되살리기를 맡는다 → 맡았으면 True. 다른 가디언이 방금(window 초 안에) 맡았으면 False.
+    가디언 둘이 같은 죽음에 동시에 되살리면 울트론이 두 개가 뜨거나 확인 창이 두 번 뜬다 — 그걸 막는다."""
+    try:
+        if p.revive.exists() and 0 <= now - p.revive.stat().st_mtime < window:
+            return False
+    except OSError:
+        pass
+    try:
+        p.revive.write_text(str(now), encoding="utf-8")
+    except OSError:
+        pass
+    return True
 
 
 def acquire_slot(p: Paths, me: int | None = None) -> int | None:
@@ -386,6 +440,7 @@ class Guard:
     awaiting: tuple | None = None               # 방금 다시 켰다: ((죽은 번호, 켜진 시각), 기다림이 끝나는 시각)
     revived: int = 0                            # 지금까지 되살린 횟수 (기록용)
     last_revive: float | None = None            # 마지막으로 되살린 때 (초) — 곧바로 또 꺼지면 '공격받는 중'으로 본다
+    last_elev_fail: float | None = None         # 관리자 권한 확인 창을 거부당한 때 (초) — 당분간 다시 띄우지 않는다
     slot: int = 0                               # 이 가디언이 차지한 자리 (0 또는 1)
 
     def __post_init__(self) -> None:
@@ -453,7 +508,8 @@ class Guard:
             log.info("자비스를 닫음 (%s)", ", ".join(str(f.pid) for f in stopped))
         return ["자비스"] if stopped else []
 
-    def relaunch(self, info: dict, closed: list[str] | None = None, fast: bool = False, admin: bool = False) -> None:
+    def relaunch(self, info: dict, closed: list[str] | None = None, fast: bool = False, admin: bool = False,
+                 now: float = 0.0) -> None:
         cmd = list(info.get("relaunch") or [])
         if not cmd:
             return
@@ -465,12 +521,18 @@ class Guard:
         cwd = info.get("root") or None
         try:
             # 관리자 권한으로 켜라고 돼 있으면: 가디언이 이미 관리자면 그냥 띄워도 자식이 관리자로 뜬다 (확인 창 없음).
-            # 가디언이 일반 권한이면 UAC 확인 창으로 올린다. 거부·실패하면 일반 권한으로라도 되살린다 (사라지지 않게).
-            if admin and sys.platform == "win32" and not is_admin():
+            # 가디언이 일반 권한이면 UAC 확인 창으로 올린다. 방금 거부당했으면(ELEV_RETRY 안) 다시 띄우지 않고 일반 권한으로 되살린다
+            # — 확인 창이 끝없이 뜨지 않게. 거부·실패해도 일반 권한으로라도 되살린다 (사라지지 않게).
+            want_elev = admin and sys.platform == "win32" and not is_admin()
+            if want_elev and self.last_elev_fail is not None and now - self.last_elev_fail < ELEV_RETRY:
+                want_elev = False               # 방금 거부당했다 — 당분간 확인 창을 띄우지 않는다
+            if want_elev:
                 if launch_elevated(cmd, cwd):
+                    self.last_elev_fail = None
                     log.info("울트론을 관리자 권한으로 다시 켰습니다")
                     return
-                log.warning("관리자 권한 띄우기가 거부/실패 — 일반 권한으로 되살립니다")
+                self.last_elev_fail = now
+                log.warning("관리자 권한 띄우기가 거부/실패 — %.0f초간 확인 창 없이 일반 권한으로 되살립니다", ELEV_RETRY)
             launch_detached(cmd, cwd)           # 가디언의 자식이 되지 않게 (함께 끝나지 않게)
             log.info("울트론을 다시 켰습니다%s", " (관리자 권한 상속)" if admin and is_admin() else "")
         except Exception as e:
@@ -501,13 +563,15 @@ class Guard:
             log.info("PC 가 꺼지는 중 — 되살리지 않고 가디언도 끝냅니다")
             return "quit"
         if action == "restart":
+            if not claim_revive(self.paths, now):
+                return "wait"                   # 다른 가디언이 방금 되살리기를 맡았다 — 둘이 동시에 띄우지 않는다
             closed = self.counter(cfg, info.get("root") or "") if cfg.get("guardian_counter") else []
             if cfg.get("guardian_counter"):
                 closed += [x for x in self.counter_jarvis(cfg) if x not in closed]   # 자비스가 껐다면 자비스도 (반복 방지)
             # 싸우는 중이면 (비전을 닫았거나, 되살린 지 얼마 안 돼 또 꺼졌으면) 긴 연출 없이 비전처럼 바로 돌아온다
             fast = bool(closed) or (self.last_revive is not None and now - self.last_revive < REVIVE_QUIET)
             log.warning("울트론이 강제로 꺼졌습니다 (pid %d)%s", pid, " — 공격받는 중, 바로 되살림" if fast else "")
-            self.relaunch(info, closed, fast=fast, admin=bool(cfg.get("guardian_admin")))
+            self.relaunch(info, closed, fast=fast, admin=bool(cfg.get("guardian_admin")), now=now)
             self.revived += 1
             self.last_revive = now
             self.awaiting = ((pid, created), now + REGISTER_WAIT)
