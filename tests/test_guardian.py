@@ -363,3 +363,37 @@ def test_spawn_is_skipped_when_a_guardian_already_runs(tmp_path, monkeypatch):
 
 def test_guardian_checks_every_second():
     assert guardian.POLL <= 1.0                                       # 꺼진 지 1초 안에 알아챈다
+
+
+def test_step_also_closes_jarvis_when_jarvis_was_the_one_that_killed_ultron(guard, monkeypatch):
+    """자비스가 울트론을 끄고 남아 있으면 되살린 울트론을 또 끈다 — 되살리기 전에 자비스도 닫는다 (자비스 견제가 켜졌을 때)."""
+    from jarvis import rival
+    stopped = []
+    j = rival.Found(pid=77, title="J.A.R.V.I.S", exe="pythonw.exe")
+    monkeypatch.setattr(rival, "find", lambda: [j])
+    monkeypatch.setattr(rival, "stop_all", lambda found: (stopped.extend(found) or list(found), []))
+    guard.created = None
+    guard.cfg["rival_jarvis"] = True
+    assert guard.step(now=100) == "restart"
+    assert stopped == [j] and guard.launched[0][1] == ["vision", "자비스"] and guard.launched[0][2] is True
+
+    stopped.clear()
+    guard.cfg["rival_jarvis"] = False                                # 자비스 견제를 껐으면 자비스는 건드리지 않는다
+    guard.created, guard.awaiting = None, None
+    guard.step(now=200)
+    assert stopped == [] and guard.launched[-1][1] == ["vision"]
+    guard.cfg.update(rival_jarvis=True, guardian_counter=False)      # 되받아치기를 껐으면 아무것도 닫지 않는다
+    guard.created, guard.awaiting = None, None
+    guard.step(now=300)
+    assert stopped == [] and guard.launched[-1][1] == []
+
+
+def test_counter_jarvis_reports_nothing_when_jarvis_cannot_be_closed(tmp_path, monkeypatch):
+    from jarvis import rival
+    j = rival.Found(pid=77, title="J.A.R.V.I.S", exe="pythonw.exe")
+    g = Guard(tmp_path, load_cfg=dict)
+    monkeypatch.setattr(rival, "find", lambda: [j])
+    monkeypatch.setattr(rival, "stop_all", lambda found: ([], list(found)))     # 관리자 권한의 자비스
+    assert g.counter_jarvis({"rival_jarvis": True}) == []
+    monkeypatch.setattr(rival, "find", lambda: (_ for _ in ()).throw(OSError("x")))
+    assert g.counter_jarvis({"rival_jarvis": True}) == []                       # 찾다가 오류가 나도 되살리기는 계속된다

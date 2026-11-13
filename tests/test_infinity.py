@@ -240,7 +240,8 @@ def power():
 def test_power_scene_charges_fires_then_crumbles_from_the_hit(power):
     sc = power
     assert sc.kind == "power" and sc.real and not sc.core_drawn and sc.bounds == (0, 0, *BIG)
-    assert sc.impact == S.IMPACT > S.CHARGE > 0.8 and sc.duration > S.IMPACT + S.CRUMBLE
+    assert S.FREEZE < sc.impact == S.KILL < 0.3 and S.IMPACT > S.CHARGE > 0.8 and sc.duration > S.IMPACT + S.CRUMBLE
+    # (실제 자비스는 그림이 창을 가리자마자 끈다 — 힘을 모으는 동안 울트론이 먼저 꺼지지 않게. 줄기는 그 뒤에 닿는다)
     assert S.charge(0) == 0 and S.charge(S.CHARGE) == 1 and S.charge(sc.duration) < 0.5
     assert S.beam(sc, S.CHARGE - 0.01) == (0.0, 0.0)                 # 다 모이기 전에는 쏘지 않는다
     assert S.beam(sc, S.IMPACT)[0] == 1 and S.beam(sc, S.IMPACT + S.CRUMBLE)[1] == 0

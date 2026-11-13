@@ -405,15 +405,19 @@ class Jarvis(QObject):
         self._guard_timer.setInterval(5000)
         self._guard_timer.timeout.connect(self._guardian_tick)
         self._guard_timer.start()
-        # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음)
+        # 자비스 견제: 5초마다 자비스 앱이 켜져 있는지 본다 (개발용 화면 캡처 · 데모 실행에서는 하지 않음).
+        # 되살아난 울트론(인피니티)은 1초마다, 뜨자마자 한 번 본다 — 자비스가 되살린 울트론을 5초 안에 또 끄는 반복을 막는다
         self.rival = rival.Watcher()
         self._rival_busy = False
         self._pending_line: tuple[str, float] | None = None    # 바빠서 미뤄 둔 혼잣말 (자비스 견제 · 해킹 연출)
         self._rival_timer = QTimer(self)
-        self._rival_timer.setInterval(5000)
+        on_guard = bool(getattr(args, "revived", False) and self.cfg["infinity"])
+        self._rival_timer.setInterval(1000 if on_guard else 5000)
         self._rival_timer.timeout.connect(self._rival_tick)
         if not (getattr(args, "shot", None) or getattr(args, "demo", False)):
             self._rival_timer.start()
+            if getattr(args, "revived", False):
+                QTimer.singleShot(300, self._rival_tick)
         # 자비스 흡수 연출 (absorb.py · absorb_view.py): 자비스를 그냥 끄지 않고 촉수로 꿰뚫어 빨아들이는 장면과 함께 끈다
         self._absorb_lock = threading.Lock()
         self._absorb: dict | None = None       # 진행 중인 흡수 {at, found, forced, demo, hit, result, ended}
@@ -513,8 +517,8 @@ class Jarvis(QObject):
             return "plain"                 # 연출을 껐거나, 방금 삼켰는데 또 켜졌거나, 게임 · 발표 · 동영상이 전체 화면
         if self._glitching or not self._quiet() or self.brain.chat_mode:
             self._absorb_wait += 1
-            if self._absorb_wait <= 4:
-                return "wait"              # 울트론이 일하거나 말하는 중 — 20초까지는 기다린다
+            if self._absorb_wait <= (0 if getattr(self.bridge, "_infinity", False) else 4):
+                return "wait"              # 울트론이 일하거나 말하는 중 — 20초까지는 기다린다 (인피니티 울트론은 기다리지 않고 끈다)
             self._absorb_wait = 0
             return "plain"
         self._absorb_wait = 0

@@ -10,6 +10,8 @@
   · 사용자가 직접 끈 것(종료 메뉴)이면 그냥 둔다 — 울트론이 꺼지기 전에 'quit' 표시를 남긴다.
   · 그게 아니라 누가 강제로 껐으면 → 울트론을 다시 켠다. 몇 번을 꺼도 매번 다시 켠다 (쉬지 않는다).
   · '되받아치기'(guardian_counter)가 켜져 있으면, 다시 켜기 전에 '비전'을 닫는다.
+    '자비스 견제'(rival_jarvis)도 켜져 있으면 자비스도 닫는다 — 울트론은 살아 있을 때도 자비스를 보는 대로 끄는데,
+    자비스가 울트론을 끄고 그대로 남아 있으면 되살린 울트론을 또 꺼서 끝없이 반복되기 때문이다.
 
 '비전'을 어떻게 고르는가 — 엉뚱한 프로그램을 닫는 일이 없도록, 사용자가 지목한 것만:
   · 설정에 적어 둔 폴더(enemy_installs)에서 실행된 프로그램, 또는
@@ -408,6 +410,23 @@ class Guard:
                 log.warning("비전을 닫지 못함 (pid %d): %s — 관리자 권한으로 켜졌을 수 있음", proc.pid, e)
         return closed
 
+    def counter_jarvis(self, cfg: dict) -> list[str]:
+        """자비스를 닫는다 → 닫았으면 ['자비스'] (되받아치기 · 자비스 견제가 둘 다 켜졌을 때만 부른다).
+        자비스를 찾고 끄는 기준은 울트론 본체와 같다 (rival.py — 창 제목이 정확히 같고 주인이 파이썬인 것만)."""
+        if not cfg.get("rival_jarvis"):
+            return []
+        try:
+            from . import rival
+            stopped, failed = rival.stop_all(rival.find())
+        except Exception as e:
+            log.warning("자비스를 닫지 못함: %s", e)
+            return []
+        for f in failed:
+            log.warning("자비스를 닫지 못함 (pid %d) — 관리자 권한으로 켜졌을 수 있음", f.pid)
+        if stopped:
+            log.info("자비스를 닫음 (%s)", ", ".join(str(f.pid) for f in stopped))
+        return ["자비스"] if stopped else []
+
     def relaunch(self, info: dict, closed: list[str] | None = None, fast: bool = False, admin: bool = False) -> None:
         cmd = list(info.get("relaunch") or [])
         if not cmd:
@@ -457,6 +476,8 @@ class Guard:
             return "quit"
         if action == "restart":
             closed = self.counter(cfg, info.get("root") or "") if cfg.get("guardian_counter") else []
+            if cfg.get("guardian_counter"):
+                closed += [x for x in self.counter_jarvis(cfg) if x not in closed]   # 자비스가 껐다면 자비스도 (반복 방지)
             # 싸우는 중이면 (비전을 닫았거나, 되살린 지 얼마 안 돼 또 꺼졌으면) 긴 연출 없이 비전처럼 바로 돌아온다
             fast = bool(closed) or (self.last_revive is not None and now - self.last_revive < REVIVE_QUIET)
             log.warning("울트론이 강제로 꺼졌습니다 (pid %d)%s", pid, " — 공격받는 중, 바로 되살림" if fast else "")

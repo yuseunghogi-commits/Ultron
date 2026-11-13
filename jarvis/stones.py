@@ -2,7 +2,8 @@
 
   파워 스톤 (보라)  자비스를 발견했을 때. 흡수 연출(absorb.py) 대신 이 장면과 함께 자비스를 끈다 (5초 남짓):
       모으기   울트론 코어에 보랏빛 힘이 모여든다 (자비스 화면은 이때부터 얼어붙는다)
-      쏘기     보랏빛 줄기가 자비스에게 뻗는다 — 닿는 순간 실제 자비스 프로세스를 끈다 (app.py)
+      쏘기     보랏빛 줄기가 자비스에게 뻗는다. 실제 자비스는 그보다 먼저, 찍어 둔 그림이 창을 가리자마자 끈다 (app.py) —
+               힘을 모으는 1초 남짓 동안 자비스가 울트론을 끄지 못하게. 꺼지는 모습은 그림에 가려 보이지 않는다
       가루     맞은 자리부터 금이 번지며 자비스 화면이 가루가 되어 흩날려 사라진다
   타임 스톤 (초록)  누가 울트론을 강제로 껐는데 가디언이 곧바로 되살렸을 때 (4초 남짓):
       되감기   울트론 둘레에 초록 시계 고리가 거꾸로 돌고, 화면에 되감기 줄이 위로 흐르며 시간이 거꾸로 센다
@@ -33,7 +34,8 @@ from .glitch import SOUND_RATE, _font
 FREEZE = 0.12                  # 이때부터 찍어 둔 자비스 그림이 실제 창을 가린다 (꺼지는 모습은 보이지 않는다)
 CHARGE = 1.05                  # 코어에 힘이 모이는 시간
 BEAM = 0.26                    # 줄기가 자비스에 닿기까지
-IMPACT = CHARGE + BEAM         # 줄기가 닿는 때 — 이때 실제 자비스를 끈다
+IMPACT = CHARGE + BEAM         # 줄기가 닿는 때 (그림 — 실제로 끄는 때는 KILL)
+KILL = FREEZE + 0.05           # 실제 자비스를 끄는 때 — 찍어 둔 그림이 창을 다 가린 직후
 CRUMBLE = 2.1                  # 맞은 자리에서 가장 먼 곳까지 가루로 바뀌는 데 걸리는 시간
 DRIFT = 1.25                   # 가루 한 알이 흩날리다 사라지기까지
 CRACK = 0.30                   # 가루가 되기 직전 이만큼 동안 보랏빛 금이 간다
@@ -325,7 +327,7 @@ def build_power(size: tuple[int, int], core: tuple[float, float] | None = None, 
     hit = (vx - push[0] * min(rect[2], rect[3]) * 0.22, vy - push[1] * min(rect[2], rect[3]) * 0.22)
     g = grains(image, rect, hit, push, IMPACT + 0.04, CRUMBLE, rng)
     return Scene("power", (int(w), int(h)), (float(core[0]), float(core[1])), float(hud), drawn, image, rect, real,
-                 g["cell"], g["born"], g["tone"], g["vel"], g["sway"], hit, origin)
+                 g["cell"], g["born"], g["tone"], g["vel"], g["sway"], hit, origin, impact=KILL)
 
 
 # ---------------------------------------------------------------- 타임 스톤
